@@ -35,7 +35,6 @@ static sfx_t *cl_sfx_ric2;
 static sfx_t *cl_sfx_ric3;
 static sfx_t *cl_sfx_r_exp3;
 
-extern cvar_t rt_classic_render;
 
 /*
 =================
@@ -216,15 +215,11 @@ void CL_ParseTEnt (void)
 		pos[2] = MSG_ReadCoord (cl.protocolflags);
 		if (PScript_RunParticleEffectTypeString (pos, NULL, 1, "TE_EXPLOSION"))
 			R_ParticleExplosion (pos);
-		// with RT, it's controlled through explosion sprite's custom texture info
-		if (CVAR_TO_BOOL (rt_classic_render))
-		{
-			dl = CL_AllocDlight (0);
-			VectorCopy (pos, dl->origin);
-			dl->radius = 350;
-			dl->die = cl.time + 0.5;
-			dl->decay = 300;
-		}
+		dl = CL_AllocDlight (0);
+		VectorCopy (pos, dl->origin);
+		dl->radius = 350;
+		dl->die = cl.time + 0.5;
+		dl->decay = 300;
 		S_StartSound (-1, 0, cl_sfx_r_exp3, pos, 1, 1);
 		break;
 
