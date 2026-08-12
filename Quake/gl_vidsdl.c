@@ -178,7 +178,7 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_renderscale, "0") \
 	CVAR_DEF_T (rt_vintage, "0") \
 	CVAR_DEF_T (rt_upscale_fsr2, "0") \
-	CVAR_DEF_T (rt_upscale_fsr31, "1") \
+	CVAR_DEF_T (rt_upscale_fsr31, "2") \
 	CVAR_DEF_T (rt_upscale_dlss, "0") \
 	\
 	CVAR_DEF_T (rt_sensit_dir, "0.4") \
@@ -1756,6 +1756,12 @@ void VID_Toggle (void)
 #define UPSCALER_FSR31 2
 #define UPSCALER_DLSS 3
 
+static int GetUpscalerDefaultQuality (int type)
+{
+	// FSR 3.1 presets: 1=Native AA, 2=Quality; FSR 2.0 / DLSS: 1=Quality
+	return (type == UPSCALER_FSR31) ? 2 : 1;
+}
+
 // For settings that are not applied during vid_restart
 typedef struct
 {
@@ -2063,7 +2069,7 @@ static void VID_Menu_ChooseNextAA (int vidopt, int dir)
 
 		if (menu_settings.upscaler_type != prev_type)
 		{
-			menu_settings.upscaler_quality = 0;
+			menu_settings.upscaler_quality = (menu_settings.upscaler_type == UPSCALER_OFF) ? 0 : GetUpscalerDefaultQuality (menu_settings.upscaler_type);
 			menu_settings.rt_vintage = 0;
 		}
 	}
@@ -2077,8 +2083,11 @@ static void VID_Menu_ChooseNextAA (int vidopt, int dir)
 		case UPSCALER_DLSS:  maxq = maxq_dlss; break;
 		default:             maxq = 0; break;
 		}
-		menu_settings.upscaler_quality += dir < 0 ? -1 : 1;
-		menu_settings.upscaler_quality = CLAMP (0, menu_settings.upscaler_quality, maxq);
+		if (maxq > 0)
+		{
+			menu_settings.upscaler_quality += dir < 0 ? -1 : 1;
+			menu_settings.upscaler_quality = CLAMP (1, menu_settings.upscaler_quality, maxq);
+		}
 	}
 	else if (vidopt == VID_OPT_RENDER_SCALE)
 	{
@@ -2179,6 +2188,8 @@ static void VID_MenuKey (int key)
 			VID_Menu_ChooseNextAA (video_options_cursor, -1);
 			{
 				int q = menu_settings.upscaler_quality;
+				if (menu_settings.upscaler_type != UPSCALER_OFF && q < 1)
+					q = GetUpscalerDefaultQuality (menu_settings.upscaler_type);
 				Cvar_SetValueQuick (&rt_upscale_fsr2, (menu_settings.upscaler_type == UPSCALER_FSR2) ? q : 0);
 				Cvar_SetValueQuick (&rt_upscale_fsr31, (menu_settings.upscaler_type == UPSCALER_FSR31) ? q : 0);
 				Cvar_SetValueQuick (&rt_upscale_dlss, (menu_settings.upscaler_type == UPSCALER_DLSS) ? q : 0);
@@ -2228,6 +2239,8 @@ static void VID_MenuKey (int key)
 			VID_Menu_ChooseNextAA (video_options_cursor, 1);
 			{
 				int q = menu_settings.upscaler_quality;
+				if (menu_settings.upscaler_type != UPSCALER_OFF && q < 1)
+					q = GetUpscalerDefaultQuality (menu_settings.upscaler_type);
 				Cvar_SetValueQuick (&rt_upscale_fsr2, (menu_settings.upscaler_type == UPSCALER_FSR2) ? q : 0);
 				Cvar_SetValueQuick (&rt_upscale_fsr31, (menu_settings.upscaler_type == UPSCALER_FSR31) ? q : 0);
 				Cvar_SetValueQuick (&rt_upscale_dlss, (menu_settings.upscaler_type == UPSCALER_DLSS) ? q : 0);
@@ -2365,7 +2378,7 @@ static void VID_MenuDraw (cb_context_t *cbx)
 			}
 			break;
 		case VID_OPT_UPSCALER_QUALITY:
-			M_Print (cbx, 16, y, "           Quality");
+			M_Print (cbx, 16, y, "            Preset");
 			{
 				RgRenderUpscaleTechnique tech;
 				int q = menu_settings.upscaler_quality;
@@ -2376,6 +2389,8 @@ static void VID_MenuDraw (cb_context_t *cbx)
 				case UPSCALER_DLSS:  tech = RG_RENDER_UPSCALE_TECHNIQUE_NVIDIA_DLSS; break;
 				default:             tech = RG_RENDER_UPSCALE_TECHNIQUE_NEAREST; q = 0; break;
 				}
+				if (q < 1 && menu_settings.upscaler_type != UPSCALER_OFF)
+					q = GetUpscalerDefaultQuality (menu_settings.upscaler_type);
 				M_Print (cbx, 184, y, GetUpscalerOptionName (q, tech));
 			}
 			break;
