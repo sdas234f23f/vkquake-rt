@@ -50,6 +50,8 @@ Steps:
 
    For a debug build use `-DCMAKE_BUILD_TYPE=Debug`.
 
+5. Download the [Fidelity SDK 1.1.4](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v1.1.4/FidelityFX-SDK-v1.1.4.zip) and copy amd_fidelityfx_vk.dll to the folder with `vkquake.exe`.
+
 5. Run the game:
 
    ```
