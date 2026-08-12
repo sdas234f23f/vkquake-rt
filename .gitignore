@@ -20,6 +20,7 @@ Windows/VisualStudio/Build-*
 Packaging/AppImage/AppDir
 Packaging/AppImage/vkquake*
 build/
+.idea
 .settings
 .project
 .cproject

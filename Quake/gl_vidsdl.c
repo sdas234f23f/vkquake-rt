@@ -177,8 +177,8 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_sharpen, "0") \
 	CVAR_DEF_T (rt_renderscale, "0") \
 	CVAR_DEF_T (rt_vintage, "0") \
-	CVAR_DEF_T (rt_upscale_fsr2, "2") \
-	CVAR_DEF_T (rt_upscale_fsr31, "31") \
+	CVAR_DEF_T (rt_upscale_fsr2, "0") \
+	CVAR_DEF_T (rt_upscale_fsr31, "1") \
 	CVAR_DEF_T (rt_upscale_dlss, "0") \
 	\
 	CVAR_DEF_T (rt_sensit_dir, "0.4") \
@@ -1751,15 +1751,19 @@ void VID_Toggle (void)
 	}
 }
 
+#define UPSCALER_OFF  0
+#define UPSCALER_FSR2 1
+#define UPSCALER_FSR31 2
+#define UPSCALER_DLSS 3
+
 // For settings that are not applied during vid_restart
 typedef struct
 {
 	int host_maxfps;
 	int r_particles;
 	int vid_filter;
-	int rt_upscale_fsr2;
-	int rt_upscale_fsr31;
-	int rt_upscale_dlss;
+	int upscaler_type;
+	int upscaler_quality;
 	int rt_vintage;
 } vid_menu_settings_t;
 
@@ -1787,9 +1791,15 @@ void VID_SyncCvars (void)
 
 	menu_settings.host_maxfps = CLAMP (0, host_maxfps.value, 1000);
 	menu_settings.r_particles = CLAMP (0, (int)r_particles.value, 2);
-	menu_settings.rt_upscale_fsr2 = CLAMP (0, CVAR_TO_INT32 (rt_upscale_fsr2), 4);
-	menu_settings.rt_upscale_fsr31 = CLAMP (0, CVAR_TO_INT32 (rt_upscale_fsr31), 5);
-	menu_settings.rt_upscale_dlss = CLAMP (0, CVAR_TO_INT32 (rt_upscale_dlss), 4);
+	{
+		int fsr2 = CVAR_TO_INT32 (rt_upscale_fsr2);
+		int fsr31 = CVAR_TO_INT32 (rt_upscale_fsr31);
+		int dlss = CVAR_TO_INT32 (rt_upscale_dlss);
+		if (fsr31 > 0)      { menu_settings.upscaler_type = UPSCALER_FSR31; menu_settings.upscaler_quality = CLAMP (0, fsr31, 5); }
+		else if (fsr2 > 0)  { menu_settings.upscaler_type = UPSCALER_FSR2;  menu_settings.upscaler_quality = CLAMP (0, fsr2, 4); }
+		else if (dlss > 0)  { menu_settings.upscaler_type = UPSCALER_DLSS;  menu_settings.upscaler_quality = CLAMP (0, dlss, 4); }
+		else                { menu_settings.upscaler_type = UPSCALER_OFF;   menu_settings.upscaler_quality = 0; }
+	}
 	menu_settings.rt_vintage = CLAMP (0, CVAR_TO_INT32 (rt_vintage), RT_VINTAGE__COUNT - 1);
 	menu_settings.vid_filter = CLAMP (0, (int)vid_filter.value, 1);
 
@@ -1814,14 +1824,13 @@ enum
 	VID_OPT_MAX_FPS,
 
 
-	VID_OPT_FSR2,
-	VID_OPT_FSR31,
-	VID_OPT_DLSS,
-	VID_OPT_RENDER_SCALE,
+	VID_OPT_UPSCALER,
+	VID_OPT_UPSCALER_QUALITY,
 
 	VID_OPT_FILTER,
 	VID_OPT_PARTICLES,
 	VID_OPT_VOLUMETRICS,
+	VID_OPT_RENDER_SCALE,
 
 	VID_OPT_BACK,
 
@@ -2033,67 +2042,62 @@ static void VID_Menu_ChooseNextAA (int vidopt, int dir)
 	RgBool32 fsr31_ok = rgIsRenderUpscaleTechniqueAvailable (vulkan_globals.instance, RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3);
 	RgBool32 dlss_ok = rgIsRenderUpscaleTechniqueAvailable (vulkan_globals.instance, RG_RENDER_UPSCALE_TECHNIQUE_NVIDIA_DLSS);
 
-	const int prev_fsr2 = menu_settings.rt_upscale_fsr2;
-	const int prev_fsr31 = menu_settings.rt_upscale_fsr31;
-	const int prev_dlss = menu_settings.rt_upscale_dlss;
+	const int prev_type = menu_settings.upscaler_type;
+	const int prev_quality = menu_settings.upscaler_quality;
 	const int prev_vint = menu_settings.rt_vintage;
+	const int maxq_fsr2 = fsr2_ok ? 4 : 0;
+	const int maxq_fsr31 = fsr31_ok ? 5 : 0;
+	const int maxq_dlss = dlss_ok ? 4 : 0;
 
-	if (vidopt == VID_OPT_FSR2)
+	if (vidopt == VID_OPT_UPSCALER)
 	{
-		menu_settings.rt_upscale_fsr2 += dir < 0 ? -1 : 1;
+		// Cycle: Off -> FSR2 -> FSR31 -> DLSS -> Off (only available ones)
+		do {
+			menu_settings.upscaler_type += dir < 0 ? -1 : 1;
+			if (menu_settings.upscaler_type < 0) menu_settings.upscaler_type = UPSCALER_DLSS;
+			if (menu_settings.upscaler_type > UPSCALER_DLSS) menu_settings.upscaler_type = UPSCALER_OFF;
+		} while (
+			(menu_settings.upscaler_type == UPSCALER_FSR2  && !fsr2_ok) ||
+			(menu_settings.upscaler_type == UPSCALER_FSR31 && !fsr31_ok) ||
+			(menu_settings.upscaler_type == UPSCALER_DLSS  && !dlss_ok));
+
+		if (menu_settings.upscaler_type != prev_type)
+		{
+			menu_settings.upscaler_quality = 0;
+			menu_settings.rt_vintage = 0;
+		}
 	}
-	else if (vidopt == VID_OPT_FSR31)
+	else if (vidopt == VID_OPT_UPSCALER_QUALITY)
 	{
-		menu_settings.rt_upscale_fsr31 += dir < 0 ? -1 : 1;
-	}
-	else if (vidopt == VID_OPT_DLSS)
-	{
-		menu_settings.rt_upscale_dlss += dir < 0 ? -1 : 1;
+		int maxq;
+		switch (menu_settings.upscaler_type)
+		{
+		case UPSCALER_FSR2:  maxq = maxq_fsr2; break;
+		case UPSCALER_FSR31: maxq = maxq_fsr31; break;
+		case UPSCALER_DLSS:  maxq = maxq_dlss; break;
+		default:             maxq = 0; break;
+		}
+		menu_settings.upscaler_quality += dir < 0 ? -1 : 1;
+		menu_settings.upscaler_quality = CLAMP (0, menu_settings.upscaler_quality, maxq);
 	}
 	else if (vidopt == VID_OPT_RENDER_SCALE)
 	{
 		menu_settings.rt_vintage += dir < 0 ? -1 : 1;
 	}
 
-	menu_settings.rt_upscale_fsr2 = CLAMP (0, menu_settings.rt_upscale_fsr2, fsr2_ok ? 4 : 0);
-	menu_settings.rt_upscale_fsr31 = CLAMP (0, menu_settings.rt_upscale_fsr31, fsr31_ok ? 5 : 0);
-	menu_settings.rt_upscale_dlss = CLAMP (0, menu_settings.rt_upscale_dlss, dlss_ok ? 4 : 0);
 	menu_settings.rt_vintage = CLAMP (0, menu_settings.rt_vintage, RT_VINTAGE__COUNT - 1);
 
-	if (vidopt == VID_OPT_FSR2)
+	if (vidopt == VID_OPT_UPSCALER || vidopt == VID_OPT_UPSCALER_QUALITY)
 	{
-		if (menu_settings.rt_upscale_fsr2 != prev_fsr2)
-		{
-			menu_settings.rt_upscale_fsr31 = 0;
-			menu_settings.rt_upscale_dlss = 0;
+		if (menu_settings.upscaler_type != prev_type || menu_settings.upscaler_quality != prev_quality)
 			menu_settings.rt_vintage = 0;
-		}
-	}
-	else if (vidopt == VID_OPT_FSR31)
-	{
-		if (menu_settings.rt_upscale_fsr31 != prev_fsr31)
-		{
-			menu_settings.rt_upscale_fsr2 = 0;
-			menu_settings.rt_upscale_dlss = 0;
-			menu_settings.rt_vintage = 0;
-		}
-	}
-	else if (vidopt == VID_OPT_DLSS)
-	{
-		if (menu_settings.rt_upscale_dlss != prev_dlss)
-		{
-			menu_settings.rt_upscale_fsr2 = 0;
-			menu_settings.rt_upscale_fsr31 = 0;
-			menu_settings.rt_vintage = 0;
-		}
 	}
 	else if (vidopt == VID_OPT_RENDER_SCALE)
 	{
 		if (menu_settings.rt_vintage != prev_vint)
 		{
-			menu_settings.rt_upscale_fsr2 = 0;
-			menu_settings.rt_upscale_fsr31 = 0;
-			menu_settings.rt_upscale_dlss = 0;
+			menu_settings.upscaler_type = UPSCALER_OFF;
+			menu_settings.upscaler_quality = 0;
 		}
 	}
 }
@@ -2169,14 +2173,16 @@ static void VID_MenuKey (int key)
 		case VID_OPT_RENDERER:
 			RT_SwitchRenderer ();
 			break;
-		case VID_OPT_FSR2:
-		case VID_OPT_FSR31:
-		case VID_OPT_DLSS:
+		case VID_OPT_UPSCALER:
+		case VID_OPT_UPSCALER_QUALITY:
 		case VID_OPT_RENDER_SCALE:
 			VID_Menu_ChooseNextAA (video_options_cursor, -1);
-			Cvar_SetValueQuick (&rt_upscale_fsr2, menu_settings.rt_upscale_fsr2);
-			Cvar_SetValueQuick (&rt_upscale_fsr31, menu_settings.rt_upscale_fsr31);
-			Cvar_SetValueQuick (&rt_upscale_dlss, menu_settings.rt_upscale_dlss);
+			{
+				int q = menu_settings.upscaler_quality;
+				Cvar_SetValueQuick (&rt_upscale_fsr2, (menu_settings.upscaler_type == UPSCALER_FSR2) ? q : 0);
+				Cvar_SetValueQuick (&rt_upscale_fsr31, (menu_settings.upscaler_type == UPSCALER_FSR31) ? q : 0);
+				Cvar_SetValueQuick (&rt_upscale_dlss, (menu_settings.upscaler_type == UPSCALER_DLSS) ? q : 0);
+			}
 			Cvar_SetValueQuick (&rt_vintage, menu_settings.rt_vintage);
 			break;
 		case VID_OPT_FILTER:
@@ -2216,14 +2222,16 @@ static void VID_MenuKey (int key)
 		case VID_OPT_RENDERER:
 			RT_SwitchRenderer ();
 			break;
-		case VID_OPT_FSR2:
-		case VID_OPT_FSR31:
-		case VID_OPT_DLSS:
+		case VID_OPT_UPSCALER:
+		case VID_OPT_UPSCALER_QUALITY:
 		case VID_OPT_RENDER_SCALE:
 			VID_Menu_ChooseNextAA (video_options_cursor, 1);
-			Cvar_SetValueQuick (&rt_upscale_fsr2, menu_settings.rt_upscale_fsr2);
-			Cvar_SetValueQuick (&rt_upscale_fsr31, menu_settings.rt_upscale_fsr31);
-			Cvar_SetValueQuick (&rt_upscale_dlss, menu_settings.rt_upscale_dlss);
+			{
+				int q = menu_settings.upscaler_quality;
+				Cvar_SetValueQuick (&rt_upscale_fsr2, (menu_settings.upscaler_type == UPSCALER_FSR2) ? q : 0);
+				Cvar_SetValueQuick (&rt_upscale_fsr31, (menu_settings.upscaler_type == UPSCALER_FSR31) ? q : 0);
+				Cvar_SetValueQuick (&rt_upscale_dlss, (menu_settings.upscaler_type == UPSCALER_DLSS) ? q : 0);
+			}
 			Cvar_SetValueQuick (&rt_vintage, menu_settings.rt_vintage);
 			break;
 		case VID_OPT_FILTER:
@@ -2341,25 +2349,35 @@ static void VID_MenuDraw (cb_context_t *cbx)
 			break;
 
 
-		case VID_OPT_FSR2:
+		case VID_OPT_UPSCALER:
 			y += 8; // separate
 
-			M_Print (cbx, 16, y, "       AMD FSR 2.0");
-			M_Print (cbx, 184, y, GetUpscalerOptionName (menu_settings.rt_upscale_fsr2, RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2));
+			M_Print (cbx, 16, y, "          Upscaler");
+			{
+				const char *name = "Off";
+				switch (menu_settings.upscaler_type)
+				{
+				case UPSCALER_FSR2:  name = "AMD FSR 2.0"; break;
+				case UPSCALER_FSR31: name = "AMD FSR 3.1"; break;
+				case UPSCALER_DLSS:  name = "Nvidia DLSS"; break;
+				}
+				M_Print (cbx, 184, y, name);
+			}
 			break;
-		case VID_OPT_FSR31:
-			y += 8; // separate
-
-			M_Print (cbx, 16, y, "       AMD FSR 3.1");
-			M_Print (cbx, 184, y, GetUpscalerOptionName (menu_settings.rt_upscale_fsr31, RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3));
-			break;
-		case VID_OPT_DLSS:
-			M_Print (cbx, 16, y, "       Nvidia DLSS");
-			M_Print (cbx, 184, y, GetUpscalerOptionName (menu_settings.rt_upscale_dlss, RG_RENDER_UPSCALE_TECHNIQUE_NVIDIA_DLSS));
-			break;
-		case VID_OPT_RENDER_SCALE:
-			M_Print (cbx, 16, y, "           Vintage");
-			M_Print (cbx, 184, y, GetVintageOptionName (menu_settings.rt_vintage));
+		case VID_OPT_UPSCALER_QUALITY:
+			M_Print (cbx, 16, y, "           Quality");
+			{
+				RgRenderUpscaleTechnique tech;
+				int q = menu_settings.upscaler_quality;
+				switch (menu_settings.upscaler_type)
+				{
+				case UPSCALER_FSR2:  tech = RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2; break;
+				case UPSCALER_FSR31: tech = RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3; break;
+				case UPSCALER_DLSS:  tech = RG_RENDER_UPSCALE_TECHNIQUE_NVIDIA_DLSS; break;
+				default:             tech = RG_RENDER_UPSCALE_TECHNIQUE_NEAREST; q = 0; break;
+				}
+				M_Print (cbx, 184, y, GetUpscalerOptionName (q, tech));
+			}
 			break;
 
 
@@ -2376,6 +2394,10 @@ static void VID_MenuDraw (cb_context_t *cbx)
 		case VID_OPT_VOLUMETRICS:
 			M_Print (cbx, 16, y, "       Volumetrics");
 			M_Print (cbx, 184, y, CVAR_TO_UINT32 (rt_volume_type) == 2 ? "sky" : "simple");
+			break;
+		case VID_OPT_RENDER_SCALE:
+			M_Print (cbx, 16, y, "           Vintage");
+			M_Print (cbx, 184, y, GetVintageOptionName (menu_settings.rt_vintage));
 			break;
 
 

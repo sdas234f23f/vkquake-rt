@@ -4,6 +4,10 @@ Quake: Ray Traced adds a path tracing renderer to id Software's [Quake](https://
 
 Quake: Ray Traced is based on the [vkQuake](https://github.com/Novum/vkQuake) — a port of QuakeSpasm to Vulkan API.
 
+## Changelog
+
+See [changelog.md](changelog.md).
+
 ## Build
 
 ### Windows
