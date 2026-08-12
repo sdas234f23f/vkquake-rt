@@ -178,6 +178,7 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_renderscale, "0") \
 	CVAR_DEF_T (rt_vintage, "0") \
 	CVAR_DEF_T (rt_upscale_fsr2, "2") \
+	CVAR_DEF_T (rt_upscale_fsr31, "31") \
 	CVAR_DEF_T (rt_upscale_dlss, "0") \
 	\
 	CVAR_DEF_T (rt_sensit_dir, "0.4") \
@@ -815,6 +816,7 @@ static void UpscaleCvarsToRtgl (RgDrawFrameRenderResolutionParams *pDst)
 {
 	int nvDlss = CVAR_TO_INT32 (rt_upscale_dlss);
 	int amdFsr = CVAR_TO_INT32 (rt_upscale_fsr2);
+	int amdFsr31 = CVAR_TO_INT32 (rt_upscale_fsr31);
 
 	switch (nvDlss)
 	{
@@ -877,8 +879,36 @@ static void UpscaleCvarsToRtgl (RgDrawFrameRenderResolutionParams *pDst)
 		break;
 	}
 
+	switch (amdFsr31)
+	{
+	case 1:
+		pDst->upscaleTechnique = RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3;
+		pDst->resolutionMode = RG_RENDER_RESOLUTION_MODE_NATIVE_AA;
+		break;
+	case 2:
+		pDst->upscaleTechnique = RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3;
+		pDst->resolutionMode = RG_RENDER_RESOLUTION_MODE_QUALITY;
+		break;
+	case 3:
+		pDst->upscaleTechnique = RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3;
+		pDst->resolutionMode = RG_RENDER_RESOLUTION_MODE_BALANCED;
+		break;
+	case 4:
+		pDst->upscaleTechnique = RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3;
+		pDst->resolutionMode = RG_RENDER_RESOLUTION_MODE_PERFORMANCE;
+		break;
+	case 5:
+		pDst->upscaleTechnique = RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3;
+		pDst->resolutionMode = RG_RENDER_RESOLUTION_MODE_ULTRA_PERFORMANCE;
+		break;
+
+	default:
+		amdFsr31 = 0;
+		break;
+	}
+
 	// both disabled
-	if (nvDlss == 0 && amdFsr == 0)
+	if (nvDlss == 0 && amdFsr == 0 && amdFsr31 == 0)
 	{
 		pDst->upscaleTechnique = RG_RENDER_UPSCALE_TECHNIQUE_NEAREST;
 		pDst->resolutionMode = RG_RENDER_RESOLUTION_MODE_CUSTOM;
@@ -906,12 +936,14 @@ static const char *GetUpscalerOptionName (int i, RgRenderUpscaleTechnique techni
 	case 0:
 		return "Off";
     case 1:
-		return "Quality";
+		return (technique == RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3) ? "Native AA" : "Quality";
 	case 2:
-		return "Balanced";
+		return (technique == RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3) ? "Quality" : "Balanced";
 	case 3:
-		return "Performance";
+		return (technique == RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3) ? "Balanced" : "Performance";
 	case 4:
+		return (technique == RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3) ? "Performance" : "Ultra Performance";
+	case 5:
 		return "Ultra Performance";
 	default:
 		return "Custom";
@@ -1726,6 +1758,7 @@ typedef struct
 	int r_particles;
 	int vid_filter;
 	int rt_upscale_fsr2;
+	int rt_upscale_fsr31;
 	int rt_upscale_dlss;
 	int rt_vintage;
 } vid_menu_settings_t;
@@ -1755,6 +1788,7 @@ void VID_SyncCvars (void)
 	menu_settings.host_maxfps = CLAMP (0, host_maxfps.value, 1000);
 	menu_settings.r_particles = CLAMP (0, (int)r_particles.value, 2);
 	menu_settings.rt_upscale_fsr2 = CLAMP (0, CVAR_TO_INT32 (rt_upscale_fsr2), 4);
+	menu_settings.rt_upscale_fsr31 = CLAMP (0, CVAR_TO_INT32 (rt_upscale_fsr31), 5);
 	menu_settings.rt_upscale_dlss = CLAMP (0, CVAR_TO_INT32 (rt_upscale_dlss), 4);
 	menu_settings.rt_vintage = CLAMP (0, CVAR_TO_INT32 (rt_vintage), RT_VINTAGE__COUNT - 1);
 	menu_settings.vid_filter = CLAMP (0, (int)vid_filter.value, 1);
@@ -1781,6 +1815,7 @@ enum
 
 
 	VID_OPT_FSR2,
+	VID_OPT_FSR31,
 	VID_OPT_DLSS,
 	VID_OPT_RENDER_SCALE,
 
@@ -1995,15 +2030,21 @@ static void VID_Menu_ChooseNextRate (int dir)
 static void VID_Menu_ChooseNextAA (int vidopt, int dir)
 {
 	RgBool32 fsr2_ok = rgIsRenderUpscaleTechniqueAvailable (vulkan_globals.instance, RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2);
+	RgBool32 fsr31_ok = rgIsRenderUpscaleTechniqueAvailable (vulkan_globals.instance, RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3);
 	RgBool32 dlss_ok = rgIsRenderUpscaleTechniqueAvailable (vulkan_globals.instance, RG_RENDER_UPSCALE_TECHNIQUE_NVIDIA_DLSS);
 
 	const int prev_fsr2 = menu_settings.rt_upscale_fsr2;
+	const int prev_fsr31 = menu_settings.rt_upscale_fsr31;
 	const int prev_dlss = menu_settings.rt_upscale_dlss;
 	const int prev_vint = menu_settings.rt_vintage;
 
 	if (vidopt == VID_OPT_FSR2)
 	{
 		menu_settings.rt_upscale_fsr2 += dir < 0 ? -1 : 1;
+	}
+	else if (vidopt == VID_OPT_FSR31)
+	{
+		menu_settings.rt_upscale_fsr31 += dir < 0 ? -1 : 1;
 	}
 	else if (vidopt == VID_OPT_DLSS)
 	{
@@ -2015,6 +2056,7 @@ static void VID_Menu_ChooseNextAA (int vidopt, int dir)
 	}
 
 	menu_settings.rt_upscale_fsr2 = CLAMP (0, menu_settings.rt_upscale_fsr2, fsr2_ok ? 4 : 0);
+	menu_settings.rt_upscale_fsr31 = CLAMP (0, menu_settings.rt_upscale_fsr31, fsr31_ok ? 5 : 0);
 	menu_settings.rt_upscale_dlss = CLAMP (0, menu_settings.rt_upscale_dlss, dlss_ok ? 4 : 0);
 	menu_settings.rt_vintage = CLAMP (0, menu_settings.rt_vintage, RT_VINTAGE__COUNT - 1);
 
@@ -2022,6 +2064,16 @@ static void VID_Menu_ChooseNextAA (int vidopt, int dir)
 	{
 		if (menu_settings.rt_upscale_fsr2 != prev_fsr2)
 		{
+			menu_settings.rt_upscale_fsr31 = 0;
+			menu_settings.rt_upscale_dlss = 0;
+			menu_settings.rt_vintage = 0;
+		}
+	}
+	else if (vidopt == VID_OPT_FSR31)
+	{
+		if (menu_settings.rt_upscale_fsr31 != prev_fsr31)
+		{
+			menu_settings.rt_upscale_fsr2 = 0;
 			menu_settings.rt_upscale_dlss = 0;
 			menu_settings.rt_vintage = 0;
 		}
@@ -2031,6 +2083,7 @@ static void VID_Menu_ChooseNextAA (int vidopt, int dir)
 		if (menu_settings.rt_upscale_dlss != prev_dlss)
 		{
 			menu_settings.rt_upscale_fsr2 = 0;
+			menu_settings.rt_upscale_fsr31 = 0;
 			menu_settings.rt_vintage = 0;
 		}
 	}
@@ -2039,6 +2092,7 @@ static void VID_Menu_ChooseNextAA (int vidopt, int dir)
 		if (menu_settings.rt_vintage != prev_vint)
 		{
 			menu_settings.rt_upscale_fsr2 = 0;
+			menu_settings.rt_upscale_fsr31 = 0;
 			menu_settings.rt_upscale_dlss = 0;
 		}
 	}
@@ -2116,10 +2170,12 @@ static void VID_MenuKey (int key)
 			RT_SwitchRenderer ();
 			break;
 		case VID_OPT_FSR2:
+		case VID_OPT_FSR31:
 		case VID_OPT_DLSS:
 		case VID_OPT_RENDER_SCALE:
 			VID_Menu_ChooseNextAA (video_options_cursor, -1);
 			Cvar_SetValueQuick (&rt_upscale_fsr2, menu_settings.rt_upscale_fsr2);
+			Cvar_SetValueQuick (&rt_upscale_fsr31, menu_settings.rt_upscale_fsr31);
 			Cvar_SetValueQuick (&rt_upscale_dlss, menu_settings.rt_upscale_dlss);
 			Cvar_SetValueQuick (&rt_vintage, menu_settings.rt_vintage);
 			break;
@@ -2161,10 +2217,12 @@ static void VID_MenuKey (int key)
 			RT_SwitchRenderer ();
 			break;
 		case VID_OPT_FSR2:
+		case VID_OPT_FSR31:
 		case VID_OPT_DLSS:
 		case VID_OPT_RENDER_SCALE:
 			VID_Menu_ChooseNextAA (video_options_cursor, 1);
 			Cvar_SetValueQuick (&rt_upscale_fsr2, menu_settings.rt_upscale_fsr2);
+			Cvar_SetValueQuick (&rt_upscale_fsr31, menu_settings.rt_upscale_fsr31);
 			Cvar_SetValueQuick (&rt_upscale_dlss, menu_settings.rt_upscale_dlss);
 			Cvar_SetValueQuick (&rt_vintage, menu_settings.rt_vintage);
 			break;
@@ -2288,6 +2346,12 @@ static void VID_MenuDraw (cb_context_t *cbx)
 
 			M_Print (cbx, 16, y, "       AMD FSR 2.0");
 			M_Print (cbx, 184, y, GetUpscalerOptionName (menu_settings.rt_upscale_fsr2, RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2));
+			break;
+		case VID_OPT_FSR31:
+			y += 8; // separate
+
+			M_Print (cbx, 16, y, "       AMD FSR 3.1");
+			M_Print (cbx, 184, y, GetUpscalerOptionName (menu_settings.rt_upscale_fsr31, RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3));
 			break;
 		case VID_OPT_DLSS:
 			M_Print (cbx, 16, y, "       Nvidia DLSS");
