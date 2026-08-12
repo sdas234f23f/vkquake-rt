@@ -1,3 +1,0 @@
-[SearchableFiles.include]
-Quake/
-Shaders/

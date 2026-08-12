@@ -13,25 +13,26 @@ jobs:
       fail-fast: false
       matrix:
         configuration: [Release, Debug]
-        platform: [x64]
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
+
+    - name: Checkout RayTracedGL1
+      run: git clone --branch quake-fsr31-support https://github.com/sdas234f23f/RayTracedGL1.git rtgl1
+
+    - name: Build RayTracedGL1
+      run: |
+        cmake -S rtgl1 -B rtgl1/Build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.configuration }}
+        cmake --build rtgl1/Build
+
     - name: Build vkQuake
       run: |
-        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-        $msbuild = & "$vswhere" -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | select-object -first 1
-        $options = @( `
-          '-property:Configuration=${{ matrix.configuration }}', `
-          '-property:Platform=${{ matrix.platform }}', `
-          '-maxcpucount', `
-          '-verbosity:minimal' `
-        )
-        & $msbuild Windows\VisualStudio\vkquake.sln $options
-        if (-not $?) { throw "Build failed" }
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.configuration }} -DRTGL1_SDK_PATH=${{ github.workspace }}/rtgl1
+        cmake --build build
+
     - name: Upload vkQuake
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
-        name: vkQuake archive
+        name: vkQuake-${{ matrix.configuration }}
         path: |
-            Windows\VisualStudio\Build-vkQuake\**\*.exe
-            Windows\VisualStudio\Build-vkQuake\**\*.dll
+            build/vkquake.exe
+            build/*.dll

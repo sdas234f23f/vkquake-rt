@@ -6,95 +6,39 @@
         {
             "label": "debug",
             "type": "shell",
-            "command": "meson build/debug --buildtype=debug && ninja -C build/debug",
+            "command": "cmake -B build/debug -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build build/debug",
             "group": "build",
             "presentation": {
                 "reveal": "always",
                 "clear": true
             },
             "problemMatcher": [
-                "$gcc"
-            ]
-        },
-        {
-            "label": "debugopt",
-            "type": "shell",
-            "command": "CFLAGS=-O3 meson build/debugopt --buildtype=debugoptimized && ninja -C build/debugopt",
-            "group": "build",
-            "presentation": {
-                "reveal": "always",
-                "clear": true
-            },
-            "problemMatcher": [
-                "$gcc"
+                "$msCompile"
             ]
         },
         {
             "label": "release",
             "type": "shell",
-            "command": "meson build/release --buildtype=release && ninja -C build/release",
+            "command": "cmake -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build build/release",
             "group": "build",
             "presentation": {
                 "reveal": "always",
                 "clear": true
             },
             "problemMatcher": [
-                "$gcc"
-            ]
-        },
-        {
-            "label": "sanitize",
-            "type": "shell",
-            "command": [ "CC=clang",
-                "CFLAGS=\"-fsanitize=address -fsanitize=undefined\"",
-                "LDFLAGS=\"-fsanitize=address -fsanitize=undefined\"",
-                "meson build/sanitize -Dbuildtype=debug && ninja -C build/sanitize" 
-            ],
-            "group": "build",
-            "presentation": {
-                "reveal": "always",
-                "clear": true
-            },
-            "problemMatcher": [
-                "$gcc"
-            ],
-        },
-        {
-            "label": "helgrind",
-            "type": "shell",
-            "command": "CFLAGS=-DUSE_HELGRIND meson build/helgrind --buildtype=debugoptimized && ninja -C build/helgrind",
-            "group": "build",
-            "presentation": {
-                "reveal": "always",
-                "clear": true
-            },
-            "problemMatcher": [
-                "$gcc"
+                "$msCompile"
             ]
         },
         {
             "label": "clean",
             "type": "shell",
-            "command": "rm -rf build",
+            "command": "if (Test-Path build) { Remove-Item -Recurse -Force build }",
             "group": "build",
             "presentation": {
                 "reveal": "always",
                 "clear": true
             },
-            "problemMatcher": [
-                "$gcc"
-            ]
-        },
-        {
-            "label": "run-helgrind",
-            "type": "shell",
-            "command": "/usr/bin/valgrind --tool=helgrind ${workspaceFolder}/build/helgrind/vkquake -basedir ${env:QUAKE_DIR}",
-            "group": "build",
-            "dependsOn": "helgrind",
-            "presentation": {
-                "reveal": "always",
-                "clear": true
-            }
-        }     
+            "problemMatcher": []
+        }
     ]
 }

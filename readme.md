@@ -4,21 +4,56 @@ Quake: Ray Traced adds a path tracing renderer to id Software's [Quake](https://
 
 Quake: Ray Traced is based on the [vkQuake](https://github.com/Novum/vkQuake) — a port of QuakeSpasm to Vulkan API.
 
+## Changelog
+
+See [changelog.md](changelog.md).
+
 ## Build
 
-### Windows
+The project is built with CMake and Ninja using the MSVC compiler from Visual Studio Build Tools.
 
-Clone the vkQuake repo from `https://github.com/sultim-t/vkquake-rt.git`
+### Windows
 
 Prerequisites:
 
 * [Git for Windows](https://github.com/git-for-windows/git/releases)
-* GPU with a ray tracing support
+* [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) with the "Desktop development with C++" workload
+* [CMake](https://cmake.org/download/) 3.20 or newer
+* [Ninja](https://ninja-build.org/)
+* [Vulkan SDK](https://vulkan.lunarg.com/sdk/home)
+* [RayTracedGL1](https://github.com/sultim-t/RayTracedGL1) built library
+* GPU with ray tracing support
 
 Steps:
 
-* Install [Visual Studio Community](https://www.visualstudio.com/products/free-developer-offers-vs) with Visual C++ component
-* Open the Visual Studio solution, `Windows\VisualStudio\vkquake.sln`
-* Build the [RayTracedGL1](https://github.com/sultim-t/RayTracedGL1/tree/quake) library, provide its header files / `.lib` to the `vkQuake` solution
-* Build the `vkQuake` solution
-* Copy `RayTracedGL1.dll` next to `vkQuake.exe` before running the executable
+1. Clone the repository:
+
+   ```
+   git clone --recursive https://github.com/sdas234f23f/vkquake-rt.git
+   ```
+
+2. Build [RayTracedGL1](https://github.com/sultim-t/RayTracedGL1) (the `quake-fsr31-support` branch) with CMake.
+
+3. Set the `RTGL1_SDK_PATH` environment variable to the RayTracedGL1 repository root
+   (it must contain `Include/RTGL1/RTGL1.h` and `Build/RayTracedGL1.lib`):
+
+   ```
+   setx RTGL1_SDK_PATH "C:\path\to\RayTracedGL1"
+   ```
+
+4. Configure and build (open a new terminal after `setx`):
+
+   ```
+   cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+   cmake --build build
+   ```
+
+   For a debug build use `-DCMAKE_BUILD_TYPE=Debug`.
+
+5. Run the game:
+
+   ```
+   build\vkquake.exe
+   ```
+
+   `SDL2.dll`, `RayTracedGL1.dll` and all codec DLLs are copied next to `vkquake.exe` automatically during the build.
