@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.0.0
+
+### Added
+- **Q2RTX core path switch** — `rt_core_q2rtx` cvar enables the new Q2RTX-style rendering core in RTGL1 (ASVGF denoiser + checkerboard interleave + TAAU)
+- **Fog volumes** — port of the Q2RTX `fog` console command: define up to 8 axis-aligned fog boxes with `fog -v <i> -a <x,y,z|here> -b ... -c <r,g,b> -d <dist> -f <face>`; print (`-p`), reset (`-r`) and clear-all (`-R`) supported
+- **Sun presets** — `rt_sun_preset` cvar (manual, warm, daylight, neutral, sunset, cold, Q1 purple, cold blue); sun color now lives in separate `rt_sky_light_r/g/b` cvars, decoupled from `rt_globallight_*`
+- **Physical sky support** — `rt_physical_sky` enables the procedural atmosphere in RTGL1; `rt_sky_tint` and cloud cvars control the look
+- Volumetric menu: left/right arrows now cycle through off/simple/sky modes in both directions
+
+## v2.2.0
+
+### Added
+- **Bloom option** — `rt_bloom` cvar with a video-menu entry toggling bloom independently of the renderer
+
+### Fixed
+- Classic render: RT portals are now disabled and the world is reloaded when switching the renderer
+
 ## v2.1.0
 
 ### Added
