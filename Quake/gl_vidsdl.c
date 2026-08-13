@@ -134,6 +134,7 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_sun, "0") \
 	CVAR_DEF_T (rt_sun_pitch, "60") \
 	CVAR_DEF_T (rt_sun_yaw, "-40") \
+	CVAR_DEF_T (rt_sun_preset, "0") \
 	CVAR_DEF_T (rt_flashlight, "0") \
 	\
 	CVAR_DEF_T (rt_muzzleoffs_x, "0") \
@@ -142,6 +143,9 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	\
 	CVAR_DEF_T (rt_sky, "9") \
 	CVAR_DEF_T (rt_sky_saturation, "1") \
+	CVAR_DEF_T (rt_sky_light_r, "255") \
+	CVAR_DEF_T (rt_sky_light_g, "255") \
+	CVAR_DEF_T (rt_sky_light_b, "255") \
 	\
 	CVAR_DEF_T (rt_brush_metal, "0.0") \
 	CVAR_DEF_T (rt_brush_rough, "1.0") \
@@ -185,10 +189,10 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_sensit_indir, "0.06") \
 	CVAR_DEF_T (rt_sensit_spec, "0.03") \
 	\
-	CVAR_DEF_T (rt_globallightmult, "10") \
+	CVAR_DEF_T (rt_globallight_mult, "5") \
 	CVAR_DEF_T (rt_globallight_r, "255") \
-	CVAR_DEF_T (rt_globallight_g, "214") \
-	CVAR_DEF_T (rt_globallight_b, "163") \
+	CVAR_DEF_T (rt_globallight_g, "255") \
+	CVAR_DEF_T (rt_globallight_b, "255") \
 	\
 	CVAR_DEF_T (rt_bloom_intensity, "1") \
 	CVAR_DEF_T (rt_bloom_emis_mult, "50") \
@@ -1130,7 +1134,7 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	if (CVAR_TO_BOOL (rt_sun))
 	{
 		RT_VEC3_SET (volume_light_angles, CVAR_TO_FLOAT (rt_sun_pitch), CVAR_TO_FLOAT (rt_sun_yaw), 0);
-		RT_INIT_DEFAULT_LIGHT_COLOR (volume_light_color);
+		RT_INIT_SKY_LIGHT_COLOR (volume_light_color);
 	}
 	else
 	{
@@ -1451,6 +1455,42 @@ static void VID_InitModelist (void)
 
 /*
 ===================
+RT_SunPreset_f
+
+Applies the rt_sun_preset colors directly to rt_sky_light_r/g/b so
+that the sun and its volumetric shafts share the same color without
+affecting the other light sources (which use rt_globallight_*).
+Preset 0 = manual mode (rt_sky_light_* are used as-is).
+===================
+*/
+static void RT_SunPreset_f (cvar_t *var)
+{
+	const int preset = CLAMP (0, CVAR_TO_INT32 (rt_sun_preset), 7);
+
+	if (preset == 0)
+	{
+		return; // manual, keep user values
+	}
+
+	// presets: [1] warm, [2] daylight, [3] neutral-white, [4] golden sunset, [5] cold/overcast, [6] purple (Q1 style), [7] cold blue
+	static const int presets[8][3] = {
+		{0, 0, 0},
+		{255, 214, 163},
+		{255, 235, 200},
+		{255, 246, 230},
+		{255, 178, 92},
+		{200, 216, 255},
+		{168, 118, 218},
+		{140, 180, 255},
+	};
+
+	Cvar_SetValueQuick (&rt_sky_light_r, presets[preset][0]);
+	Cvar_SetValueQuick (&rt_sky_light_g, presets[preset][1]);
+	Cvar_SetValueQuick (&rt_sky_light_b, presets[preset][2]);
+}
+
+/*
+===================
 VID_Init
 ===================
 */
@@ -1487,6 +1527,8 @@ void VID_Init (void)
 		CVAR_DEF_LIST (CVAR_DEF_T)
 #undef CVAR_DEF_T
 	}
+
+	Cvar_SetCallback (&rt_sun_preset, RT_SunPreset_f);
 
 	Cmd_AddCommand ("vid_unlock", VID_Unlock);     // johnfitz
 	Cmd_AddCommand ("vid_restart", VID_Restart_f); // johnfitz
@@ -2214,7 +2256,7 @@ static void VID_MenuKey (int key)
 			Cvar_SetValueQuick (&r_particles, menu_settings.r_particles);
 			break;
 		case VID_OPT_VOLUMETRICS:
-			int newval = (CVAR_TO_UINT32 (rt_volume_type) + 1) % 3;
+			int newval = (CVAR_TO_UINT32 (rt_volume_type) + 2) % 3; // left arrow: previous
 			Cvar_SetValueQuick (&rt_volume_type, newval);
 			break;
 		default:

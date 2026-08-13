@@ -416,9 +416,9 @@ static void RT_UploadAllDlights ()
 		AngleVectors (angles, forward, right, up);
 
 		vec3_t color;
-		RT_INIT_DEFAULT_LIGHT_COLOR (color);
+		RT_INIT_SKY_LIGHT_COLOR (color);
+		// sun brightness is controlled solely by rt_sun (not rt_globallight_mult)
 		VectorScale (color, CVAR_TO_FLOAT (rt_sun), color);
-		RT_FIXUP_LIGHT_INTENSITY (color, false);
 
 		RgDirectionalLightUploadInfo info = {
 			.uniqueID = (uint64_t)UINT32_MAX + 1,
