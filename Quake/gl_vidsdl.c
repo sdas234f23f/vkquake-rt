@@ -69,6 +69,7 @@ static void VID_MenuDraw (cb_context_t *cbx);
 static void VID_MenuKey (int key);
 static void VID_Restart (qboolean set_mode);
 static void VID_Restart_f (void);
+static void RT_Fog_Cmd (void);
 
 static void ClearAllStates (void);
 
@@ -720,6 +721,7 @@ static void GL_InitInstance (void)
 	Cmd_AddCommand ("rt_pfnportal", RT_PrintNearestPortal);
 	Cmd_AddCommand ("rt_water_color", RT_WaterColor);
 	Cmd_AddCommand ("rt_water_acidcolor", RT_AcidColor);
+	Cmd_AddCommand ("fog", RT_Fog_Cmd);
 	Cvar_SetValueQuick (&_rt_firsttime, 0);
 
 
@@ -1533,6 +1535,156 @@ static void RT_SunPreset_f (cvar_t *var)
 	Cvar_SetValueQuick (&rt_sky_light_r, presets[preset][0]);
 	Cvar_SetValueQuick (&rt_sky_light_g, presets[preset][1]);
 	Cvar_SetValueQuick (&rt_sky_light_b, presets[preset][2]);
+}
+
+/*
+===================
+Q2RTX-style fog volumes (new core path)
+
+A fog volume is an axis-aligned box filled with uniform or gradient fog,
+defined by two points on any diagonal. Up to RG_MAX_FOG_VOLUMES volumes.
+
+Usage:
+  fog -v <index> -a <x,y,z|here> -b <x,y,z|here> -c <r,g,b> -d <distance> -f <face>
+  fog -v <index> -p    print the volume
+  fog -v <index> -r    reset the volume
+  fog -R               reset all volumes
+
+  -d: distance at which objects in the fog are 50% visible
+  -f: softface where the density is zero: none, xa, xb, ya, yb, za, zb
+===================
+*/
+static RgFogVolume rt_fog_volumes[RG_MAX_FOG_VOLUMES];
+
+static void RT_Fog_ParsePoint (const char *s, float *out)
+{
+	if (!strcmp (s, "here"))
+	{
+		VectorCopy (r_origin, out);
+		return;
+	}
+
+	if (3 != sscanf (s, "%f,%f,%f", &out[0], &out[1], &out[2]))
+	{
+		Con_Printf ("invalid coordinates '%s'\n", s);
+	}
+}
+
+static uint32_t RT_Fog_ParseSoftFace (const char *s)
+{
+	if (!strcmp (s, "xa")) return 1;
+	if (!strcmp (s, "xb")) return 2;
+	if (!strcmp (s, "ya")) return 3;
+	if (!strcmp (s, "yb")) return 4;
+	if (!strcmp (s, "za")) return 5;
+	if (!strcmp (s, "zb")) return 6;
+	return 0; // none or unknown
+}
+
+static const char *RT_Fog_SoftFaceName (uint32_t softface)
+{
+	static const char *names[] = {"none", "xa", "xb", "ya", "yb", "za", "zb"};
+	if (softface > 6)
+	{
+		softface = 0;
+	}
+	return names[softface];
+}
+
+static void RT_Fog_PrintVolume (int index, const RgFogVolume *vol)
+{
+	Con_Printf ("fog -v %d -a %.2f,%.2f,%.2f -b %.2f,%.2f,%.2f -c %.2f,%.2f,%.2f -d %.0f -f %s\n",
+	            index,
+	            vol->pointA.data[0], vol->pointA.data[1], vol->pointA.data[2],
+	            vol->pointB.data[0], vol->pointB.data[1], vol->pointB.data[2],
+	            vol->color.data[0], vol->color.data[1], vol->color.data[2],
+	            vol->halfExtinctionDistance,
+	            RT_Fog_SoftFaceName (vol->softface));
+}
+
+static void RT_Fog_Cmd (void)
+{
+	const int argc = Cmd_Argc ();
+	if (argc <= 1)
+	{
+		Con_Printf ("usage: fog -v <index> -a <x,y,z|here> -b <x,y,z|here> -c <r,g,b> -d <distance> -f <none|xa|xb|ya|yb|za|zb>\n");
+		return;
+	}
+
+	int          index = -1;
+	RgFogVolume *vol   = NULL;
+
+	for (int i = 1; i < argc; i++)
+	{
+		const char *arg = Cmd_Argv (i);
+
+		if (!strcmp (arg, "-h"))
+		{
+			Con_Printf ("Set parameters of a Q2RTX-style fog volume.\n");
+			return;
+		}
+		else if (!strcmp (arg, "-v") && i + 1 < argc)
+		{
+			index = atoi (Cmd_Argv (++i));
+			if (index < 0 || index >= RG_MAX_FOG_VOLUMES)
+			{
+				Con_Printf ("invalid volume index '%d'\n", index);
+				return;
+			}
+			vol = &rt_fog_volumes[index];
+		}
+		else if (!strcmp (arg, "-a") && i + 1 < argc)
+		{
+			if (!vol) goto no_volume;
+			RT_Fog_ParsePoint (Cmd_Argv (++i), vol->pointA.data);
+		}
+		else if (!strcmp (arg, "-b") && i + 1 < argc)
+		{
+			if (!vol) goto no_volume;
+			RT_Fog_ParsePoint (Cmd_Argv (++i), vol->pointB.data);
+		}
+		else if (!strcmp (arg, "-c") && i + 1 < argc)
+		{
+			if (!vol) goto no_volume;
+			RT_Fog_ParsePoint (Cmd_Argv (++i), vol->color.data);
+		}
+		else if (!strcmp (arg, "-d") && i + 1 < argc)
+		{
+			if (!vol) goto no_volume;
+			vol->halfExtinctionDistance = atof (Cmd_Argv (++i));
+		}
+		else if (!strcmp (arg, "-f") && i + 1 < argc)
+		{
+			if (!vol) goto no_volume;
+			vol->softface = RT_Fog_ParseSoftFace (Cmd_Argv (++i));
+		}
+		else if (!strcmp (arg, "-p"))
+		{
+			if (!vol) goto no_volume;
+			RT_Fog_PrintVolume (index, vol);
+		}
+		else if (!strcmp (arg, "-r"))
+		{
+			if (!vol) goto no_volume;
+			memset (vol, 0, sizeof (*vol));
+		}
+		else if (!strcmp (arg, "-R"))
+		{
+			memset (rt_fog_volumes, 0, sizeof (rt_fog_volumes));
+		}
+		else
+		{
+			Con_Printf ("unknown fog option '%s'\n", arg);
+			return;
+		}
+	}
+
+	// push the volumes to the renderer (inactive ones are skipped there)
+	rgSetFogVolumes (vulkan_globals.instance, RG_MAX_FOG_VOLUMES, rt_fog_volumes);
+	return;
+
+no_volume:
+	Con_Printf ("volume not specified\n");
 }
 
 /*
