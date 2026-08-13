@@ -142,10 +142,18 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_muzzleoffs_z, "100") \
 	\
 	CVAR_DEF_T (rt_sky, "9") \
-	CVAR_DEF_T (rt_sky_saturation, "1") \
+	CVAR_DEF_T (rt_sky_tint, "1.0") \
+	CVAR_DEF_T (rt_physical_sky, "0") \
 	CVAR_DEF_T (rt_sky_light_r, "255") \
 	CVAR_DEF_T (rt_sky_light_g, "255") \
 	CVAR_DEF_T (rt_sky_light_b, "255") \
+	CVAR_DEF_T (rt_sky_clouds, "0") \
+	CVAR_DEF_T (rt_sky_cloud_color_r, "255") \
+	CVAR_DEF_T (rt_sky_cloud_color_g, "255") \
+	CVAR_DEF_T (rt_sky_cloud_color_b, "255") \
+	CVAR_DEF_T (rt_sky_cloud_coverage, "0.4") \
+	CVAR_DEF_T (rt_sky_cloud_density, "0.7") \
+	CVAR_DEF_T (rt_sky_cloud_speed, "0.02") \
 	\
 	CVAR_DEF_T (rt_brush_metal, "0.0") \
 	CVAR_DEF_T (rt_brush_rough, "1.0") \
@@ -1121,13 +1129,45 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	float skyMult = 1.0f / CLAMP (0.02f, RT_Luminance (skyflatcolor), 1.0f);
 	skyMult *= CVAR_TO_FLOAT (rt_sky);
 
+	const int usePhysicalSky = CVAR_TO_BOOL (rt_physical_sky) != 0;
+
+	vec3_t sky_base_color;
+	if (usePhysicalSky)
+	{
+		// the procedural sky is tinted by the sun preset color (rt_sky_light_*)
+		RT_INIT_SKY_LIGHT_COLOR (sky_base_color);
+	}
+	else
+	{
+		VectorCopy (skyflatcolor, sky_base_color);
+	}
+
 	RgDrawFrameSkyParams sky_params = {
-		.skyType = CVAR_TO_BOOL (r_fastsky) ? RG_SKY_TYPE_COLOR : RG_SKY_TYPE_RASTERIZED_GEOMETRY,
-		.skyColorDefault = RT_VEC3 (skyflatcolor),
-		.skyColorMultiplier = skyMult,
-		.skyColorSaturation = CVAR_TO_FLOAT (rt_sky_saturation),
+		// procedural sky has its own brightness, so skyColorMultiplier is not applied there
+		.skyType = CVAR_TO_BOOL (r_fastsky) ? RG_SKY_TYPE_COLOR
+		         : usePhysicalSky ? RG_SKY_TYPE_PROCEDURAL
+		         : RG_SKY_TYPE_RASTERIZED_GEOMETRY,
+		.skyColorDefault = RT_VEC3 (sky_base_color),
+		.skyColorMultiplier = usePhysicalSky ? 1.0f : skyMult,
+		// repurposed field: carries the procedural sky tint strength (rt_sky_tint)
+		.skyColorSaturation = CVAR_TO_FLOAT (rt_sky_tint),
 		.skyViewerPosition = RT_VEC3 (r_origin),
 	};
+
+	if (usePhysicalSky)
+	{
+		// procedural cloud params are packed into the otherwise-unused skyCubemapRotationTransform field:
+		// [0..2] cloud color rgb, [3] coverage, [4] density, [5] drift speed, [6] enabled
+		float *c = &sky_params.skyCubemapRotationTransform.matrix[0][0];
+		c[0] = CVAR_TO_FLOAT (rt_sky_cloud_color_r) / 255.0f;
+		c[1] = CVAR_TO_FLOAT (rt_sky_cloud_color_g) / 255.0f;
+		c[2] = CVAR_TO_FLOAT (rt_sky_cloud_color_b) / 255.0f;
+		c[3] = CVAR_TO_FLOAT (rt_sky_cloud_coverage);
+		c[4] = CVAR_TO_FLOAT (rt_sky_cloud_density);
+		c[5] = CVAR_TO_FLOAT (rt_sky_cloud_speed);
+		c[6] = CVAR_TO_BOOL (rt_sky_clouds) ? 1.0f : 0.0f;
+		c[7] = c[8] = 0.0f;
+	}
 
 	vec3_t volume_light_angles;
 	vec3_t volume_light_color;
