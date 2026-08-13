@@ -192,6 +192,7 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	\
 	CVAR_DEF_T (rt_bloom_intensity, "1") \
 	CVAR_DEF_T (rt_bloom_emis_mult, "50") \
+	CVAR_DEF_T (rt_bloom, "0") \
 	\
 	CVAR_DEF_T (rt_ef_crt, "0") \
 	CVAR_DEF_T (rt_ef_chraber, "0.3") \
@@ -1085,7 +1086,7 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	};
 
 	RgDrawFrameBloomParams bloom_params = {
-		.bloomIntensity = CVAR_TO_BOOL (rt_classic_render) ? 0 : CVAR_TO_FLOAT (rt_bloom_intensity),
+		.bloomIntensity = (CVAR_TO_BOOL (rt_classic_render) || !CVAR_TO_BOOL (rt_bloom)) ? 0 : CVAR_TO_FLOAT (rt_bloom_intensity),
 		.inputThreshold = 0.0f,
 		.bloomEmissionMultiplier = CVAR_TO_FLOAT (rt_bloom_emis_mult),
 	};
@@ -1830,6 +1831,7 @@ enum
 
 
 	VID_OPT_RENDERER,
+	VID_OPT_BLOOM,
 	VID_OPT_VSYNC,
 	VID_OPT_MAX_FPS,
 
@@ -2186,6 +2188,9 @@ static void VID_MenuKey (int key)
 		case VID_OPT_RENDERER:
 			RT_SwitchRenderer ();
 			break;
+		case VID_OPT_BLOOM:
+			Cvar_SetValueQuick (&rt_bloom, !CVAR_TO_BOOL (rt_bloom));
+			break;
 		case VID_OPT_UPSCALER:
 		case VID_OPT_UPSCALER_QUALITY:
 		case VID_OPT_RENDER_SCALE:
@@ -2209,7 +2214,7 @@ static void VID_MenuKey (int key)
 			Cvar_SetValueQuick (&r_particles, menu_settings.r_particles);
 			break;
 		case VID_OPT_VOLUMETRICS:
-			int newval = CVAR_TO_UINT32 (rt_volume_type) == 2 ? 1 : 2;
+			int newval = (CVAR_TO_UINT32 (rt_volume_type) + 1) % 3;
 			Cvar_SetValueQuick (&rt_volume_type, newval);
 			break;
 		default:
@@ -2237,6 +2242,9 @@ static void VID_MenuKey (int key)
 		case VID_OPT_RENDERER:
 			RT_SwitchRenderer ();
 			break;
+		case VID_OPT_BLOOM:
+			Cvar_SetValueQuick (&rt_bloom, !CVAR_TO_BOOL (rt_bloom));
+			break;
 		case VID_OPT_UPSCALER:
 		case VID_OPT_UPSCALER_QUALITY:
 		case VID_OPT_RENDER_SCALE:
@@ -2260,7 +2268,7 @@ static void VID_MenuKey (int key)
 			Cvar_SetValueQuick (&r_particles, menu_settings.r_particles);
 			break;
 		case VID_OPT_VOLUMETRICS:
-			int newval = CVAR_TO_UINT32 (rt_volume_type) == 2 ? 1 : 2;
+			int newval = (CVAR_TO_UINT32 (rt_volume_type) + 1) % 3;
 			Cvar_SetValueQuick (&rt_volume_type, newval);
 			break;
 		default:
@@ -2288,6 +2296,9 @@ static void VID_MenuKey (int key)
 			break;
 		case VID_OPT_RENDERER:
 			RT_SwitchRenderer ();
+			break;
+		case VID_OPT_BLOOM:
+			Cvar_SetValueQuick (&rt_bloom, !CVAR_TO_BOOL (rt_bloom));
 			break;
 		case VID_OPT_VSYNC:
 			Cbuf_AddText ("toggle vid_vsync\n");
@@ -2353,6 +2364,10 @@ static void VID_MenuDraw (cb_context_t *cbx)
 			M_Print (cbx, 16, y, "          Renderer");
 			M_Print (cbx, 184, y, CVAR_TO_BOOL (rt_classic_render) ? "Classic" : "Ray Traced");
 			break;
+		case VID_OPT_BLOOM:
+			M_Print (cbx, 16, y, "             Bloom");
+			M_DrawCheckbox (cbx, 184, y, CVAR_TO_BOOL (rt_bloom));
+			break;
 		case VID_OPT_VSYNC:
 			M_Print (cbx, 16, y, "     Vertical sync");
 			M_DrawCheckbox (cbx, 184, y, (int)vid_vsync.value);
@@ -2412,7 +2427,7 @@ static void VID_MenuDraw (cb_context_t *cbx)
 			break;
 		case VID_OPT_VOLUMETRICS:
 			M_Print (cbx, 16, y, "       Volumetrics");
-			M_Print (cbx, 184, y, CVAR_TO_UINT32 (rt_volume_type) == 2 ? "sky" : "simple");
+			M_Print (cbx, 184, y, CVAR_TO_UINT32 (rt_volume_type) == 2 ? "sky" : CVAR_TO_UINT32 (rt_volume_type) == 1 ? "simple" : "off");
 			break;
 		case VID_OPT_RENDER_SCALE:
 			M_Print (cbx, 16, y, "           Vintage");
