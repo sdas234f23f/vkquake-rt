@@ -36,6 +36,7 @@ extern cvar_t r_gpulightmapupdate;
 
 extern cvar_t rt_brush_metal;
 extern cvar_t rt_brush_rough;
+extern cvar_t rt_classic_render;
 extern cvar_t rt_enable_pvs;
 extern cvar_t rt_reflrefr_depth;
 extern cvar_t rt_plight_intensity, rt_plight_radius;
@@ -928,7 +929,7 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 #endif
 	}
 
-	if (s->is_teleport && CVAR_TO_INT32 (rt_reflrefr_depth) > 0)
+	if (s->is_teleport && !CVAR_TO_BOOL (rt_classic_render) && CVAR_TO_INT32 (rt_reflrefr_depth) > 0)
 	{
 		diffuse_tex = NULL;
 	}
@@ -984,10 +985,11 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 			.uniqueID = RT_GetBrushSurfUniqueId (s->entuniqueid, s->model, s->surf, 0),
 			.flags = 
 			    (is_mirror ? RG_GEOMETRY_UPLOAD_REFL_REFR_ALBEDO_MULTIPLY_BIT : 0) |
-			    (s->is_teleport ? RG_GEOMETRY_UPLOAD_REFL_REFR_ALBEDO_ADD_BIT : 0) |
+			    (s->is_teleport && !CVAR_TO_BOOL (rt_classic_render) ? RG_GEOMETRY_UPLOAD_REFL_REFR_ALBEDO_ADD_BIT : 0) |
                 RG_GEOMETRY_UPLOAD_GENERATE_NORMALS_BIT,
 			.geomType = is_static_geom ? RG_GEOMETRY_TYPE_STATIC : RG_GEOMETRY_TYPE_DYNAMIC,
 			.passThroughType = 
+			    (s->is_teleport && CVAR_TO_BOOL (rt_classic_render)) ? RG_GEOMETRY_PASS_THROUGH_TYPE_OPAQUE :
 			    is_mirror ? RG_GEOMETRY_PASS_THROUGH_TYPE_MIRROR :
 			    s->is_water ? RG_GEOMETRY_PASS_THROUGH_TYPE_WATER_REFLECT_REFRACT :
 			    s->is_acid ? RG_GEOMETRY_PASS_THROUGH_TYPE_ACID_REFLECT_REFRACT :
@@ -1019,7 +1021,7 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 			.transform = RT_GetBrushModelMatrix (s->ent),
 		};
 
-		if (s->is_teleport)
+		if (s->is_teleport && !CVAR_TO_BOOL (rt_classic_render))
 		{
 			qboolean portal_is_mirror = false;
 

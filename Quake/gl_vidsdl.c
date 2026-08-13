@@ -589,6 +589,10 @@ static void RT_SwitchRenderer (void)
 {
 	int newval = !CVAR_TO_BOOL (rt_classic_render);
 	Cvar_SetValueQuick (&rt_classic_render, newval);
+
+	// world geometry (incl. portals) is only uploaded once per map,
+	// so reload it to pick up the new renderer mode
+	R_NewMap ();
 }
 
 static vec3_t rt_water_color = {171 / 255.0f, 193 / 255.0f, 210 / 255.0f};
