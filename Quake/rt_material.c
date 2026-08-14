@@ -10,7 +10,7 @@
 #pragma warning(disable : 4505)
 #endif
 
-// STB_IMAGE config (phase 4.5: JPG/PNG decode for the Rygel texture pack):
+// STB_IMAGE config (phase 4.5: JPG/PNG decode for HD texture packs):
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
 #define STBI_NO_BMP
@@ -301,7 +301,7 @@ static void rt_mat_reset(rt_material_t *mat)
 {
     memset(mat, 0, sizeof(*mat));
     mat->bump_scale = 1.0f;
-    mat->metalness_factor = 0.0f; // Rygel/JPG normals carry no alpha -> keep non-metallic unless a .mat says otherwise
+    mat->metalness_factor = 0.0f; // JPG normals carry no alpha -> keep non-metallic unless a .mat says otherwise
     mat->emissive_factor = 1.0f;
     mat->specular_factor = 1.0f;
     mat->base_factor = 1.0f;
@@ -666,7 +666,7 @@ rt_material_t *RT_MAT_Find(const char *name)
 }
 
 // ---------------------------------------------------------------------------
-// Rygel texture pack convention: no .mat files, but every texture set has
+// HD texture pack convention: no .mat files, but every texture set has
 // <name>_norm / <name>_gloss / <name>_luma / <name>_glow / <name>_bump.
 // ---------------------------------------------------------------------------
 
@@ -762,7 +762,7 @@ qboolean RT_MAT_AutoDetect(const char *name, rt_material_t *out)
         }
     }
 
-    // Rygel packs carry no alpha/metallic data: keep surfaces non-metallic
+    // HD packs carry no alpha/metallic data: keep surfaces non-metallic
     out->metalness_factor = 0.0f;
     out->bump_scale = 1.0f;
     out->emissive_factor = 1.0f;

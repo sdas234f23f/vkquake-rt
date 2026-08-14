@@ -1028,7 +1028,7 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	rt_material_t *mat = RT_MAT_Find (glt->name);
 	if (!mat)
 	{
-		// no .mat definition: auto-detect the Rygel texture pack suffixes
+		// no .mat definition: auto-detect the HD texture pack suffixes
 		// (<name>_norm, <name>_gloss, <name>_luma/_glow, <name>_bump)
 		if (!RT_MAT_AutoDetect (glt->name, &autoMat))
 			return false;
@@ -1080,7 +1080,7 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	}
 
 	// same for the normal map: metalness is packed in its alpha (Q2RTX
-	// convention), but Rygel PNGs have no alpha -> stay non-metallic.
+	// convention), but such PNGs have no alpha -> stay non-metallic.
 	qboolean normHasAlpha = false;
 	if (normBuf)
 	{

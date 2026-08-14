@@ -491,7 +491,7 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 
 	default:
 		// Unknown format -- e.g. MD3 ("IDP3") or MD5 models shipped by HD
-		// texture packs (like the Rygel pack). Don't abort the game or the
+		// texture packs. Don't abort the game or the
 		// level: warn, skip the model, and let callers treat it as missing
 		// (the renderer skips entities with no model).
 		Con_DWarning ("Mod_LoadModel: %s has unknown model format (0x%08X); skipping\n",

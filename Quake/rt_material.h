@@ -31,7 +31,7 @@ typedef struct rt_material_s {
     char filename_normals[MAX_QPATH];
     char filename_emissive[MAX_QPATH];
     char filename_mask[MAX_QPATH];
-    char filename_gloss[MAX_QPATH];    // gloss map (Rygel: _gloss) -> roughness = 1 - gloss
+    char filename_gloss[MAX_QPATH];    // gloss map (HD packs: _gloss) -> roughness = 1 - gloss
     float bump_scale;
     float roughness_override;          // 0 = unset
     float metalness_factor;
@@ -60,7 +60,7 @@ void RT_MAT_ChangeMap(const char *mapname);
 // Returns NULL if no material is defined for this texture.
 rt_material_t *RT_MAT_Find(const char *name);
 
-// Auto-detects a material from the Rygel texture pack naming convention when
+// Auto-detects a material from the HD texture pack naming convention when
 // no .mat definition exists: it looks for <name>_norm (normal map),
 // <name>_gloss (gloss -> roughness), <name>_luma / <name>_glow (emissive) and
 // <name>_bump (legacy bump, used only if _norm is missing). Fills *out and

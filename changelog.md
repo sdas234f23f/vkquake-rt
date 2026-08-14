@@ -10,7 +10,7 @@
   - JPG/PNG decoding (stb_image) in the engine image loader and in material textures
   - `rt_mat` console command (inspect materials) and `rt_materials` cvar (on/off)
   - `Tools/convert_ovrd_mat.py` — converts RTGL1 override materials (`ovrd/mat/*.ktx2`, RGBA8/BC5/BC7) into a ready-to-use `.pkz` (textures + `.mat`)
-  - `Tools/gen_materials.py` — generates `.mat` files from Rygel-style texture packs
+  - `Tools/gen_materials.py` — generates `.mat` files from HD texture packs using the `_norm`/`_gloss`/`_luma`/`_glow` suffix convention
 - **Crash log** — on an unhandled exception a `crash.log` (exception code, faulting address, module-relative stack trace) is written next to the executable
 
 ### Fixed

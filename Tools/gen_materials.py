@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a Q2RTX-style .mat for a Quake HD texture pack (Rygel convention).
+"""Generate a Q2RTX-style .mat for a Quake HD texture pack (suffix convention).
 
 Scans <pack>/textures recursively. Every base texture (a file whose name does
 not end with _norm/_bump/_gloss/_luma/_glow) gets a .mat entry referencing:

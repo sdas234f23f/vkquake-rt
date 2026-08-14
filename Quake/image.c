@@ -29,7 +29,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #pragma warning(disable : 4505)
 #endif
 
-// STB_IMAGE config (phase 4.5: JPG/PNG decode for the Rygel texture pack):
+// STB_IMAGE config (phase 4.5: JPG/PNG decode for HD texture packs):
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
 #define STBI_NO_BMP
