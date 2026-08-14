@@ -6,6 +6,10 @@
 - **Decoupled from RayTracedGL1.dll (4.7)** — the Q2RTX-style ray-traced renderer is now vendored into the repository (`RTGL1/` folder: source + shaders + KTX/FidelityFX) and built as a static library linked into `vkquake.exe`.
 - **The game no longer depends on the RayTracedGL1 library** — `RayTracedGL1.dll` is not required at runtime anymore; the renderer is compiled straight into `vkquake.exe`. The public `RG_*` API is kept as an internal interface (`RG_STATIC`); the `.spv` shaders and blue noise are still loaded from the game data (`ovrd/shaders/`, `ovrd/BlueNoise_LDR_RGBA_128.ktx2`). The renderer's own changelog is preserved at the bottom of this file.
 
+### Changed
+- **The legacy RTGL1 renderer was removed** — the Q2RTX-style core is now the only renderer (`rt_core_q2rtx` cvar removed; `coreQ2RTX` is always on). The legacy SVGF denoiser path, legacy screen-space volumetric (`rt_volume_type` no longer renders) and the legacy reflection/refraction pass are gone. Kept: the ASVGF denoiser, the TAAU upscaler (default), **FSR 2/FSR 3.1/DLSS upscalers still available** (they run on the Q2RTX final image when selected in the video menu), god rays, fog volumes, procedural sky, ReSTIR lighting, and the classic (non-RT) renderer fallback.
+- Fixed an intermittent AMD overlay flicker (gone together with the legacy render path).
+
 ## v3.2.0
 
 ### Added

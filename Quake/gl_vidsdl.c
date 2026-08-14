@@ -101,7 +101,6 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 #define CVAR_DEF_LIST( CVAR_DEF_T ) \
 	\
 	CVAR_DEF_T (rt_classic_render, "0") \
-	CVAR_DEF_T (rt_core_q2rtx, "0") \
 	CVAR_DEF_T (rt_enable_pvs, "0") \
 	CVAR_DEF_T (rt_shadowrays, "2") \
 	CVAR_DEF_T (rt_indir2bounces, "0") \
@@ -1329,11 +1328,9 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	RgDrawFrameDebugParams debug_params = {
 		.drawFlags = CVAR_TO_UINT32 (rt_debugflags),
 	};
-	// new Q2RTX-style core rendering path switch
-	if (CVAR_TO_BOOL (rt_core_q2rtx))
-	{
-		debug_params.drawFlags |= RG_DEBUG_DRAW_Q2RTX_CORE_BIT;
-	}
+	// 4.7: the Q2RTX-style core is the only renderer (the legacy RTGL1 path
+	// was removed), so the core flag is always set.
+	debug_params.drawFlags |= RG_DEBUG_DRAW_Q2RTX_CORE_BIT;
 
 	float cameranear = GL_GetCameraNear (DEG2RAD (r_fovx), DEG2RAD (r_fovy));
 	float camerafar = GL_GetCameraFar ();

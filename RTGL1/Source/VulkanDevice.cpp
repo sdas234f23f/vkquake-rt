@@ -305,10 +305,9 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
         }
     }
 
-    // new Q2RTX-style core path switch; the host sets RG_DEBUG_DRAW_Q2RTX_CORE_BIT
-    // when its "rt_core_q2rtx" cvar is enabled
-    gu->coreQ2RTX = drawInfo.pDebugParams != nullptr &&
-                    (drawInfo.pDebugParams->drawFlags & RG_DEBUG_DRAW_Q2RTX_CORE_BIT) ? 1u : 0u;
+    // 4.7: the legacy RTGL1 render path was removed; the Q2RTX-style core is
+    // the only renderer, so the shader-side switch is always enabled.
+    gu->coreQ2RTX = 1u;
 
     if( drawInfo.pTexturesParams != nullptr )
     {
@@ -861,24 +860,18 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
             }
         }
 
+        // Q2RTX-style reflection/refraction pass (phase 4.4.3). The legacy
+        // RTGL1 refl/refr path was removed (4.7: only the Q2RTX renderer).
         if (uniform->GetData()->reflectRefractMaxDepth > 0)
         {
-            if (uniform->GetData()->coreQ2RTX)
-            {
-                // Q2RTX-style reflection/refraction pass (phase 4.4.3)
-                pathTracer->TraceQ2ReflectionRefractionRays(params);
-            }
-            else
-            {
-                pathTracer->TraceReflectionRefractionRays(params);
-            }
+            pathTracer->TraceQ2ReflectionRefractionRays(params);
         }
 
         // Q2RTX-style god rays over the reflected/refracted segments. The refl
         // pass stores each reflected segment length in Q2GodRaysThroughputDist.w
         // and marks reflection pixels with negative Q2ViewDepth; this pass only
         // processes those pixels and accumulates on top of the primary result.
-        if (uniform->GetData()->coreQ2RTX && godRaysActive)
+        if (godRaysActive)
         {
             godRays->Trace(cmd, frameIndex, gr, 1);
         }
@@ -895,41 +888,17 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
         pathTracer->TraceDirectllumination(params);
         pathTracer->TraceIndirectllumination(params);
 
-        // The legacy screen-space volumetric is disabled on the Q2RTX core path
-        // (replaced by the traced fog volumes, which work through portals and
-        // in reflections).
-        if (!uniform->GetData()->coreQ2RTX)
-        {
-            pathTracer->TraceVolumetric(params);
-        }
-
+        // The legacy screen-space volumetric was removed (4.7: only the Q2RTX
+        // renderer); fog is handled by the traced fog volumes + god rays.
         pathTracer->CalculateGradientsSamples(params);
 
-        // New Q2RTX-style core path: for now identical to the legacy path (the
-        // switch is testable end-to-end). Phase 4.1 replaces this with the full
-        // ASVGF denoiser + checkerboard interleave + TAAU on the new path.
-        if (uniform->GetData()->coreQ2RTX)
-        {
-            q2Denoiser->Denoise(cmd, frameIndex, uniform);
-        }
-        else
-        {
-            denoiser->Denoise(cmd, frameIndex, uniform);
-        }
+        // Q2RTX-style ASVGF denoiser (the legacy SVGF path was removed).
+        q2Denoiser->Denoise(cmd, frameIndex, uniform);
 
-        if (!uniform->GetData()->coreQ2RTX)
-        {
-            volumetric->ProcessScattering( cmd, frameIndex, uniform.get(), blueNoise.get() );
-        }
         tonemapping->CalculateExposure(cmd, frameIndex, uniform);
     }
 
     imageComposition->PrepareForRaster( cmd, frameIndex, uniform.get() );
-    if (!uniform->GetData()->coreQ2RTX)
-    {
-        volumetric->BarrierToReadScattering( cmd, frameIndex );
-        volumetric->BarrierToReadIllumination( cmd );
-    }
 
     if (!drawInfo.disableRasterization)
     {
@@ -948,16 +917,9 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
             drawInfo.pLensFlareParams );
     }
 
-    // Q2RTX-style fog volumes. On the legacy path they are blended as a post
-    // pass here (in HDR, before tonemapping). On the new Q2RTX core path the
-    // fog is traced per ray in the primary/refl passes and accumulated in
-    // Q2FogAccum, then blended by the ASVGF compositing (denoised and
-    // temporally consistent) - so the post pass must not run there.
-    if (fogVolumeCount > 0 && uniform->GetData()->coreQ2RTX == 0)
-    {
-        q2Denoiser->ApplyFog(cmd, frameIndex, uniform);
-    }
-
+    // Q2RTX-style fog volumes are traced per ray in the primary/refl passes
+    // and accumulated in Q2FogAccum, blended by the ASVGF compositing (denoised
+    // and temporally consistent). The legacy post-pass was removed (4.7).
     imageComposition->Finalize(
         cmd, frameIndex, uniform.get(), tonemapping.get(), volumetric.get() );
 
@@ -972,14 +934,9 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
 
     FramebufferImageIndex accum = FramebufferImageIndex::FB_IMAGE_INDEX_FINAL;
     {
-        // upscale finalized image
-        if (uniform->GetData()->coreQ2RTX)
-        {
-            // new Q2RTX core path: TAAU replaces the FSR/DLSS upscalers
-            q2Denoiser->ApplyTAAU(cmd, frameIndex, uniform);
-            accum = FramebufferImageIndex::FB_IMAGE_INDEX_UPSCALED_PING;
-        }
-        else if (renderResolution.IsNvDlssEnabled())
+        // upscale the finalized (Q2RTX) image. FSR/DLSS remain available as
+        // upscalers; the Q2RTX TAAU is the default fallback.
+        if (renderResolution.IsNvDlssEnabled())
         {
             accum = nvDlss->Apply(cmd, frameIndex, 
                                                framebuffers, 
@@ -996,6 +953,12 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
                                                 drawInfo.cameraNear, 
                                                 drawInfo.cameraFar, 
                                                 drawInfo.fovYRadians );
+        }
+        else
+        {
+            // Q2RTX TAAU (default upscaler of the Q2RTX core)
+            q2Denoiser->ApplyTAAU(cmd, frameIndex, uniform);
+            accum = FramebufferImageIndex::FB_IMAGE_INDEX_UPSCALED_PING;
         }
 
         const RgExtent2D* pixelized = drawInfo.pRenderResolutionParams
