@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // on the same machine.
 
 #include "quakedef.h"
+#include "rt_material.h"
 
 static void      Mod_LoadSpriteModel (qmodel_t *mod, void *buffer);
 static void      Mod_LoadBrushModel (qmodel_t *mod, const char *loadname, void *buffer);
@@ -481,9 +482,23 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 		Mod_LoadSpriteModel (mod, buf);
 		break;
 
-	default:
+	case BSPVERSION:          // classic Quake "29"
+	case BSP2VERSION_2PSB:    // RMQ "2PSB"
+	case BSP2VERSION_BSP2:    // "BSP2"
+	case 0x20343651:          // Quake64 "Q64 " read little-endian
 		Mod_LoadBrushModel (mod, loadname, buf);
 		break;
+
+	default:
+		// Unknown format -- e.g. MD3 ("IDP3") or MD5 models shipped by HD
+		// texture packs (like the Rygel pack). Don't abort the game or the
+		// level: warn, skip the model, and let callers treat it as missing
+		// (the renderer skips entities with no model).
+		Con_DWarning ("Mod_LoadModel: %s has unknown model format (0x%08X); skipping\n",
+		              mod->name, (unsigned)mod_type);
+		mod->needload = true; // retry on next request, fail gracefully
+		Mem_Free (buf);
+		return NULL;
 	}
 
 	Mem_Free (buf);
@@ -2470,6 +2485,11 @@ static void Mod_LoadBrushModel (qmodel_t *mod, const char *loadname, void *buffe
 		Sys_Error ("Mod_LoadBrushModel: %s has unsupported version number (%i)", mod->name, mod->bspversion);
 		break;
 	}
+
+	// Q2RTX-style .mat map-specific materials (phase 4.5); must be loaded
+	// before the world textures are uploaded
+	if (sv.modelname[0] && !q_strcasecmp (loadname, sv.name))
+		RT_MAT_ChangeMap (loadname);
 
 	// swap all the lumps
 	byte *mod_base = (byte *)header;

@@ -27,6 +27,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <errno.h>
 
 #include "miniz.h"
+#include "rt_pkz.h"
 
 static char *largv[MAX_NUM_ARGVS + 1];
 static char  argvdummy[] = " ";
@@ -1614,7 +1615,36 @@ static int COM_FindFile (const char *filename, int *handle, FILE **file, unsigne
 	//
 	for (search = com_searchpaths; search; search = search->next)
 	{
-		if (search->pack) /* look through all the pak file elements */
+		if (search->rt_pkz) /* look through a mounted .pkz archive (like a PAK) */
+		{
+			int size = RT_PKZ_FindFile (search->rt_pkz, filename, NULL);
+			if (size < 0)
+				continue;
+			// found it!
+			com_filesize = size;
+			file_from_pak = 1;
+			if (path_id)
+				*path_id = search->path_id;
+			if (handle)
+			{
+				*handle = RT_PKZ_OpenFile (search->rt_pkz, filename, NULL);
+				if (*handle < 0)
+					continue;
+				return com_filesize;
+			}
+			else if (file)
+			{
+				*file = RT_PKZ_OpenFileAsFILE (search->rt_pkz, filename);
+				if (!*file)
+					continue;
+				return com_filesize;
+			}
+			else /* for COM_FileExists() */
+			{
+				return com_filesize;
+			}
+		}
+		else if (search->pack) /* look through all the pak file elements */
 		{
 			pak = search->pack;
 			for (i = 0; i < pak->numfiles; i++)

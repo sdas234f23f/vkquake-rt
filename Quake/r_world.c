@@ -1207,6 +1207,15 @@ void R_DrawTextureChains_Multitexture (
 
 		for (s = t->texturechains[chain]; s; s = s->texturechains[chain])
 		{
+			// Sky surfaces are not ray-traced geometry: the sky is drawn to the
+			// sky cubemap by Sky_ProcessTextureChains / Sky_DrawSkySurface (which
+			// read chain_world directly). As opaque RT geometry they would only
+			// occlude the sun in the god rays shadow map (cutting the light shafts
+			// off at sky brushes) and stop primary rays from reaching the sky
+			// cubemap. Skip them here.
+			if (s->flags & SURF_DRAWSKY)
+				continue;
+
 			rt_uploadsurf_state_t cur_state = {
 				.entuniqueid = entuniqueid,
 				.ent = ent,

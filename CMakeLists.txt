@@ -286,6 +286,8 @@ set(CORE_SOURCES
     Quake/r_part_fte.c
     Quake/r_sprite.c
     Quake/r_world.c
+    Quake/rt_material.c
+    Quake/rt_pkz.c
     Quake/sbar.c
     Quake/snd_codec.c
     Quake/snd_dma.c

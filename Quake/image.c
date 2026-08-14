@@ -23,6 +23,32 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 
+#ifdef _MSC_VER
+// Disable warning C4505: Unused functions
+#pragma warning(push)
+#pragma warning(disable : 4505)
+#endif
+
+// STB_IMAGE config (phase 4.5: JPG/PNG decode for the Rygel texture pack):
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_STATIC
+#define STBI_NO_BMP
+#define STBI_NO_PSD
+#define STBI_NO_GIF
+#define STBI_NO_HDR
+#define STBI_NO_PIC
+#define STBI_NO_PNM
+#define STBI_NO_LINEAR
+// plug our Mem_Alloc in stb_image:
+#define STBI_MALLOC(sz)	     Mem_Alloc (sz)
+#define STBI_REALLOC(p, newsz) Mem_Realloc (p, newsz)
+#define STBI_FREE(p)	     Mem_Free (p)
+#include "stb_image.h"
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_STATIC
 #include "stb_image_write.h"
@@ -92,7 +118,7 @@ Image_LoadImage
 
 returns a pointer to hunk allocated RGBA data
 
-TODO: search order: tga png jpg pcx lmp
+search order: tga pcx jpg png
 ============
 */
 byte *Image_LoadImage (const char *name, int *width, int *height)
@@ -108,6 +134,24 @@ byte *Image_LoadImage (const char *name, int *width, int *height)
 	COM_FOpenFile (loadfilename, &f, NULL);
 	if (f)
 		return Image_LoadPCX (f, width, height);
+
+	q_snprintf (loadfilename, sizeof (loadfilename), "%s.jpg", name);
+	COM_FOpenFile (loadfilename, &f, NULL);
+	if (f)
+	{
+		byte *data = stbi_load_from_file (f, width, height, NULL, 4);
+		fclose (f);
+		return data;
+	}
+
+	q_snprintf (loadfilename, sizeof (loadfilename), "%s.png", name);
+	COM_FOpenFile (loadfilename, &f, NULL);
+	if (f)
+	{
+		byte *data = stbi_load_from_file (f, width, height, NULL, 4);
+		fclose (f);
+		return data;
+	}
 
 	return NULL;
 }

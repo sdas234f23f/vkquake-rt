@@ -28,11 +28,83 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <mmsystem.h>
 
 #include "quakedef.h"
+#include "rt_pkz.h"
 
 #include <sys/types.h>
 #include <errno.h>
 #include <io.h>
 #include <direct.h>
+#include <time.h>
+
+// ---- crash log: on an unhandled exception, write exception info + a raw
+// stack trace to crash.log next to the executable, then let Windows show
+// its own error dialog. Helps debugging hard crashes without a debugger.
+
+static char cwd[1024];
+
+static LONG WINAPI Sys_CrashLogFilter (EXCEPTION_POINTERS *ep)
+{
+	EXCEPTION_RECORD *er = ep ? ep->ExceptionRecord : NULL;
+	char             logpath[MAX_OSPATH];
+	FILE            *f;
+
+	q_snprintf (logpath, sizeof (logpath), "%s/crash.log", cwd);
+
+	f = fopen (logpath, "w");
+	if (!f)
+		return EXCEPTION_CONTINUE_SEARCH;
+
+	fprintf (f, "Quake crash log\n");
+	{
+		time_t t = time (NULL);
+		struct tm tmv;
+		if (localtime_s (&tmv, &t) == 0)
+			fprintf (f, "time: %04d-%02d-%02d %02d:%02d:%02d\n",
+			         tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+			         tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+	}
+
+	if (er)
+	{
+		fprintf (f, "exception code: 0x%08X\n", (unsigned)er->ExceptionCode);
+		fprintf (f, "exception address: %p\n", er->ExceptionAddress);
+		if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2)
+			fprintf (f, "access violation %s address %p\n",
+			         er->ExceptionInformation[0] ? "writing" : "reading",
+			         (void *)er->ExceptionInformation[1]);
+	}
+	else
+	{
+		fprintf (f, "exception info unavailable\n");
+	}
+
+	void   *frames[64];
+	USHORT  n = CaptureStackBackTrace (0, 64, frames, NULL);
+	fprintf (f, "stack (%u frames):\n", (unsigned)n);
+	for (USHORT i = 0; i < n; i++)
+	{
+		HMODULE hmod = NULL;
+		if (GetModuleHandleExA (GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+		                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		                        (LPCSTR)frames[i], &hmod) &&
+		    hmod)
+		{
+			char modname[MAX_OSPATH];
+			if (GetModuleFileNameA (hmod, modname, sizeof (modname)))
+			{
+				const char *base = strrchr (modname, '\\');
+				base = base ? base + 1 : modname;
+				fprintf (f, "  %2u: %s+0x%08X\n", i, base,
+				         (unsigned)((uintptr_t)frames[i] - (uintptr_t)hmod));
+				continue;
+			}
+		}
+		fprintf (f, "  %2u: %p\n", i, frames[i]);
+	}
+
+	fclose (f);
+	return EXCEPTION_CONTINUE_SEARCH;
+}
 
 qboolean isDedicated;
 
@@ -108,17 +180,29 @@ int Sys_FileOpenWrite (const char *path)
 
 void Sys_FileClose (int handle)
 {
+	if (RT_PKZ_IsHandle (handle))
+	{
+		RT_PKZ_Close (handle);
+		return;
+	}
 	fclose (sys_handles[handle]);
 	sys_handles[handle] = NULL;
 }
 
 void Sys_FileSeek (int handle, int position)
 {
+	if (RT_PKZ_IsHandle (handle))
+	{
+		RT_PKZ_Seek (handle, position);
+		return;
+	}
 	fseek (sys_handles[handle], position, SEEK_SET);
 }
 
 int Sys_FileRead (int handle, void *dest, int count)
 {
+	if (RT_PKZ_IsHandle (handle))
+		return RT_PKZ_Read (handle, dest, count);
 	return fread (dest, 1, count, sys_handles[handle]);
 }
 
@@ -141,8 +225,6 @@ int Sys_FileTime (const char *path)
 
 	return -1;
 }
-
-static char cwd[1024];
 
 static void Sys_GetBasedir (char *argv0, char *dst, size_t dstsize)
 {
@@ -212,6 +294,8 @@ static void Sys_SetTimerResolution (void)
 
 void Sys_Init (void)
 {
+	SetUnhandledExceptionFilter (Sys_CrashLogFilter); // write crash.log on hard crashes
+
 	Sys_SetTimerResolution ();
 	Sys_SetDPIAware ();
 

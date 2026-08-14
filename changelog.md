@@ -1,5 +1,26 @@
 # Changelog
 
+## v3.1.0
+
+### Added
+- **Q2RTX-style materials** — material system for ray-traced rendering:
+  - `.pkz` archives are mounted as native engine search paths and read like `.PAK` files (`COM_*` file API, sounds, textures and `.mat` all work from them)
+  - `.mat` material definitions (Q2RTX format) loaded from `materials/*.mat` (on disk or inside `.pkz`), with map-specific overrides via `materials/<map>.mat`
+  - Automatic material detection from HD texture-pack suffixes: `_norm` (normal map), `_gloss` (gloss → roughness), `_luma`/`_glow` (emissive), `_bump`
+  - JPG/PNG decoding (stb_image) in the engine image loader and in material textures
+  - `rt_mat` console command (inspect materials) and `rt_materials` cvar (on/off)
+  - `Tools/convert_ovrd_mat.py` — converts RTGL1 override materials (`ovrd/mat/*.ktx2`, RGBA8/BC5/BC7) into a ready-to-use `.pkz` (textures + `.mat`)
+  - `Tools/gen_materials.py` — generates `.mat` files from Rygel-style texture packs
+- **Crash log** — on an unhandled exception a `crash.log` (exception code, faulting address, module-relative stack trace) is written next to the executable
+
+### Fixed
+- `.mat` parser no longer treats `#` inside Quake texture names (e.g. `textures/#lava1`) as a comment
+- Material lookup preserves model skin names like `progs/armor.mdl:frame0` (per-frame model materials)
+- Unsupported model formats (e.g. MD3 `IDP3` models from HD packs) are skipped with a console warning instead of aborting the game or the level
+- Client model precache no longer aborts when a precached model is missing or unsupported
+- Entity rendering skips entities without a model instead of crashing
+- Sky surfaces are no longer uploaded as opaque ray-traced geometry (they occluded the sun in the god-rays shadow map and blocked primary rays from reaching the sky)
+
 ## v3.0.0
 
 ### Added

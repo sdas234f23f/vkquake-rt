@@ -556,6 +556,10 @@ void R_DrawEntitiesOnList (cb_context_t *cbx, qboolean alphapass, int chain, int
 		if (currententity->eflags & EFLAGS_EXTERIORMODEL)
 			continue;
 
+		// model failed to load (e.g. unsupported MD3 from an HD pack) -- skip
+		if (!currententity->model)
+			continue;
+
 		switch (currententity->model->type)
 		{
 		case mod_alias:

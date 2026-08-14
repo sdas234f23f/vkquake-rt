@@ -265,6 +265,7 @@ typedef struct searchpath_s
 	                              // <userdir>/game1 have the same id.
 	char                 filename[MAX_OSPATH];
 	pack_t              *pack; // only one of filename / pack will be used
+	void                *rt_pkz; // rt_pkz_archive_t* (mounted .pkz, like a PAK)
 	struct searchpath_s *next;
 } searchpath_t;
 

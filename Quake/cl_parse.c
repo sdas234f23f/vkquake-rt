@@ -1015,7 +1015,9 @@ static void CL_ParseServerInfo (void)
 		cl.model_precache[i] = Mod_ForName (model_precache[i], false);
 		if (cl.model_precache[i] == NULL)
 		{
-			Host_Error ("Model %s not found", model_precache[i]);
+			// model couldn't be loaded (missing, or unsupported format like
+			// MD3 from an HD pack): don't abort the level, just skip it
+			Con_Warning ("Model %s not found; skipping\n", model_precache[i]);
 		}
 	}
 	S_BeginPrecaching ();

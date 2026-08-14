@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "gl_heap.h"
+#include "rt_material.h"
 
 #if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
 #include <SDL2/SDL.h>
@@ -909,6 +910,8 @@ static void TexMgr_PreMultiply32 (byte *in, size_t width, size_t height)
 TexMgr_LoadImage32 -- handles 32bit source data
 ================
 */
+static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoFallback);
+
 static void TexMgr_LoadImage32 (gltexture_t *glt, unsigned *data)
 {
 	GL_DeleteTexture (glt);
@@ -996,7 +999,212 @@ static void TexMgr_LoadImage32 (gltexture_t *glt, unsigned *data)
 		}
 	}
 
+	// Q2RTX-style .mat material (phase 4.5): if this texture has a material
+	// definition, replace the RT material with the synthesized PBR one
+	// (albedo from texture_base, RME from base.alpha/roughness, normal.alpha
+	// metallic and emissive, normal from texture_normals).
+	TexMgr_ApplyMaterialFromMat (glt, data);
+
 	SDL_UnlockMutex (texmgr_mutex);
+}
+
+/*
+================
+TexMgr_ApplyMaterialFromMat
+
+Builds the RTGL1 RGBA8 material textures from a Q2RTX-style .mat definition
+(phase 4.5) and replaces glt->rtmaterial with the result. Returns true if a
+material was applied.
+================
+*/
+static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoFallback)
+{
+	rt_material_t autoMat;
+	// The material key is the texture file path without extension, e.g.
+	// "textures/e1u1/foo" -- this matches the .mat entry names (Q2RTX
+	// convention) and the auto-detected suffix files (_norm/_gloss/_luma).
+	// Note: glt->rtname is the RTGL1 override path ("maps/...") and must NOT
+	// be used here.
+	rt_material_t *mat = RT_MAT_Find (glt->name);
+	if (!mat)
+	{
+		// no .mat definition: auto-detect the Rygel texture pack suffixes
+		// (<name>_norm, <name>_gloss, <name>_luma/_glow, <name>_bump)
+		if (!RT_MAT_AutoDetect (glt->name, &autoMat))
+			return false;
+		mat = &autoMat;
+	}
+
+	const int tw = glt->width;
+	const int th = glt->height;
+	const int npix = tw * th;
+
+	// load and resize the material textures to the final size
+	int bw = 0, bh = 0;
+	byte *baseTex = RT_MAT_LoadTexture (mat, RT_MAT_TEX_BASE, &bw, &bh);
+	int nw = 0, nh = 0;
+	byte *normTex = RT_MAT_LoadTexture (mat, RT_MAT_TEX_NORMALS, &nw, &nh);
+	int ew = 0, eh = 0;
+	byte *emisTex = RT_MAT_LoadTexture (mat, RT_MAT_TEX_EMISSIVE, &ew, &eh);
+	int gw = 0, gh = 0;
+	byte *glossTex = RT_MAT_LoadTexture (mat, RT_MAT_TEX_GLOSS, &gw, &gh);
+
+	byte *baseBuf = NULL, *normBuf = NULL, *emisBuf = NULL, *glossBuf = NULL;
+	if (baseTex) { baseBuf = (byte *)Mem_Alloc (npix * 4); stbir_resize_uint8 (baseTex, bw, bh, 0, baseBuf, tw, th, 0, 4); Mem_Free (baseTex); }
+	if (normTex) { normBuf = (byte *)Mem_Alloc (npix * 4); stbir_resize_uint8 (normTex, nw, nh, 0, normBuf, tw, th, 0, 4); Mem_Free (normTex); }
+	if (emisTex) { emisBuf = (byte *)Mem_Alloc (npix * 4); stbir_resize_uint8 (emisTex, ew, eh, 0, emisBuf, tw, th, 0, 4); Mem_Free (emisTex); }
+	if (glossTex) { glossBuf = (byte *)Mem_Alloc (npix * 4); stbir_resize_uint8 (glossTex, gw, gh, 0, glossBuf, tw, th, 0, 4); Mem_Free (glossTex); }
+
+	// if the material specifies no base texture, fall back to the original one
+	if (!baseBuf && !albedoFallback)
+	{
+		if (normBuf) Mem_Free (normBuf);
+		if (emisBuf) Mem_Free (emisBuf);
+		if (glossBuf) Mem_Free (glossBuf);
+		return false;
+	}
+
+	// does the base texture carry a real alpha channel (Q2RTX-style roughness
+	// packed in alpha)? JPGs have alpha = 255 everywhere, so they don't count.
+	qboolean baseHasAlpha = false;
+	if (baseBuf)
+	{
+		for (int i = 0; i < npix; i++)
+		{
+			if (baseBuf[i * 4 + 3] != 255)
+			{
+				baseHasAlpha = true;
+				break;
+			}
+		}
+	}
+
+	// same for the normal map: metalness is packed in its alpha (Q2RTX
+	// convention), but Rygel PNGs have no alpha -> stay non-metallic.
+	qboolean normHasAlpha = false;
+	if (normBuf)
+	{
+		for (int i = 0; i < npix; i++)
+		{
+			if (normBuf[i * 4 + 3] != 255)
+			{
+				normHasAlpha = true;
+				break;
+			}
+		}
+	}
+
+	byte *albedo = (byte *)Mem_Alloc (npix * 4);
+	byte *rme    = (byte *)Mem_Alloc (npix * 4);
+	byte *normal = (byte *)Mem_Alloc (npix * 4);
+
+	const float baseFactor = (mat->base_factor > 0.0f) ? mat->base_factor : 1.0f;
+	const float roughOverride = mat->roughness_override; // 0 = use map-based roughness
+	const float defaultRough = rtspecial_default_rough / 255.0f;
+
+	for (int i = 0; i < npix; i++)
+	{
+		// albedo (sRGB), alpha = opaque (or mask later)
+		const byte *src = baseBuf ? baseBuf + i * 4 : (byte *)albedoFallback + i * 4;
+		int r = (int)(src[0] * baseFactor);
+		int g = (int)(src[1] * baseFactor);
+		int b = (int)(src[2] * baseFactor);
+		albedo[i * 4 + 0] = CLAMP (0, r, 255);
+		albedo[i * 4 + 1] = CLAMP (0, g, 255);
+		albedo[i * 4 + 2] = CLAMP (0, b, 255);
+		albedo[i * 4 + 3] = 255;
+
+		// roughness: roughness_override > gloss map (1 - gloss) > base alpha
+		// (Q2RTX packing) > default
+		float rough;
+		if (roughOverride > 0.0f)
+			rough = roughOverride;
+		else if (glossBuf)
+			rough = 1.0f - glossBuf[i * 4] / 255.0f;
+		else if (baseHasAlpha)
+			rough = baseBuf[i * 4 + 3] / 255.0f;
+		else
+			rough = defaultRough;
+
+		// metallic: from the normal map alpha (if it has one), or the
+		// metalness_factor from the .mat
+		float metal = mat->metalness_factor;
+		if (normBuf && normHasAlpha)
+			metal = (normBuf[i * 4 + 3] / 255.0f) * mat->metalness_factor;
+
+		// emissive: from the emissive texture, or synthesized from the base
+		float emiss = 0.0f;
+		if (emisBuf)
+		{
+			emiss = (0.2126f * emisBuf[i * 4 + 0] + 0.7152f * emisBuf[i * 4 + 1] + 0.0722f * emisBuf[i * 4 + 2]) / 255.0f;
+			emiss *= mat->emissive_factor;
+		}
+		else if (mat->synth_emissive || mat->is_light)
+		{
+			const float lum = (0.2126f * src[0] + 0.7152f * src[1] + 0.0722f * src[2]) / 255.0f;
+			if (mat->emissive_threshold <= 0 || lum > mat->emissive_threshold / 255.0f)
+				emiss = lum * mat->emissive_factor;
+		}
+
+		rme[i * 4 + 0] = CLAMP (0, (int)(rough * 255), 255);
+		rme[i * 4 + 1] = CLAMP (0, (int)(metal * 255), 255);
+		rme[i * 4 + 2] = CLAMP (0, (int)(emiss * 255), 255);
+		rme[i * 4 + 3] = 255;
+
+		// normal map (bump_scale applied around 128)
+		if (normBuf)
+		{
+			float nx = (normBuf[i * 4 + 0] - 128.0f) * mat->bump_scale + 128.0f;
+			float ny = (normBuf[i * 4 + 1] - 128.0f) * mat->bump_scale + 128.0f;
+			normal[i * 4 + 0] = CLAMP (0, (int)nx, 255);
+			normal[i * 4 + 1] = CLAMP (0, (int)ny, 255);
+			normal[i * 4 + 2] = normBuf[i * 4 + 2];
+		}
+		else
+		{
+			normal[i * 4 + 0] = 128;
+			normal[i * 4 + 1] = 128;
+			normal[i * 4 + 2] = 255;
+		}
+		normal[i * 4 + 3] = 255;
+	}
+
+	if (baseBuf) Mem_Free (baseBuf);
+	if (normBuf) Mem_Free (normBuf);
+	if (emisBuf) Mem_Free (emisBuf);
+	if (glossBuf) Mem_Free (glossBuf);
+
+	RgMaterialCreateInfo info = {
+		.flags = TexMgr_GetRtFlags (glt),
+		.size = {tw, th},
+		.textures =
+			{
+				.pDataAlbedoAlpha = albedo,
+				.pDataRoughnessMetallicEmission = rme,
+				.pDataNormal = normal,
+			},
+		.pRelativePath = glt->rtname,
+		.filter = TexMgr_GetFilterMode (glt),
+		.addressModeU = RG_SAMPLER_ADDRESS_MODE_REPEAT,
+		.addressModeV = RG_SAMPLER_ADDRESS_MODE_REPEAT,
+	};
+
+	RgMaterial oldMaterial = glt->rtmaterial;
+	RgMaterial newMaterial = RG_NULL_HANDLE;
+	SDL_LockMutex (rtspecial_mutex);
+	RgResult r = rgCreateMaterial (vulkan_globals.instance, &info, &newMaterial);
+	SDL_UnlockMutex (rtspecial_mutex);
+	RG_CHECK (r);
+
+	if (oldMaterial)
+		rgDestroyMaterial (vulkan_globals.instance, oldMaterial);
+	glt->rtmaterial = newMaterial;
+
+	Mem_Free (albedo);
+	Mem_Free (rme);
+	Mem_Free (normal);
+
+	return true;
 }
 
 /*

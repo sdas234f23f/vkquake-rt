@@ -28,6 +28,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "bgmusic.h"
 #include "resource.h"
 #include "palette.h"
+#include "rt_material.h"
 #include "SDL.h"
 #include "SDL_syswm.h"
 
@@ -713,6 +714,8 @@ static void GL_InitInstance (void)
 	RgResult r = rgCreateInstance (&info, &vulkan_globals.instance);
 	RG_CHECK (r);
 
+	// Q2RTX-style .mat materials (phase 4.5)
+	RT_MAT_Init ();
 
 	Cmd_AddCommand ("rt_pfnreloadshaders", RT_ReloadShaders);
 	Cmd_AddCommand ("rt_pfnswitch", RT_SwitchRenderer);
@@ -1135,6 +1138,7 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	const int usePhysicalSky = CVAR_TO_BOOL (rt_physical_sky) != 0;
 
 	vec3_t sky_base_color;
+
 	if (usePhysicalSky)
 	{
 		// the procedural sky is tinted by the sun preset color (rt_sky_light_*)
@@ -1174,6 +1178,7 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 
 	vec3_t volume_light_angles;
 	vec3_t volume_light_color;
+
 	if (CVAR_TO_BOOL (rt_sun))
 	{
 		RT_VEC3_SET (volume_light_angles, CVAR_TO_FLOAT (rt_sun_pitch), CVAR_TO_FLOAT (rt_sun_yaw), 0);
@@ -1386,6 +1391,7 @@ void VID_Shutdown (void)
 	{
 		if (vulkan_globals.instance != RG_NULL_HANDLE)
 		{
+		    RT_MAT_Shutdown ();
 		    RgResult r = rgDestroyInstance (vulkan_globals.instance);
 			RG_CHECK (r);
 
