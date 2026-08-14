@@ -1,0 +1,224 @@
+// Procedural atmospheric sky.
+// Fills the render cubemap used by getSkyPrimary() when skyType == SKY_TYPE_PROCEDURAL.
+// Single-scattering atmosphere (Rayleigh + Mie) evaluated analytically, no LUTs.
+// Sun disc is added around the directional light (sun) direction.
+// The per-face camera bases are passed from the CPU side and match the convention
+// of the rasterized sky cubemap path (Matrix::GetCubemapViewProjMat).
+
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(rgba16f, set = 0, binding = 0) uniform imageCube cubemapOut;
+
+layout(std140, set = 0, binding = 1) uniform Params
+{
+    vec4 faceBasis[18]; // 6 faces * (right, up, forward)
+    vec4 sunDirection;  // xyz = normalized direction TOWARD the sun, w = unused
+    vec4 sunColor;      // xyz = sun color, w = physical sun angular radius (radians)
+    vec4 skyParams;     // x = sky color multiplier, y = tint strength, z = sun disc intensity, w = sun disc display radius (radians)
+    vec4 cloudColor;    // xyz = cloud color, w = cloud time (seconds)
+    vec4 cloudParams;   // x = cloud coverage, y = cloud density, z = drift speed, w = clouds enabled
+} params;
+
+const float PI = 3.14159265358979323846;
+
+const float PLANET_RADIUS         = 6360.0;   // km
+const float ATMOSPHERE_RADIUS     = 6420.0;   // km
+const float SCALE_HEIGHT_RAYLEIGH = 8.0;      // km
+const float SCALE_HEIGHT_MIE      = 1.2;      // km
+
+// scattering coefficients at sea level (per km), same values as Q2RTX Params_Earth
+const vec3  BETA_RAYLEIGH = vec3(0.005802, 0.013558, 0.033100);
+const float BETA_MIE      = 0.0014985;
+const float MIE_G         = 0.8;
+
+const vec3  SOLAR_IRRADIANCE = vec3(1.474, 1.8504, 1.91198);
+const float RADIANCE_SCALE   = 30.0; // empirical scale to land in a good 0..1 range
+
+vec2 raySphere(vec3 ro, vec3 rd, float radius)
+{
+    float b = dot(ro, rd);
+    float c = dot(ro, ro) - radius * radius;
+    float h = b * b - c;
+    if (h < 0.0)
+        return vec2(-1.0);
+    float s = sqrt(h);
+    return vec2(-b - s, -b + s);
+}
+
+float phaseRayleigh(float mu)
+{
+    return 3.0 / (16.0 * PI) * (1.0 + mu * mu);
+}
+
+float phaseMie(float mu)
+{
+    float g = MIE_G;
+    float g2 = g * g;
+    return 3.0 / (8.0 * PI) * ((1.0 - g2) * (1.0 + mu * mu)) /
+           ((2.0 + g2) * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-5), 1.5));
+}
+
+// --- procedural clouds (textureless value noise fBm) ---
+float hash13(vec3 p)
+{
+    p = fract(p * 0.1031);
+    p += dot(p, p.zyx + 31.32);
+    return fract((p.x + p.y) * p.z);
+}
+
+float valueNoise3(vec3 p)
+{
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+
+    float n000 = hash13(i);
+    float n100 = hash13(i + vec3(1, 0, 0));
+    float n010 = hash13(i + vec3(0, 1, 0));
+    float n110 = hash13(i + vec3(1, 1, 0));
+    float n001 = hash13(i + vec3(0, 0, 1));
+    float n101 = hash13(i + vec3(1, 0, 1));
+    float n011 = hash13(i + vec3(0, 1, 1));
+    float n111 = hash13(i + vec3(1, 1, 1));
+
+    return mix(
+        mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+        mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y),
+        f.z);
+}
+
+float fbm3(vec3 p)
+{
+    float v = 0.0;
+    float amp = 0.5;
+    for (int i = 0; i < 4; i++)
+    {
+        v += amp * valueNoise3(p);
+        p = p * 2.03;
+        amp *= 0.5;
+    }
+    return v;
+}
+
+float cloudMask(vec3 dir, float time, float speed)
+{
+    // sample the noise on the sky dome; drift slowly with time
+    vec3 p = dir * 3.0 + vec3(time * speed, time * speed * 0.4, 0.0);
+    float n = fbm3(p);
+    return n;
+}
+
+vec3 evaluateSky(vec3 rd, vec3 sunDir, vec3 sunColor, float sunAngRad,
+                 float sunIntensity, float multiplier, float tintStrength)
+{
+    vec3 camera = vec3(0.0, 0.0, PLANET_RADIUS);
+    // exit distance of the atmosphere along the view ray
+    vec2 at = raySphere(camera, rd, ATMOSPHERE_RADIUS);
+
+    if (at.y < 0.0)
+        return vec3(0.0);
+
+    const int VIEW_SAMPLES = 16;
+    const int SUN_SAMPLES  = 6;
+
+    float t0 = 0.0;
+    float t1 = at.y;
+    float ds = (t1 - t0) / float(VIEW_SAMPLES);
+
+    vec3  inScatter     = vec3(0.0);
+    vec3  transmittance = vec3(1.0);
+    vec3  p             = camera + rd * t0;
+
+    for (int i = 0; i < VIEW_SAMPLES; i++)
+    {
+        float h = max(length(p) - PLANET_RADIUS, 0.0);
+        float densR = exp(-h / SCALE_HEIGHT_RAYLEIGH);
+        float densM = exp(-h / SCALE_HEIGHT_MIE);
+
+        // optical depth toward the sun
+        float odSunR = 0.0;
+        float odSunM = 0.0;
+        {
+            vec3 sp = p;
+            float sds = ds;
+            for (int j = 0; j < SUN_SAMPLES; j++)
+            {
+                sp += sunDir * sds;
+                float sh = max(length(sp) - PLANET_RADIUS, 0.0);
+                odSunR += exp(-sh / SCALE_HEIGHT_RAYLEIGH) * sds;
+                odSunM += exp(-sh / SCALE_HEIGHT_MIE) * sds;
+            }
+        }
+        vec3 sunTrans = exp(-(BETA_RAYLEIGH * odSunR + BETA_MIE * odSunM));
+
+        float mu = dot(rd, sunDir);
+        vec3 scatter = sunTrans * (BETA_RAYLEIGH * phaseRayleigh(mu) * densR +
+                                   BETA_MIE      * phaseMie(mu)      * densM) *
+                       SOLAR_IRRADIANCE;
+
+        inScatter += scatter * transmittance * ds;
+        transmittance *= exp(-(BETA_RAYLEIGH * densR + BETA_MIE * densM) * ds);
+        p += rd * ds;
+    }
+
+    inScatter *= RADIANCE_SCALE;
+
+    // tint the sky by the sky/sun color (rt_sky_light_*): a neutral/white tint
+    // keeps the physical blue atmosphere, while colored presets strongly re-tint
+    // the sky (the physical blue would otherwise dominate and hide the preset).
+    // tintStrength (rt_sky_tint) scales how strongly the tint is applied.
+    float tintLum = dot(sunColor, vec3(0.2126, 0.7152, 0.0722));
+    float tintSat = length(sunColor - vec3(tintLum));
+    float tintAmount = clamp(tintStrength * tintSat / (tintLum + 1e-5), 0.0, 1.0);
+    float skyLum = dot(inScatter, vec3(0.2126, 0.7152, 0.0722));
+    vec3 col = mix(inScatter, vec3(skyLum) * sunColor, tintAmount);
+
+    // procedural clouds (color is set separately from the sky, e.g. black clouds on a colored sky)
+    if (params.cloudParams.w > 0.5)
+    {
+        float n = cloudMask(rd, params.cloudColor.w, params.cloudParams.z);
+        float mask = smoothstep(params.cloudParams.x, params.cloudParams.x + 0.35, n);
+        float opacity = mask * params.cloudParams.y;
+        col = mix(col, params.cloudColor.xyz, clamp(opacity, 0.0, 1.0));
+    }
+
+    // sun disc on top of the clouds
+    float cosAng = cos(sunAngRad);
+    float disc = smoothstep(cosAng, 1.0, dot(rd, sunDir));
+    col += sunColor * sunIntensity * disc;
+
+    col *= multiplier;
+
+    return col;
+}
+
+void main()
+{
+    ivec3 ipos = ivec3(gl_GlobalInvocationID);
+    ivec2 size = imageSize(cubemapOut).xy;
+
+    if (ipos.x >= size.x || ipos.y >= size.y || ipos.z >= 6)
+        return;
+
+    int face = ipos.z;
+    vec3 right   = params.faceBasis[face * 3 + 0].xyz;
+    vec3 up      = params.faceBasis[face * 3 + 1].xyz;
+    vec3 forward = params.faceBasis[face * 3 + 2].xyz;
+
+    vec2 ndc = (vec2(ipos.xy) + 0.5) / vec2(size) * 2.0 - 1.0;
+    vec3 dir = normalize(ndc.x * right + (-ndc.y) * up + forward);
+
+    vec3  sunDir       = normalize(params.sunDirection.xyz);
+    vec3  sunColor     = max(params.sunColor.xyz, vec3(0.0));
+    float sunAngRad    = max(params.skyParams.w, 0.0); // display sun disc radius
+    float multiplier   = params.skyParams.x;
+    float tintStrength = params.skyParams.y;
+    float sunIntensity = params.skyParams.z;
+
+    vec3 col = evaluateSky(dir, sunDir, sunColor, sunAngRad, sunIntensity, multiplier, tintStrength);
+
+    imageStore(cubemapOut, ipos, vec4(col, 1.0));
+}

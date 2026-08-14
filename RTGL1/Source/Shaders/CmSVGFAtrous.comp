@@ -1,0 +1,342 @@
+// Copyright (c) 2021 Sultim Tsyrendashiev
+// 
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+// 
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+// 
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+// 
+// Copyright (c) 2018, Christoph Schied
+// All rights reserved.
+// 
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//     * Neither the name of the Karlsruhe Institute of Technology nor the
+//       names of its contributors may be used to endorse or promote products
+//       derived from this software without specific prior written permission.
+// 
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+// DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+// ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+#version 460
+
+// "Spatiotemporal Variance-Guided Filtering: Real-Time Reconstruction for Path-Traced Global Illumination", C.Schied et al.
+// 4.3 Edge-avoiding a-trous wavelet transform
+
+#define DESC_SET_FRAMEBUFFERS 0
+#define DESC_SET_GLOBAL_UNIFORM 1
+#include "ShaderCommonGLSLFunc.h"
+#include "BRDF.h"
+
+layout(local_size_x = COMPUTE_SVGF_ATROUS_GROUP_SIZE_X, local_size_y = COMPUTE_SVGF_ATROUS_GROUP_SIZE_X, local_size_z = 1) in;
+
+// Must be > 0. Iteration 0 is implemented in a separate shader
+layout (constant_id = 0) const uint atrousIteration = 1;
+
+const int STEP_SIZE = 1 << atrousIteration;
+const float SIGMA_LUMINANCE = 4.0;
+
+
+float getPrefilteredLuminanceVariance(const ivec2 pix)
+{
+    return texelFetch(framebufAtrousFilteredVariance_Sampler, pix, 0).r;
+}
+
+
+void atrous(sampler2D samplerDiff, 
+            // TODO: more generic handling of different formats for samplers
+            // now it's just hardcoded E5B9G9R9
+            usampler2D samplerSpec, 
+            sampler2D samplerIndirR, sampler2D samplerIndirG, sampler2D samplerIndirB,
+            out vec3 outDiff, out float outVariance, 
+            out vec3 outSpec,
+            out SH outIndirSH)
+{
+    const ivec2 pix = ivec2(gl_GlobalInvocationID);
+    const ivec3 chRenderArea = getCheckerboardedRenderArea(pix);
+
+
+    const vec4 cv = texelFetch(samplerDiff, pix, 0);
+    outDiff       = cv.rgb;
+    outVariance   = cv.a;
+
+    outSpec       = decodeE5B9G9R9(texelFetch(samplerSpec, pix, 0).r);
+
+    outIndirSH    = texelFetchSH(samplerIndirR, samplerIndirG, samplerIndirB, pix);
+
+
+    const float depth = texelFetch(framebufDepthWorld_Sampler, pix, 0).r;
+    const float gradDepth = texelFetch(framebufDepthGrad_Sampler, pix, 0).r;
+
+    if (depth < 0.0 || depth > MAX_RAY_LENGTH)
+    {
+        return;
+    }
+    
+    const vec3 normal = texelFetchNormal(pix);
+
+    const float l = getLuminance(outDiff);
+    const float wLumMultiplier = 1.0 / (SIGMA_LUMINANCE * getPrefilteredLuminanceVariance(pix) + 0.00001);
+   
+    // the rougher the surface, the more blur to apply
+    const float roughness = texelFetch(framebufMetallicRoughness_Sampler, pix, 0).g;
+    const float wRoughMultiplier = clamp(roughness * 30 - atrousIteration, 0, 1);
+
+    float historyLengthSpec = texelFetch(framebufAccumHistoryLength_Sampler, pix, 0).b;
+    float normalWeightScale = clamp(historyLengthSpec / 8, 0, 1);
+	float normalWeightSpec = roughnessSquaredToSpecPower(roughness * roughness);
+    normalWeightSpec = clamp(normalWeightSpec, 8, 1024);
+	normalWeightSpec *= normalWeightScale;
+
+    float weightSum = 1.0;
+    float weightSumSpec = 1.0;
+    float weightSumIndir = 1.0;
+
+    const float waveletKernel[2][2] = 
+    {
+        { 1.0, 0.5  },
+        { 0.5, 0.25 }
+    };
+
+#ifdef ATROUS_BOX3
+    // o o o
+    // o 0 o
+    // o o o
+
+    const int FilterRadius = 1;
+    for (int yy = -FilterRadius; yy <= FilterRadius; yy++)
+    {
+        for (int xx = -FilterRadius; xx <= FilterRadius; xx++)
+        {
+            if (xx == 0 && yy == 0)
+            {
+                continue;
+            }
+#else
+
+        for (int i = 0 ; i < 4; i++)
+        {
+            // if iteration is even, the pattern is "X":
+            // x o x
+            // o 0 o
+            // x o x
+
+            // if it's odd, then "+":
+            // o x o
+            // x 0 x
+            // o x o
+
+            const int xx = atrousIteration % 2 == 0 ?   (i % 2) * 2 - 1 :   ((i % 2) * 2 - 1) *      (i / 2);
+            const int yy = atrousIteration % 2 == 0 ?   (i / 2) * 2 - 1 :   ((i % 2) * 2 - 1) * (1 - (i / 2));
+#endif
+
+            const ivec2 offset = ivec2(xx * STEP_SIZE, yy * STEP_SIZE);
+            const ivec2 pix_q = pix + offset;
+
+
+            const float roughness_q = texelFetch(framebufMetallicRoughness_Sampler, pix_q, 0).g;
+            const vec3  normal_q    = texelFetchNormal(                             pix_q);
+            const float depth_q     = texelFetch(framebufDepthWorld_Sampler,        pix_q, 0).r;
+
+            const vec3  specColor_q = decodeE5B9G9R9(texelFetch(samplerSpec,        pix_q, 0).r);
+            
+            const vec4  cv_q        = texelFetch(samplerDiff,                       pix_q, 0);
+            const vec3  diffColor_q = cv_q.rgb;
+            const float variance_q  = cv_q.a;
+            const float l_q         = getLuminance(diffColor_q);
+            const float n_n         = max(0.0, dot(normal, normal_q));
+
+            const SH indirSH_q      = texelFetchSH(samplerIndirR, samplerIndirG, samplerIndirB, pix_q);
+
+
+            const float w_z = abs(depth - depth_q) / max(gradDepth * (abs(xx) + abs(yy)), 0.01);
+            const float w_n = pow(n_n, 128.0);
+            const float w_l = abs(l - l_q) * wLumMultiplier;
+
+            // larger weight if roughness difference is small
+            float w_r =  max(0, 1 - 10 * abs(roughness - roughness_q)) * wRoughMultiplier;
+
+			if(normalWeightSpec > 0)
+			{
+				w_r *= pow(n_n, normalWeightSpec);
+			}
+
+            const float waveletW = waveletKernel[abs(yy)][abs(xx)];
+            const float isInside = float(testPixInRenderArea(pix_q, chRenderArea));
+
+            const float wBase = exp(-w_z * w_z) * w_n * waveletW * isInside;
+
+            const float wDiff      = wBase * exp(-w_l);
+            const float wSpec      = wBase * w_r;
+            const float wDiffIndir = wBase;
+
+
+            outDiff += diffColor_q * wDiff;
+            outSpec += specColor_q * wSpec;
+            accumulateSH(outIndirSH, indirSH_q, wDiffIndir);
+
+            outVariance += variance_q * wDiff * wDiff;
+
+            weightSum += wDiff;
+            weightSumSpec += wSpec;
+            weightSumIndir += wDiffIndir;
+        }
+#ifdef ATROUS_BOX3
+    }
+#endif
+
+    const float invWeightSum = 1.0 / weightSum;
+    const float invWeightSumSpec = 1.0 / weightSumSpec;
+    const float invWeightSumIdir = 1.0 / weightSumIndir;
+
+    outDiff     *= invWeightSum;
+    outVariance *= invWeightSum * invWeightSum;
+    outSpec     *= invWeightSumSpec;
+    multiplySH(outIndirSH, invWeightSumIdir);
+}
+
+
+void main()
+{
+    ivec2 pix = ivec2(gl_GlobalInvocationID);
+
+    if (pix.x >= uint(globalUniform.renderWidth) || pix.y >= uint(globalUniform.renderHeight))
+    {
+        return;
+    }
+
+    vec3 filteredDiff;
+    vec3 filteredSpec;
+    SH filteredIndir;
+    float updatedVariance;
+
+    switch (atrousIteration)
+    {
+        case 0: atrous(framebufDiffPingColorAndVariance_Sampler, 
+                       framebufSpecPingColor_Sampler,
+                       framebufIndirPingSH_R_Sampler, framebufIndirPingSH_G_Sampler, framebufIndirPingSH_B_Sampler,
+                       filteredDiff, updatedVariance, filteredSpec, filteredIndir); 
+                break;
+        case 1: atrous(framebufDiffColorHistory_Sampler,         
+                       framebufSpecPongColor_Sampler, 
+                       framebufIndirPongSH_R_Sampler, framebufIndirPongSH_G_Sampler, framebufIndirPongSH_B_Sampler,
+                       filteredDiff, updatedVariance, filteredSpec, filteredIndir); 
+                break;
+        case 2: atrous(framebufDiffPingColorAndVariance_Sampler, 
+                       framebufSpecPingColor_Sampler, 
+                       framebufIndirPingSH_R_Sampler, framebufIndirPingSH_G_Sampler, framebufIndirPingSH_B_Sampler,
+                       filteredDiff, updatedVariance, filteredSpec, filteredIndir); 
+                break;
+        case 3: atrous(framebufDiffPongColorAndVariance_Sampler, 
+                       framebufSpecPongColor_Sampler, 
+                       framebufIndirPongSH_R_Sampler, framebufIndirPongSH_G_Sampler, framebufIndirPongSH_B_Sampler,
+                       filteredDiff, updatedVariance, filteredSpec, filteredIndir); 
+                break;
+    }
+
+    // for the first iteration, save to color history buffer for temporal accumulation
+    switch (atrousIteration)
+    {
+        case 0: imageStore(framebufDiffColorHistory,         pix, vec4(filteredDiff, updatedVariance)); 
+                imageStoreSpecPongColor(                     pix, filteredSpec); 
+                imageStoreIndirPongSH(                       pix, filteredIndir); 
+                break;
+        case 1: imageStore(framebufDiffPingColorAndVariance, pix, vec4(filteredDiff, updatedVariance)); 
+                imageStoreSpecPingColor(                     pix, filteredSpec); 
+                imageStoreIndirPingSH(                       pix, filteredIndir); 
+                break;
+        case 2: imageStore(framebufDiffPongColorAndVariance, pix, vec4(filteredDiff, updatedVariance)); 
+                imageStoreSpecPongColor(                     pix, filteredSpec); 
+                imageStoreIndirPongSH(                       pix, filteredIndir); 
+                break;
+    }
+
+    if (atrousIteration == 3)
+    {
+        vec3 albedo = texelFetch(framebufAlbedo_Sampler, getRegularPixFromCheckerboardPix(pix), 0).rgb;
+        vec3 throughput = texelFetch(framebufThroughput_Sampler, pix, 0).rgb;
+        if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_ALBEDO_WHITE) != 0)
+        {
+            albedo = vec3(1.0);
+        }
+
+        vec3 illuminated;
+
+        if( !isSkyPix( pix ) && ( globalUniform.lightmapEnable == 0 ) )
+        {
+            const vec2 mrFb   = texelFetch(framebufMetallicRoughness_Sampler, pix, 0).xy;
+            const vec3 normal = texelFetchNormal(pix);
+
+            const float metallic = mrFb.x;
+            const float roughness = mrFb.y;
+
+            const vec3 diffuse = filteredDiff;
+            const vec3 indirect = SHToIrradiance(filteredIndir, normal);
+
+            // to prevent noise, specular will be replaced with SH, if the surface is too rough
+            const vec3 specular = mix(
+                filteredSpec,
+                indirect,
+                smoothstep(FAKE_ROUGH_SPECULAR_THRESHOLD, FAKE_ROUGH_SPECULAR_THRESHOLD + FAKE_ROUGH_SPECULAR_LENGTH, roughness));
+
+            const vec3 ro_s = getSpecularColor(albedo, metallic);
+            const vec3 ro_d = albedo * (1.0 - metallic);
+
+            illuminated = 
+                (diffuse + indirect) * ro_d + 
+                specular * ro_s;
+
+            if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_ONLY_DIRECT_DIFFUSE) != 0)
+            {
+                illuminated = diffuse * albedo;
+            }
+            else if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_ONLY_SPECULAR) != 0)
+            {
+                illuminated = specular * getSpecularColor(albedo, metallic);
+            }
+            else if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_ONLY_INDIRECT_DIFFUSE) != 0)
+            {
+                illuminated = indirect;
+            }
+
+            illuminated *= throughput;
+            illuminated *= getMaterialAmbient(albedo);
+        }
+        else 
+        {
+            illuminated = albedo * throughput;
+        }
+
+        imageStore(framebufPreFinal, getRegularPixFromCheckerboardPix(pix), vec4(max(vec3(0.0), illuminated), 0));
+    }
+}
+
+
+#if COMPUTE_SVGF_ATROUS_ITERATION_COUNT != 4
+    #error Atrous is implemented for 4 iterations 
+#endif

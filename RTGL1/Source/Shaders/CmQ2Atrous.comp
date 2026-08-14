@@ -1,0 +1,359 @@
+// Copyright (c) 2020-2021 Sultim Tsyrendashiev
+// 
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+// 
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+// 
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
+// Ported from Q2RTX (GPL v2) shader/asvgf_atrous.comp. The final iteration
+// composites the channels using the RTGL1 lighting model (matches the RTGL1
+// ReSTIR outputs that feed the ASVGF).
+
+#version 460
+
+// A-trous wavelet filter for the HF (direct diffuse) and SPEC (specular)
+// channels, with variance-guided luminance filtering. The last invocation
+// also composites all channels into the final Q2Color image.
+
+#define DESC_SET_FRAMEBUFFERS 0
+#define DESC_SET_GLOBAL_UNIFORM 1
+#include "ShaderCommonGLSLFunc.h"
+#include "BRDF.h"
+#include "Q2Asvgf.h"
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(constant_id = 0) const uint q2AtrousIteration = 0;
+
+Q2SH q2LoadSH(sampler2D img_shY, sampler2D img_CoCg, ivec2 p)
+{
+    Q2SH r;
+    r.shY = texelFetch(img_shY, p, 0);
+    r.CoCg = texelFetch(img_CoCg, p, 0).xy;
+    return r;
+}
+
+void
+filter_image(
+    usampler2D img_hf,
+    usampler2D img_spec,
+    sampler2D img_moments,
+    out vec3 filtered_hf,
+    out vec3 filtered_spec,
+    out vec2 filtered_moments)
+{
+    ivec2 ipos = ivec2(gl_GlobalInvocationID);
+
+    vec3 color_center_hf = q2UnpackRGBE(texelFetch(img_hf, ipos, 0).r);
+    vec3 color_center_spec = q2UnpackRGBE(texelFetch(img_spec, ipos, 0).r);
+    vec2 moments_center = texelFetch(img_moments, ipos, 0).xy;
+
+    if(Q2_ATROUS_ITERATIONS_HF <= q2AtrousIteration && Q2_ATROUS_ITERATIONS_SPEC <= q2AtrousIteration)
+    {
+        filtered_hf = color_center_hf;
+        filtered_spec = color_center_spec;
+        filtered_moments = moments_center;
+        return;
+    }
+
+    vec3 normal_center = texelFetchNormal(ipos);
+    float depth_center = texelFetch(framebufQ2ViewDepth_Sampler, ipos, 0).r;
+    float fwidth_depth = texelFetch(framebufDepthGrad_Sampler, ipos, 0).r;
+    float roughness_center = texelFetch(framebufMetallicRoughness_Sampler, ipos, 0).y;
+
+    float lum_mean_hf = 0;
+    float sigma_l_hf = 0;
+
+    float hist_len_hf = texelFetch(framebufQ2HistMomentsHF_Sampler, ipos, 0).b;
+
+    if(Q2_FLT_ATROUS_LUM_HF != 0 && hist_len_hf > 1)
+    {
+        // Compute luminance variance from the statistical moments: Var(X) = E[X^2] - E[X]^2
+        lum_mean_hf = moments_center.x;
+        float lum_variance_hf = max(1e-8, moments_center.y - moments_center.x * moments_center.x);
+        sigma_l_hf = min(hist_len_hf, Q2_FLT_ATROUS_LUM_HF) / (2.0 * lum_variance_hf);
+    }
+    else
+    {
+        // No history: ignore luminance, perform a depth-normal-guided bilateral blur
+        sigma_l_hf = 0;
+    }
+
+    // reduce the HF filter sensitivity to normals when the lighting is invalidated
+    float normal_weight_scale = clamp(hist_len_hf / 8, 0, 1);
+
+    float normal_weight_hf = Q2_FLT_ATROUS_NORMAL_HF;
+    normal_weight_hf *= normal_weight_scale;
+    float normal_weight_spec = roughnessSquaredToSpecPower(square(roughness_center)) * Q2_FLT_ATROUS_NORMAL_SPEC;
+    normal_weight_spec = clamp(normal_weight_spec, 8, 1024);
+    normal_weight_spec *= normal_weight_scale;
+
+    const int step_size = int(1u << q2AtrousIteration);
+
+    vec3 sum_color_hf = color_center_hf.rgb;
+    vec3 sum_color_spec = color_center_spec.rgb;
+    vec2 sum_moments = moments_center;
+
+    float sum_w_hf = 1.0;
+    float sum_w_spec = 1.0;
+
+    // Boundaries for the checkerboard field, either left or right half of the screen
+    const int width = int(globalUniform.renderWidth);
+    const int height = int(globalUniform.renderHeight);
+    int field_left = 0;
+    int field_right = width / 2;
+    if(ipos.x >= field_right)
+    {
+        field_left = field_right;
+        field_right = width;
+    }
+
+    float spec_filter_width_scale = clamp(roughness_center * 30 - float(q2AtrousIteration), 0, 1);
+
+    // Compute the weighted average of color and moments from a sparse 3x3 pattern around the target pixel
+    const int r = 1;
+    for(int yy = -r; yy <= r; yy++)
+    {
+        for(int xx = -r; xx <= r; xx++)
+        {
+            ivec2 p = ipos + ivec2(xx, yy) * step_size;
+
+            if(xx == 0 && yy == 0)
+                continue;
+
+            float w = float(all(greaterThanEqual(p, ivec2(field_left, 0)))
+                    && all(lessThan(p, ivec2(field_right, height))));
+
+            vec3 normal = texelFetchNormal(p);
+
+            float depth = texelFetch(framebufQ2ViewDepth_Sampler, p, 0).r;
+            float roughness = texelFetch(framebufMetallicRoughness_Sampler, p, 0).y;
+
+            float dist_z = abs(depth_center - depth) * fwidth_depth * Q2_FLT_ATROUS_DEPTH;
+            w *= exp(-dist_z / float(step_size));
+            w *= Q2_WAVELET_KERNEL[abs(xx)][abs(yy)];
+
+            float w_hf = w;
+
+            vec3 c_hf = q2UnpackRGBE(texelFetch(img_hf, p, 0).r);
+            vec3 c_spec = q2UnpackRGBE(texelFetch(img_spec, p, 0).r);
+            vec2 c_mom = texelFetch(img_moments, p, 0).xy;
+            float l_hf = getLuminance(c_hf.rgb);
+            float dist_l_hf = abs(lum_mean_hf - l_hf);
+
+            w_hf *= exp(- dist_l_hf * dist_l_hf * sigma_l_hf);
+
+            float w_spec = w_hf;
+            w_spec *= max(0, 1 - 10 * abs(roughness - roughness_center));
+            w_spec *= spec_filter_width_scale;
+
+            float NdotN = max(0.0, dot(normal_center, normal));
+
+            if(normal_weight_hf > 0)
+            {
+                w_hf *= pow(NdotN, normal_weight_hf);
+            }
+
+            if(normal_weight_spec > 0)
+            {
+                w_spec *= pow(NdotN, normal_weight_spec);
+            }
+
+            if(Q2_ATROUS_ITERATIONS_HF <= q2AtrousIteration)
+                w_hf = 0;
+
+            if(Q2_ATROUS_ITERATIONS_SPEC <= q2AtrousIteration)
+                w_spec = 0;
+
+            sum_color_hf += c_hf.rgb * w_hf;
+            sum_color_spec += c_spec.rgb * w_spec;
+            sum_moments  += c_mom * w_hf;
+            sum_w_hf     += w_hf;
+            sum_w_spec   += w_spec;
+        }
+    }
+
+    filtered_hf = sum_color_hf / sum_w_hf;
+    filtered_spec = sum_color_spec / sum_w_spec;
+    filtered_moments = sum_moments / sum_w_hf;
+}
+
+// Bilinear/bilateral interpolation of the LF channel data (denoised at 1/3 resolution)
+Q2SH interpolate_lf(sampler2D img_lf_shY, sampler2D img_lf_CoCg, ivec2 ipos)
+{
+    float depth_center = texelFetch(framebufQ2ViewDepth_Sampler, ipos, 0).r;
+    float fwidth_depth = texelFetch(framebufDepthGrad_Sampler, ipos, 0).r;
+    vec3 geo_normal_center = texelFetchNormalGeometry(ipos);
+
+    vec2 pos_lowres = (vec2(ipos) + vec2(0.5)) / Q2_GRAD_DWN - vec2(0.5);
+    vec2 pos_ld = floor(pos_lowres);
+    vec2 subpix = fract(pos_lowres - pos_ld);
+
+    Q2SH sum_lf = q2InitSH();
+    float sum_w = 0;
+
+    // 4 bilinear taps
+    const ivec2 off[4] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 1 } };
+    float w[4] = {
+        (1.0 - subpix.x) * (1.0 - subpix.y),
+        (subpix.x      ) * (1.0 - subpix.y),
+        (1.0 - subpix.x) * (subpix.y      ),
+        (subpix.x      ) * (subpix.y      )
+    };
+    for(int i = 0; i < 4; i++)
+    {
+        ivec2 p_lowres = ivec2(pos_ld) + off[i];
+        ivec2 p_hires = p_lowres * Q2_GRAD_DWN + ivec2(1);
+
+        float p_depth = texelFetch(framebufQ2ViewDepth_Sampler, p_hires, 0).r;
+        vec3 p_geo_normal = texelFetchNormalGeometry(p_hires);
+
+        float p_w = w[i];
+
+        float dist_depth = abs(p_depth - depth_center) * fwidth_depth;
+        p_w *= exp(-dist_depth);
+        p_w *= pow(max(0.0, dot(geo_normal_center, p_geo_normal)), 8);
+
+        if(p_w > 0)
+        {
+            Q2SH p_lf = q2LoadSH(img_lf_shY, img_lf_CoCg, p_lowres);
+            q2AccumulateSH(sum_lf, p_lf, p_w);
+            sum_w += p_w;
+        }
+    }
+
+    if(sum_w > 0)
+    {
+        float inv_w = 1 / sum_w;
+        sum_lf.shY *= inv_w;
+        sum_lf.CoCg *= inv_w;
+    }
+    else
+    {
+        // Nothing relevant among the 4 taps - use the full-res temporally filtered LF
+        sum_lf = q2LoadSH(framebufQ2HistColorLF_SH_Sampler, framebufQ2HistColorLF_COCG_Sampler, ipos);
+    }
+
+    return sum_lf;
+}
+
+void
+main()
+{
+    ivec2 ipos = ivec2(gl_GlobalInvocationID);
+    if(any(greaterThanEqual(ipos, ivec2(globalUniform.renderWidth, globalUniform.renderHeight))))
+        return;
+
+    vec3 filtered_hf;
+    vec3 filtered_spec;
+    vec2 filtered_moments;
+
+    switch(q2AtrousIteration)
+    {
+    case 0: filter_image(framebufQ2AtrousPingHF_Sampler, framebufQ2AtrousPingSpec_Sampler, framebufQ2AtrousPingMoments_Sampler, filtered_hf, filtered_spec, filtered_moments); break;
+    case 1: filter_image(framebufQ2HistColorHF_Sampler,  framebufQ2AtrousPongSpec_Sampler, framebufQ2AtrousPongMoments_Sampler, filtered_hf, filtered_spec, filtered_moments); break;
+    case 2: filter_image(framebufQ2AtrousPingHF_Sampler, framebufQ2AtrousPingSpec_Sampler, framebufQ2AtrousPingMoments_Sampler, filtered_hf, filtered_spec, filtered_moments); break;
+    case 3: filter_image(framebufQ2AtrousPongHF_Sampler, framebufQ2AtrousPongSpec_Sampler, framebufQ2AtrousPongMoments_Sampler, filtered_hf, filtered_spec, filtered_moments); break;
+    }
+
+    switch(q2AtrousIteration)
+    {
+    case 0:
+        imageStore(framebufQ2HistColorHF, ipos, uvec4(q2PackRGBE(filtered_hf)));
+        imageStore(framebufQ2AtrousPongSpec, ipos, uvec4(q2PackRGBE(filtered_spec)));
+        imageStore(framebufQ2AtrousPongMoments, ipos, vec4(filtered_moments, 0, 0));
+        break;
+    case 1:
+        imageStore(framebufQ2AtrousPingHF, ipos, uvec4(q2PackRGBE(filtered_hf)));
+        imageStore(framebufQ2AtrousPingSpec, ipos, uvec4(q2PackRGBE(filtered_spec)));
+        imageStore(framebufQ2AtrousPingMoments, ipos, vec4(filtered_moments, 0, 0));
+        break;
+    case 2:
+        imageStore(framebufQ2AtrousPongHF, ipos, uvec4(q2PackRGBE(filtered_hf)));
+        imageStore(framebufQ2AtrousPongSpec, ipos, uvec4(q2PackRGBE(filtered_spec)));
+        imageStore(framebufQ2AtrousPongMoments, ipos, vec4(filtered_moments, 0, 0));
+        break;
+    }
+
+    // Perform compositing on the last iteration
+    if(q2AtrousIteration == 3)
+    {
+        Q2SH filtered_lf = interpolate_lf(framebufQ2AtrousPingLF_SH_Sampler, framebufQ2AtrousPingLF_COCG_Sampler, ipos);
+
+        filtered_lf.shY /= Q2_STORAGE_SCALE_LF;
+        filtered_lf.CoCg /= Q2_STORAGE_SCALE_LF;
+        filtered_hf /= Q2_STORAGE_SCALE_HF;
+        filtered_spec /= Q2_STORAGE_SCALE_SPEC;
+
+        vec3 albedo = texelFetch(framebufAlbedo_Sampler, getRegularPixFromCheckerboardPix(ipos), 0).rgb;
+        vec3 throughput = texelFetch(framebufThroughput_Sampler, ipos, 0).rgb;
+
+        vec3 illuminated;
+
+        if(!isSkyPix(ipos) && globalUniform.lightmapEnable == 0)
+        {
+            const vec2 mrFb = texelFetch(framebufMetallicRoughness_Sampler, ipos, 0).xy;
+            const vec3 normal = texelFetchNormal(ipos);
+
+            const float metallic = mrFb.x;
+            const float roughness = mrFb.y;
+
+            const vec3 diffuse = filtered_hf;
+            const vec3 indirect = q2SHToIrradiance(filtered_lf, normal);
+
+            // to prevent noise, specular will be replaced with SH, if the surface is too rough
+            const vec3 specular = mix(
+                filtered_spec,
+                indirect,
+                smoothstep(FAKE_ROUGH_SPECULAR_THRESHOLD, FAKE_ROUGH_SPECULAR_THRESHOLD + FAKE_ROUGH_SPECULAR_LENGTH, roughness));
+
+            const vec3 ro_s = getSpecularColor(albedo, metallic);
+            const vec3 ro_d = albedo * (1.0 - metallic);
+
+            illuminated =
+                (diffuse + indirect) * ro_d +
+                specular * ro_s;
+
+            if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_ONLY_DIRECT_DIFFUSE) != 0)
+            {
+                illuminated = diffuse * albedo;
+            }
+            else if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_ONLY_SPECULAR) != 0)
+            {
+                illuminated = specular * getSpecularColor(albedo, metallic);
+            }
+            else if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_ONLY_INDIRECT_DIFFUSE) != 0)
+            {
+                illuminated = indirect;
+            }
+
+            illuminated *= throughput;
+            illuminated *= getMaterialAmbient(albedo);
+        }
+        else
+        {
+            illuminated = albedo * throughput;
+        }
+
+        // Blend the per-ray accumulated fog (Q2RTX approach: fog is traced in
+        // the primary/refl passes and accumulated over each path segment), so
+        // it is part of the denoised, temporally consistent signal.
+        const vec4 fogAccum = texelFetch(framebufQ2FogAccum_Sampler, ipos, 0);
+        illuminated = fogAccum.rgb + illuminated * (1.0 - fogAccum.a);
+
+        imageStore(framebufQ2Color, ipos, vec4(max(vec3(0.0), illuminated), 0));
+    }
+}

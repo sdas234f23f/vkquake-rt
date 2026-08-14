@@ -1,12 +1,16 @@
 cmake_minimum_required(VERSION 3.20)
-project(vkquake LANGUAGES C)
+project(vkquake LANGUAGES C CXX)
 
 # ============================================================================
-# C Standard
+# C / C++ Standard
 # ============================================================================
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ============================================================================
 # Options (matching VS project defines)
@@ -40,9 +44,11 @@ endif()
 include(CheckCCompilerFlag)
 
 if(MSVC)
-    # Match VS project: /W4, WX, no exceptions, multiprocessor
-    add_compile_options(/W4 /WX /MP)
-    add_compile_options(/wd4100 /wd4127 /wd4389 /wd4702 /wd4706 /wd5286)
+    # Match VS project: /W4, WX, no exceptions, multiprocessor.
+    # The strict flags are scoped to C only: the vendored RTGL1 renderer
+    # (C++) sets its own /W3 /EHsc flags in RTGL1/CMakeLists.txt.
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/W4>" "$<$<COMPILE_LANGUAGE:C>:/WX>" "$<$<COMPILE_LANGUAGE:C>:/MP>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/wd4100>" "$<$<COMPILE_LANGUAGE:C>:/wd4127>" "$<$<COMPILE_LANGUAGE:C>:/wd4389>" "$<$<COMPILE_LANGUAGE:C>:/wd4702>" "$<$<COMPILE_LANGUAGE:C>:/wd4706>" "$<$<COMPILE_LANGUAGE:C>:/wd5286>")
 
     # VS project default defines
     add_compile_definitions(
@@ -205,34 +211,14 @@ if(VKQUAKE_PLATFORM_WINDOWS)
 endif()
 
 # ============================================================================
-# RTGL1 (RayTracedGL1) — REQUIRED
+# RTGL1 (RayTracedGL1) renderer — vendored (phase 4.7: no RTGL1.dll)
 # ============================================================================
-if(NOT DEFINED RTGL1_SDK_PATH)
-    set(RTGL1_SDK_PATH "$ENV{RTGL1_SDK_PATH}" CACHE PATH
-        "Path to RayTracedGL1 SDK (must contain Include/RTGL1/RTGL1.h)")
-endif()
+# The renderer source lives in the RTGL1/ subdirectory and is built as a
+# static library linked into vkquake. The public RG_* API remains an internal
+# interface (RG_STATIC is defined in RTGL1/CMakeLists.txt).
+add_subdirectory(RTGL1)
 
-if(NOT RTGL1_SDK_PATH)
-    message(FATAL_ERROR
-        "RTGL1_SDK_PATH is not set. This project requires RayTracedGL1.\n"
-        "Set via: -DRTGL1_SDK_PATH=<path> or RTGL1_SDK_PATH environment variable.\n"
-        "The SDK should contain: Include/RTGL1/RTGL1.h and Build/RayTracedGL1.lib")
-endif()
-
-if(NOT EXISTS "${RTGL1_SDK_PATH}/Include/RTGL1/RTGL1.h")
-    message(FATAL_ERROR
-        "RTGL1 header not found: ${RTGL1_SDK_PATH}/Include/RTGL1/RTGL1.h\n"
-        "Make sure RTGL1_SDK_PATH points to a valid RayTracedGL1 SDK.")
-endif()
-
-add_library(RTGL1::RTGL1 SHARED IMPORTED)
-set_target_properties(RTGL1::RTGL1 PROPERTIES
-    IMPORTED_IMPLIB   "${RTGL1_SDK_PATH}/Build/RayTracedGL1.lib"
-    IMPORTED_LOCATION "${RTGL1_SDK_PATH}/Build/RayTracedGL1.dll"
-    INTERFACE_INCLUDE_DIRECTORIES "${RTGL1_SDK_PATH}/Include"
-)
-
-message(STATUS "RTGL1 SDK: ${RTGL1_SDK_PATH}")
+message(STATUS "RTGL1 renderer: vendored (static, built from RTGL1/)")
 
 # ============================================================================
 # Source files
@@ -427,6 +413,8 @@ endif()
 target_compile_definitions(vkquake PRIVATE
     $<$<CONFIG:Debug>:_DEBUG>
     $<$<CONFIG:Release>:NDEBUG>
+    # The vendored RTGL1 renderer is linked statically: RGAPI must be empty.
+    RG_STATIC
 )
 
 if(VKQUAKE_PLATFORM_WINDOWS)
@@ -444,7 +432,7 @@ endif()
 # Link libraries
 # ============================================================================
 target_link_libraries(vkquake PRIVATE Vulkan::Vulkan)
-target_link_libraries(vkquake PRIVATE RTGL1::RTGL1)
+target_link_libraries(vkquake PRIVATE RayTracedGL1)
 
 if(VKQUAKE_PLATFORM_WINDOWS)
     target_link_libraries(vkquake PRIVATE SDL2::SDL2 SDL2::SDL2main)
@@ -572,11 +560,11 @@ if(VKQUAKE_PLATFORM_WINDOWS)
         COMMENT "Copying SDL2.dll..."
     )
 
-    # RTGL1 DLL
+    # amd_fidelityfx_vk.dll (AMD-signed, FSR 2/3.1) — from the vendored RTGL1
     add_custom_command(TARGET vkquake POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${RTGL1_SDK_PATH}/Build/RayTracedGL1.dll"
+            "${CMAKE_SOURCE_DIR}/RTGL1/Source/FidelityFX_SDK_1.1.4/src/PrebuiltSignedDLL/amd_fidelityfx_vk.dll"
             "$<TARGET_FILE_DIR:vkquake>"
-        COMMENT "Copying RayTracedGL1.dll..."
+        COMMENT "Copying amd_fidelityfx_vk.dll..."
     )
 endif()

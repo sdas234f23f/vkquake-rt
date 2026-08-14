@@ -1,0 +1,134 @@
+// Copyright (c) 2020-2021 Sultim Tsyrendashiev
+// 
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+// 
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+// 
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
+// Ported from Q2RTX (GPL v2) shader/asvgf_gradient_reproject.comp, adapted to
+// the RTGL1 framework. In every 3x3 stratum a single surface is matched to the
+// previous frame (via the motion vector and depth/normal similarity) and the
+// previous frame's HF/SPEC luminances are stored as the "gradient sample".
+// The Q2RTX G-buffer patching (re-trace with the previous RNG) is NOT needed
+// here because the lighting is ReSTIR (RTGL1), which does not consume gradient
+// samples; the gradients are used purely as the antilag signal in the temporal
+// pass.
+
+#version 460
+
+#define DESC_SET_FRAMEBUFFERS 0
+#define DESC_SET_GLOBAL_UNIFORM 1
+#include "ShaderCommonGLSLFunc.h"
+#include "Q2Asvgf.h"
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+void main()
+{
+    ivec2 pos_grad = ivec2(gl_GlobalInvocationID);
+
+    const int width = int(globalUniform.renderWidth);
+    const int height = int(globalUniform.renderHeight);
+    const int grad_width = width / Q2_GRAD_DWN;
+    const int grad_height = height / Q2_GRAD_DWN;
+
+    if (pos_grad.x >= grad_width || pos_grad.y >= grad_height)
+    {
+        return;
+    }
+
+    const float inv_width = 1.0 / globalUniform.renderWidth;
+    const float inv_height = 1.0 / globalUniform.renderHeight;
+
+    bool found = false;
+    ivec2 found_offset = ivec2(0);
+    vec2 found_prev_lum = vec2(0);
+
+    for (int offy = 0; offy < Q2_GRAD_DWN; offy++)
+    {
+        for (int offx = 0; offx < Q2_GRAD_DWN; offx++)
+        {
+            ivec2 p = pos_grad * Q2_GRAD_DWN + ivec2(offx, offy);
+
+            // Reproject the current pixel into the previous frame (flat space)
+            vec4 motion = texelFetch(framebufMotion_Sampler, p, 0);
+            ivec2 p_flat = q2CheckerToFlat(p, width);
+            vec2 pos_prev_flat = (vec2(p_flat) + vec2(0.5)) * vec2(inv_width, inv_height) + motion.xy;
+            ivec2 pp_flat = ivec2(floor(pos_prev_flat * vec2(width, height)));
+
+            if (pp_flat.x < 0 || pp_flat.x >= width || pp_flat.y < 0 || pp_flat.y >= height)
+            {
+                continue;
+            }
+
+            ivec2 pp = q2FlatToChecker(pp_flat, width);
+
+            // Don't reuse the same pixel if it was a gradient sample on the
+            // previous frame (carrying the same RNG forward would add bias).
+            ivec2 pos_grad_prev = pp / Q2_GRAD_DWN;
+            uint prev_grad_sample_pos = texelFetch(framebufQ2GradSmplPos_Prev_Sampler, pos_grad_prev, 0).x;
+            ivec2 stratum_prev = ivec2(
+                (prev_grad_sample_pos >> (Q2_STRATUM_OFFSET_SHIFT * 0)) & Q2_STRATUM_OFFSET_MASK,
+                (prev_grad_sample_pos >> (Q2_STRATUM_OFFSET_SHIFT * 1)) & Q2_STRATUM_OFFSET_MASK);
+            if (all(equal(pos_grad_prev * Q2_GRAD_DWN + stratum_prev, pp)))
+            {
+                continue;
+            }
+
+            // Surface matching: depth and geometric normal similarity.
+            // (Q2RTX also compares the cluster index - RTGL1 has no clusters.)
+            float depth_curr = texelFetch(framebufQ2ViewDepth_Sampler, p, 0).r;
+            float depth_prev = texelFetch(framebufQ2ViewDepth_Prev_Sampler, pp, 0).r;
+            vec3 geo_normal_curr = texelFetchNormalGeometry(p);
+            vec3 geo_normal_prev = texelFetchNormalGeometry_Prev(pp);
+
+            float dist_depth = abs(depth_curr - depth_prev + motion.z) / abs(depth_curr);
+            float dot_geo_normals = dot(geo_normal_curr, geo_normal_prev);
+
+            if (dist_depth < 0.1 && dot_geo_normals > 0.9)
+            {
+                vec3 prev_hf = q2UnpackRGBE(texelFetch(framebufQ2ColorHF_Prev_Sampler, pp, 0).r);
+                vec3 prev_spec = q2UnpackRGBE(texelFetch(framebufQ2ColorSpec_Prev_Sampler, pp, 0).r);
+                vec2 prev_lum = vec2(getLuminance(prev_hf), getLuminance(prev_spec));
+
+                // Pick the brightest pixel in the stratum: avoids bright trails
+                // when a light moves (a random penumbra pixel would miss it).
+                if (prev_lum.x + prev_lum.y > found_prev_lum.x + found_prev_lum.y)
+                {
+                    found_prev_lum = prev_lum;
+                    found_offset = ivec2(offx, offy);
+                    found = true;
+                }
+            }
+        }
+    }
+
+    if (!found)
+    {
+        imageStore(framebufQ2GradSmplPos, pos_grad, uvec4(0));
+        imageStore(framebufQ2GradHFSpecPing, pos_grad, vec4(0));
+        return;
+    }
+
+    // busy marker + position of the sample inside the stratum (current frame)
+    uint gradient_idx =
+          (1u << 31)
+        | (uint(found_offset.x) << (Q2_STRATUM_OFFSET_SHIFT * 0))
+        | (uint(found_offset.y) << (Q2_STRATUM_OFFSET_SHIFT * 1));
+
+    imageStore(framebufQ2GradSmplPos, pos_grad, uvec4(gradient_idx));
+    imageStore(framebufQ2GradHFSpecPing, pos_grad, vec4(found_prev_lum, 0.0, 0.0));
+}

@@ -1,0 +1,70 @@
+// Bilateral spatial upscale of the half-resolution god rays to full screen
+// resolution. Ported 1:1 from Quake 2 RTX (god_rays_filter.comp), GPL v2.
+// Q2RTX additionally blends the result onto the color buffer in this shader;
+// in RTGL1 the additive compositing happens in CmPrepareFinal, so this pass
+// only writes the filtered volumetric sunlight to framebufGodRaysFiltered.
+
+#version 460
+#extension GL_EXT_samplerless_texture_functions : enable
+
+#define DESC_SET_FRAMEBUFFERS 2
+#define DESC_SET_GLOBAL_UNIFORM 3
+#include "ShaderCommonGLSLFunc.h"
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+void main()
+{
+    const ivec2 iPosition = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(iPosition, ivec2(globalUniform.renderWidth, globalUniform.renderHeight))))
+        return;
+
+    vec4 result = vec4(0.0);
+    vec4 fallbackResult = vec4(0.0);
+    float weightSum = 0.0;
+
+    // Q2RTX uses TEX_PT_VIEW_DEPTH_A (positive primary view depth). The
+    // reflection pass stores a negative view depth there, so take abs().
+    const float referenceViewDepth = abs(texelFetch(framebufQ2ViewDepth_Sampler, getCheckerboardPix(iPosition), 0).r);
+    const ivec2 lowResOrigin = iPosition >> 1;
+
+    const ivec2 lowResSize = ivec2((globalUniform.renderWidth + 1) / 2, (globalUniform.renderHeight + 1) / 2);
+
+    for (int dy = -2; dy <= 2; dy++)
+    {
+        for (int dx = -2; dx <= 2; dx++)
+        {
+            const ivec2 lowResPos = lowResOrigin + ivec2(dx, dy);
+            if (any(lessThan(lowResPos, ivec2(0))) || any(greaterThanEqual(lowResPos, lowResSize)))
+                continue;
+
+            const ivec2 highResPos = lowResPos * 2 + ivec2(lowResPos.y & 1, 1 - (lowResPos.x & 1));
+            if (any(greaterThanEqual(highResPos, ivec2(globalUniform.renderWidth, globalUniform.renderHeight))))
+                continue;
+
+            const vec4 color = texelFetch(framebufGodRays_Sampler, lowResPos, 0);
+            const float viewDepth = abs(texelFetch(framebufQ2ViewDepth_Sampler, getCheckerboardPix(highResPos), 0).r);
+
+            // depth-aware (bilateral) and spatial weights, exactly as Q2RTX
+            float weight = clamp(1.0 - 10.0 * abs(viewDepth - referenceViewDepth) / max(abs(referenceViewDepth), 1e-6), 0.0, 1.0);
+            weight *= clamp(5.0 - length(vec2(highResPos - iPosition)), 0.0, 1.0);
+
+            result.rgba += color.rgba * weight;
+            fallbackResult.rgba += color.rgba;
+            weightSum += weight;
+        }
+    }
+
+    if (weightSum > 0.0)
+    {
+        // some relevant low-res pixels found - bilateral average
+        result.rgba = result.rgba / weightSum;
+    }
+    else
+    {
+        // none found - plain (non-bilateral) spatial blur, as Q2RTX
+        result.rgba = fallbackResult.rgba / 16.0;
+    }
+
+    imageStore(framebufGodRaysFiltered, iPosition, vec4(result.rgb, 0.0));
+}

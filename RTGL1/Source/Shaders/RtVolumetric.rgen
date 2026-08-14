@@ -1,0 +1,178 @@
+// Copyright (c) 2022 Sultim Tsyrendashiev
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+#version 460
+
+#define MATERIAL_MAX_ALBEDO_LAYERS 0
+
+#define DESC_SET_TLAS           0
+#define DESC_SET_FRAMEBUFFERS   1
+#define DESC_SET_GLOBAL_UNIFORM 2
+#define DESC_SET_VERTEX_DATA    3
+#define DESC_SET_TEXTURES       4
+#define DESC_SET_RANDOM         5
+#define DESC_SET_LIGHT_SOURCES  6
+#define DESC_SET_CUBEMAPS       7
+#define DESC_SET_RENDER_CUBEMAP 8
+#define DESC_SET_VOLUMETRIC     11
+#define LIGHT_SAMPLE_METHOD     ( LIGHT_SAMPLE_METHOD_VOLUME )
+#include "RaygenCommon.h"
+#include "Volumetric.h"
+
+// Approximation of Henyey-Greenstein's phase function
+float phaseFunction_Schlick( const vec3 tolight, const vec3 toviewer, float assymetry )
+{
+    float costheta = dot( tolight, toviewer );
+    float k        = 1.55 * assymetry - 0.55 * assymetry * assymetry * assymetry;
+
+    return ( 1 - square( k ) ) / ( 4 * M_PI * square( 1 + k * costheta ) );
+}
+
+void main()
+{
+    const ivec3 cell = ivec3( gl_LaunchIDEXT.xyz );
+
+    if( globalUniform.volumeEnableType != VOLUME_ENABLE_VOLUMETRIC )
+    {
+        imageStore( g_volumetric, cell, vec4( 0.0 ) );
+#if ILLUMINATION_VOLUME
+        imageStore( g_illuminationVolume, cell, vec4( 0.0 ) );
+#endif
+        return;
+    }
+
+    vec3       center   = volume_getCenter( cell );
+    const vec3 toviewer = normalize( globalUniform.cameraPosition.xyz - center );
+
+    {
+        vec3  s      = volume_getCenter( cell + ivec3( 0, 0, 1 ) );
+        vec3  radius = ( center - s ) * 0.5;
+        uint  seed   = getRandomSeed( cell.xy, globalUniform.frameId );
+        float rnd    = rndBlueNoise8( seed, 0 ).x * 2 - 1;
+        center += radius * rnd;
+    }
+
+#if 1
+    {
+        ivec2 pix;
+        float depth;
+        {
+            vec4 ndc = globalUniform.projection * globalUniform.view * vec4( center, 1.0 );
+            ndc.xyz /= ndc.w;
+            ndc.xy = ndc.xy * 0.5 + 0.5;
+
+            pix = ivec2( ndc.xy * vec2( globalUniform.renderWidth, globalUniform.renderHeight ) );
+            depth = ndc.z;
+        }
+
+        {
+            uint instCustomIndex = floatBitsToUint(
+                texelFetch( framebufSurfacePosition_Sampler, getCheckerboardPix( pix ), 0 ).a );
+
+            float surfDepth = texelFetch(framebufDepthNdc_Sampler, pix, 0).r;
+
+            if( ( instCustomIndex & INSTANCE_CUSTOM_INDEX_FLAG_DYNAMIC ) == 0 )
+            {
+                if( depth > surfDepth )
+                {
+                    imageStore( g_volumetric, cell, vec4( 0.0 ) );
+    #if ILLUMINATION_VOLUME
+                    imageStore( g_illuminationVolume, cell, vec4( 0.0 ) );
+    #endif
+                    return;
+                }
+            }
+        }
+    }
+#endif
+
+    vec3 lighting = globalUniform.volumeAmbient.rgb;
+    vec3 radiance = vec3( 0.0 );
+
+#if SHIPPING_HACK
+    if( getLuminance( globalUniform.volumeSourceColor.rgb ) > 0.01 )
+    {
+        bool isShadowed = traceShadowRay(
+            0, center, center + MAX_RAY_LENGTH * globalUniform.volumeDirToSource.xyz, true );
+
+        radiance += globalUniform.volumeSourceColor.rgb * float( !isShadowed );
+        lighting += radiance * phaseFunction_Schlick( globalUniform.volumeDirToSource.xyz,
+                                                      toviewer,
+                                                      globalUniform.volumeSourceAsymmetry );
+    }
+#else
+    if( globalUniform.directionalLightExists != 0 )
+    {
+        DirectionalLight l =
+            decodeAsDirectionalLight( lightSources[ LIGHT_ARRAY_DIRECTIONAL_LIGHT_OFFSET ] );
+        bool isShadowed = traceShadowRay( 0, center, center - MAX_RAY_LENGTH * l.direction, true );
+
+        radiance += l.color * float( !isShadowed );
+        lighting += radiance * phaseFunction_Schlick( -l.direction, toviewer, 0.4 );
+    }
+#endif
+
+#if ILLUMINATION_VOLUME
+    {
+        vec3 radiance_Prev = imageLoad( g_illuminationVolume, cell ).rgb;
+        if( any( isnan( radiance_Prev ) ) || any( isinf( radiance_Prev ) ) )
+        {
+            radiance_Prev = vec3( 0 );
+        }
+
+        uint seed = getRandomSeed( ivec2( cell.x + cell.z, cell.y + 19 * cell.z ), globalUniform.frameId );
+
+        // TODO: processDirectIllumination without normals
+        vec3 n = safeNormalize( toviewer );
+
+        Surface s;
+        {
+            s.position        = center;
+            s.instCustomIndex = 0;
+            s.normalGeom      = n;
+            s.roughness       = 1.0;
+            s.normal          = n;
+            s.albedo          = vec3( 1.0 );
+            s.isSky           = false;
+            s.specularColor   = vec3( 0.04 );
+            s.emission        = 0.0;
+            s.toViewerDir     = toviewer;
+        }
+
+        vec3 tolight = vec3( 0, 1, 0 );
+
+        radiance += processDirectIllumination( seed, s, 0, tolight );
+
+        radiance = mix( radiance_Prev, radiance, 0.05 );
+        lighting += radiance * phaseFunction_Schlick( tolight, toviewer, 0.4 );
+    }
+#endif
+
+
+    // half the density of the original value to avoid over-fogging when god rays are active
+    float scattering = globalUniform.volumeScattering * 0.0005;
+    float absorbtion = 0.0;
+
+
+#if ILLUMINATION_VOLUME
+    imageStore( g_illuminationVolume, cell, vec4( radiance, 0.0 ) );
+#endif
+    imageStore( g_volumetric, cell, vec4( lighting * scattering, scattering + absorbtion ) );
+}

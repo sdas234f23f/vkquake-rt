@@ -1,0 +1,323 @@
+// Copyright (c) 2021 Sultim Tsyrendashiev
+// 
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+// 
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+// 
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+#version 460
+
+#define DESC_SET_FRAMEBUFFERS 0
+#define DESC_SET_GLOBAL_UNIFORM 1
+#define DESC_SET_TONEMAPPING 2
+#define DESC_SET_LPM_PARAMS 3
+#define DESC_SET_VOLUMETRIC 4
+#include "ShaderCommonGLSLFunc.h"
+#include "LightGrid.h"
+#include "Volumetric.h"
+#include "Random.h"
+#include "Exposure.h"
+#include "TonemappingUtils.glsl"
+
+layout(local_size_x = COMPUTE_COMPOSE_GROUP_SIZE_X, local_size_y = COMPUTE_COMPOSE_GROUP_SIZE_Y, local_size_z = 1) in;
+
+#define DEBUG_LPM 0
+
+#define A_GLSL 1
+#define A_GPU 1
+#include "ffx_a.h"
+layout(set = DESC_SET_LPM_PARAMS, binding = BINDING_LPM_PARAMS) readonly uniform LpmParams_BT
+{
+    AU4 g_lpmParams[24];
+};
+#if DEBUG_LPM
+    AU4 debug_lpmParams[24];
+    void LpmSetupOut(AU1 i, inAU4 v) { debug_lpmParams[i] = v; }
+    AU4  LpmFilterCtl(AU1 i)         { return debug_lpmParams[i]; }
+#else
+    #define LPM_NO_SETUP 1
+    AU4  LpmFilterCtl(AU1 i)         { return g_lpmParams[i]; }
+#endif
+
+vec3 uncharted2TonemapOp(const vec3 x)
+{
+    float A = 0.15;
+    float B = 0.50;
+    float C = 0.10;
+    float D = 0.20;
+    float E = 0.02;
+    float F = 0.30;
+
+    return ((x*(A*x+C*B)+D*E)/(x*(A*x+B)+D*F))-E/F;
+}
+
+vec3 uncharted2Tonemap(const vec3 color, float whitePoint)
+{
+    return uncharted2TonemapOp(2.0 * color) / uncharted2TonemapOp(vec3(whitePoint));
+}
+
+
+vec3 reinhard(const vec3 c)
+{
+    const vec3 c1 = clamp(c, exp2(globalUniform.minLogLuminance), exp2(globalUniform.maxLogLuminance));
+    const float w2 = globalUniform.luminanceWhitePoint * globalUniform.luminanceWhitePoint;
+    return c * (1.0 + c1 / w2) / (1.0 + c1);
+}
+
+
+// Q2RTX-style tone curve application (tone_mapping_apply.comp, SDR path).
+// Applies the noise-aware tone curve + auto-exposure + knee to the HDR image.
+vec3 finalizeColor( const vec3 hdr, const vec3 screenEmis )
+{
+    if( globalUniform.lightmapEnable == 0 )
+    {
+        vec3 input_color = hdr + screenEmis * globalUniform.emissionMaxScreenColor;
+
+        const float lum = max( getLuminance( input_color ), exp2( min_log_luminance ) );
+
+        // Interpolate the tone curve; binning must match CmLuminanceHistogram.comp.
+        const float biased_log_luminance = log2( lum ) * log_luminance_scale + log_luminance_bias;
+        const float histogram_bin = clamp( biased_log_luminance * HISTOGRAM_BINS, 0.0, float( HISTOGRAM_BINS - 1 ) );
+        const uint  left_bin       = uint( histogram_bin );
+        const uint  right_bin      = min( left_bin + 1, uint( HISTOGRAM_BINS - 1 ) );
+        const float right_weight_F = fract( histogram_bin );
+        const float left_weight_F  = 1.0 - right_weight_F;
+
+        const float out_log_luminance = left_weight_F * tonemapping.curve[left_bin] +
+                                        right_weight_F * tonemapping.curve[right_bin];
+        const float out_luminance = exp2( out_log_luminance + tonemapping.tmExposureBias );
+
+        vec3 mapped_color = input_color * out_luminance / lum;
+
+        // Knee: bring values that are still above 1 back into range.
+        const vec3 step_value = step( tonemapping.tmKneeStart, mapped_color );
+        mapped_color = mix( mapped_color,
+                            ( tonemapping.kneeW * mapped_color + tonemapping.kneeA ) / max( vec3( 1e-6 ), mapped_color + tonemapping.kneeB ),
+                            step_value );
+
+        // Auto-exposure Reinhard blend.
+        const float adapted_luminance    = tonemapping.adaptedLuminance;
+        const float scaled_luminance     = exp2( tonemapping.tmExposureBias - 2.0 ) * lum / adapted_luminance;
+        const float white_point          = tonemapping.tmWhitePoint;
+        const float white_point_squared  = white_point * white_point;
+        const float mapped_luminance     = ( scaled_luminance * ( 1.0 + scaled_luminance / white_point_squared ) ) / ( 1.0 + scaled_luminance );
+        const vec3  ae_mapped_color      = input_color * mapped_luminance / lum;
+
+        mapped_color = mix( mapped_color, ae_mapped_color, tonemapping.tmReinhard );
+
+        return clamp( mapped_color, vec3( 0 ), vec3( 1 ) );
+    }
+    else
+    {
+        return uncharted2Tonemap(hdr, 1.0);
+    }
+}
+
+
+vec3 getBloomInput( const vec3 hdr, const vec3 screenEmis )
+{
+    float power = getLuminance( screenEmis );
+    vec3  emis  = power > 0.001 ? screenEmis / power : vec3( 0 );
+
+    float ec = power * globalUniform.bloomEmissionMultiplier;
+
+    return hdr * ev100ToLuminance( getCurrentEV100() ) +
+           emis * ev100ToLuminance( getCurrentEV100() + ec );
+}
+
+
+vec3 applyVolumetrics( const ivec2 pix, const vec3 color )
+{
+    if( globalUniform.volumeEnableType == VOLUME_ENABLE_NONE )
+    {
+        return color;
+    }
+
+    // On the new Q2RTX core path the level volumetric is provided by the traced
+    // fog volumes (per-ray, works through portals and in reflections), so the
+    // legacy screen-space volumetric composite is disabled there.
+    if( globalUniform.coreQ2RTX != 0 )
+    {
+        return color;
+    }
+
+    uint seed = getRandomSeed( pix, globalUniform.frameId );
+    vec3 rnd  = rnd8_4( seed, 0 ).xyz;
+
+    const vec2 inUV         = getPixelUVWithJitter( pix );
+    const vec3 cameraRayDir = getRayDir( inUV );
+
+    float virtualdepth = texelFetch( framebufDepthWorld_Sampler, getCheckerboardPix( pix ), 0 ).r;
+    bool  isSky        = virtualdepth > MAX_RAY_LENGTH;
+
+    if( globalUniform.volumeEnableType == VOLUME_ENABLE_VOLUMETRIC )
+    {
+        vec3 position = globalUniform.cameraPosition.xyz + cameraRayDir * virtualdepth;
+
+#ifdef DEBUG_VOLUME_ILLUMINATION
+        vec3 sp = volume_toSamplePosition_T(
+            position.xyz, globalUniform.volumeViewProj, globalUniform.cameraPosition.xyz );
+        vec3 illum = textureLod( g_illuminationVolume_Sampler, sp, 0.0 ).rgb;
+        return color * illum;
+#endif
+
+        vec4 v = volume_sampleDithered( position, rnd, 2.0 );
+        return color * v.a + v.rgb;
+    }
+    else
+    {
+        // simple depth-based fog; factor tuned to be clearly visible
+        float density = globalUniform.volumeScattering * 0.001;
+
+        if( !isSky )
+        {
+            float f = exp( -virtualdepth * density );
+            return mix( globalUniform.volumeAmbient.rgb, color, f );
+        }
+        else
+        {
+            return color;
+        }
+    }
+}
+
+
+vec3 processDebug( const ivec2 pix, const vec3 fallback );
+
+
+void main()
+{
+    const ivec2 pix = ivec2( gl_GlobalInvocationID.x, gl_GlobalInvocationID.y );
+    if( pix.x >= uint( globalUniform.renderWidth ) || pix.y >= uint( globalUniform.renderHeight ) )
+    {
+        return;
+    }
+
+    vec3 hdr        = texelFetch( framebufFinal_Sampler, pix, 0 ).rgb;
+    const vec3 screenEmis = texelFetch( framebufScreenEmission_Sampler, pix, 0 ).rgb;
+
+    // volumetric sunlight (god rays) - additive, before tonemapping. The god
+    // rays pass runs at half resolution (CmGodRays) and is bilaterally
+    // upscaled to full resolution (CmGodRaysFilter), so the filtered buffer is
+    // composited here. Q2RTX-style (coreQ2RTX): the primary pass fills the
+    // whole image, then the reflection pass accumulates the reflected-segment
+    // god rays on top, so the result is composited unconditionally. On the
+    // legacy path there is no god rays reflection pass, so reflection/refraction
+    // pixels are skipped (their march follows the primary camera ray and would
+    // be wrong on reflections).
+    if (globalUniform.coreQ2RTX != 0)
+    {
+        hdr += texelFetch( framebufGodRaysFiltered_Sampler, pix, 0 ).rgb;
+    }
+    else
+    {
+        const float q2SplitFlag = texelFetch(framebufThroughput_Sampler, getCheckerboardPix(pix), 0).a;
+        if (q2SplitFlag == 0.0)
+        {
+            hdr += texelFetch( framebufGodRaysFiltered_Sampler, pix, 0 ).rgb;
+        }
+    }
+
+    vec3 color = finalizeColor( hdr, screenEmis );
+    vec3 bloom = getBloomInput( hdr, screenEmis );
+
+    color = applyVolumetrics( pix, color );
+#if SHIPPING_HACK
+    color += texelFetch( framebufAcidFog_Sampler, pix, 0 ).rgb;
+#endif
+
+
+    if( globalUniform.debugShowFlags != 0 )
+    {
+        color = processDebug( pix, color );
+    }
+
+    imageStore( framebufFinal, pix, vec4( color, 0 ) );
+    imageStore( framebufBloomInput, pix, vec4( bloom, 0.0 ) );
+}
+
+
+vec3 processDebug(const ivec2 pix, const vec3 fallback)
+{
+    if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_GOD_RAYS) != 0)
+    {
+        // filtered (bilateral-upscaled) volumetric sunlight buffer
+        return texelFetch(framebufGodRaysFiltered_Sampler, pix, 0).rgb * 4.0;
+    }
+    else if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_MOTION_VECTORS) != 0)
+    {
+        const vec2 m = texelFetch(framebufMotion_Sampler, getCheckerboardPix(pix), 0).rg;
+        return vec3(abs(m.r), abs(m.g), 0);
+    }
+    else if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_UNFILTERED_DIFFUSE) != 0)
+    {
+        return texelFetchUnfilteredDirect(getCheckerboardPix(pix));
+    }
+    else if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_UNFILTERED_SPECULAR) != 0)
+    {
+        return texelFetchUnfilteredSpecular(getCheckerboardPix(pix));
+    }
+    else if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_UNFILTERED_INDIRECT) != 0)
+    {
+        const SH sh = imageLoadUnfilteredIndirectSH(getCheckerboardPix(pix));
+        const vec3 normal = texelFetchNormal(getCheckerboardPix(pix));
+        return SHToIrradiance(sh, normal);
+    }
+    else if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_LIGHT_GRID) != 0)
+    {
+        vec3 surfPos = texelFetch(framebufSurfacePosition_Sampler, getCheckerboardPix(pix), 0).xyz;
+       
+        vec3 cell = vec3(worldToCell(surfPos));
+        cell /= vec3(LIGHT_GRID_SIZE_X, LIGHT_GRID_SIZE_Y, LIGHT_GRID_SIZE_Z);
+
+        vec3 c = mod(cell.xyz * 8, vec3(1.0));
+
+        if (!isInsideCell(surfPos))
+        {
+            c = vec3(getLuminance(c) * 0.2 + 0.4);
+        }
+
+        return c;
+    }
+#if GRADIENT_ESTIMATION_ENABLED
+    else if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_GRADIENTS) != 0)
+    {
+        return texelFetch(framebufDISPingGradient_Sampler, getCheckerboardPix(pix) / COMPUTE_ASVGF_STRATA_SIZE, 0).xyz;
+    }
+#endif
+#ifdef DEBUG_SHOW_SH
+    const ivec2 checkSHRange = ivec2(800, 400);
+
+    if (pix.x < checkSHRange.x && pix.y < checkSHRange.y)
+    {
+        vec2 uv = vec2(pix.x / float(checkSHRange.x), pix.y / float(checkSHRange.y));
+
+        float theta = uv.x * 2.0 * M_PI;
+        float phi = uv.y * M_PI;
+        vec3 normal = vec3(cos(theta) * sin(phi), sin(theta) * sin(phi), cos(phi));
+
+        ivec2 centerPix = ivec2(globalUniform.renderWidth * 0.5, globalUniform.renderHeight * 0.5);
+        SH indirSH = texelFetchSH(
+            //framebufUnfilteredIndirectSH_R_Sampler, framebufUnfilteredIndirectSH_G_Sampler, framebufUnfilteredIndirectSH_B_Sampler,
+            framebufIndirPongSH_R_Sampler, framebufIndirPongSH_G_Sampler, framebufIndirPongSH_B_Sampler, 
+            getCheckerboardPix(centerPix));
+
+        return SHToIrradiance(indirSH, normal);
+    }
+#endif
+
+    return fallback;
+}

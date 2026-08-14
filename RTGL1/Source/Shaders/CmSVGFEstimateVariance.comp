@@ -1,0 +1,209 @@
+// Copyright (c) 2021 Sultim Tsyrendashiev
+// 
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+// 
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+// 
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+// 
+// Copyright (c) 2018, Christoph Schied
+// All rights reserved.
+// 
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//     * Neither the name of the Karlsruhe Institute of Technology nor the
+//       names of its contributors may be used to endorse or promote products
+//       derived from this software without specific prior written permission.
+// 
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+// DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+// ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+#version 460
+
+// "Spatiotemporal Variance-Guided Filtering: Real-Time Reconstruction for Path-Traced Global Illumination", C.Schied et al.
+// 4.2 Variance estimation
+
+#define DESC_SET_FRAMEBUFFERS 0
+#define DESC_SET_GLOBAL_UNIFORM 1
+#include "ShaderCommonGLSLFunc.h"
+
+layout(local_size_x = COMPUTE_SVGF_VARIANCE_GROUP_SIZE_X, local_size_y = COMPUTE_SVGF_VARIANCE_GROUP_SIZE_X, local_size_z = 1) in;
+
+const float HISTORY_LENGTH_THRESHOLD = 4.0;
+// 3x3 box filter
+const int FILTER_RADIUS = 1;
+
+struct FilterData
+{
+    float depth;
+    // E5B9G9R9
+    uint encColor;
+    uint encNormalGeometry;
+};
+
+// Preloaded data for filter pixel data. Additional FILTER_RADIUS pixels at both ends for each dimension
+const int SHARED_WIDTH = FILTER_RADIUS + COMPUTE_SVGF_VARIANCE_GROUP_SIZE_X + FILTER_RADIUS;
+shared FilterData filterData[SHARED_WIDTH][SHARED_WIDTH];
+
+
+void fillFilterData(const ivec2 globalBasePix, const int sharedOffset)
+{
+    const ivec2 sharedPix = ivec2(sharedOffset % SHARED_WIDTH, sharedOffset / SHARED_WIDTH);
+    const ivec2 globalPix = globalBasePix + sharedPix;
+
+    FilterData data;
+    data.encColor           = texelFetch(framebufDiffAccumColor_Sampler, globalPix, 0).r;
+    data.encNormalGeometry  = texelFetchEncNormalGeometry(               globalPix);
+    data.depth              = texelFetch(framebufDepthWorld_Sampler,     globalPix, 0).r;
+
+    filterData[sharedPix.y][sharedPix.x] = data;
+}
+
+
+void preload()
+{
+    const ivec2 globalBasePix = ivec2(gl_WorkGroupID.xy) * COMPUTE_SVGF_VARIANCE_GROUP_SIZE_X - ivec2(FILTER_RADIUS);
+    const int threadIndex = int(gl_LocalInvocationIndex);
+
+    const int sharedCount = SHARED_WIDTH * SHARED_WIDTH;
+    const int threadCount = COMPUTE_SVGF_VARIANCE_GROUP_SIZE_X * COMPUTE_SVGF_VARIANCE_GROUP_SIZE_X;
+   
+    // how many threads should load only one pixel
+    const int oneLoadCount = 2 * threadCount - sharedCount;
+    // how many threads should load two pixels
+    // const int twoLoadCount = sharedCount - threadCount;
+
+    if (threadIndex < oneLoadCount)
+    {
+        // first threads need to preload only 1 pixel
+        fillFilterData(globalBasePix, threadIndex);
+    }
+    else
+    {
+        // now threads are loading 2 neighboring pixels
+        const int neighborsIndex = threadIndex - oneLoadCount;
+
+        fillFilterData(globalBasePix, oneLoadCount + neighborsIndex * 2 + 0);
+        fillFilterData(globalBasePix, oneLoadCount + neighborsIndex * 2 + 1);
+    }
+}
+
+
+ivec2 getSharedID(const int offsetX, const int offsetY)
+{
+    return ivec2(gl_LocalInvocationID) + ivec2(FILTER_RADIUS) + ivec2(offsetX, offsetY);
+}
+
+
+float dotEnc(uint n1, uint n2)
+{
+    return dot(decodeNormal(n1), decodeNormal(n2));
+}
+
+
+void main()
+{    
+    const ivec2 pix = ivec2(gl_GlobalInvocationID);
+
+
+    preload();
+    barrier();
+
+
+    const ivec2 pixShared = getSharedID(0, 0);
+    const FilterData pixData = filterData[pixShared.y][pixShared.x];
+
+    vec3 pixDataColor = decodeE5B9G9R9(pixData.encColor);
+
+    if (pixData.depth < 0.0 || pixData.depth > MAX_RAY_LENGTH)
+    {
+        imageStore(framebufDiffPingColorAndVariance, pix, vec4(pixDataColor, 0.0));
+        return;
+    }
+
+    const float historyLength   = texelFetch(framebufAccumHistoryLength_Sampler, pix, 0).r;
+    const vec2  temporalMoments = texelFetch(framebufDiffAccumMoments_Sampler,   pix, 0).rg;
+
+    // rely on temporal variance, if collected enough data with temporal acculumation
+    if (historyLength > HISTORY_LENGTH_THRESHOLD)
+    {
+        float temporalVariance = max(0.0, temporalMoments.y - temporalMoments.x * temporalMoments.x);
+
+        imageStore(framebufDiffPingColorAndVariance, pix, vec4(pixDataColor, temporalVariance));
+        return;
+    }
+
+    const float l = getLuminance(pixDataColor);
+
+    vec2 spatialMoments = vec2(l, l * l) + temporalMoments;
+    float weightSum = 1.0;
+
+    for (int yy = -FILTER_RADIUS; yy <= FILTER_RADIUS; yy++)
+    {
+        for (int xx = -FILTER_RADIUS; xx <= FILTER_RADIUS; xx++)
+        {
+            if (xx == 0 && yy == 0)
+            {
+                continue;
+            }
+
+            const ivec2 qShared = getSharedID(xx, yy);
+            const FilterData qData = filterData[qShared.y][qShared.x];
+            
+            const vec3 color_q = decodeE5B9G9R9(qData.encColor);
+            const float l_q = getLuminance(color_q);
+
+            const float w_z = exp(-abs(pixData.depth - qData.depth) / max(max(pixData.depth, qData.depth), 0.01));
+            const float w_n = pow(max(0.0, dotEnc(pixData.encNormalGeometry, qData.encNormalGeometry)), 128.0);
+
+            const float w = w_z * w_n;
+
+            if (!isnan(w))
+            {
+                spatialMoments += vec2(l_q, l_q * l_q) * w;
+                pixDataColor += color_q * w;
+
+                weightSum += w;
+            }
+        }
+    }
+
+    const float invWeightSum = 1.0 / weightSum;
+    spatialMoments *= invWeightSum;
+    pixDataColor *= invWeightSum;
+
+    const float spatialVariance = max(0.0, spatialMoments.y - spatialMoments.x * spatialMoments.x) 
+                                  * (1.0 + 2.0 * (1.0 - historyLength / HISTORY_LENGTH_THRESHOLD));
+                                  
+    imageStore(framebufDiffPingColorAndVariance, pix, vec4(pixDataColor, spatialVariance));
+}
+
+
+#if SHARED_WIDTH * SHARED_WIDTH >= COMPUTE_SVGF_VARIANCE_GROUP_SIZE_X * COMPUTE_SVGF_VARIANCE_GROUP_SIZE_X * 2
+    #error if false, preload must be changed
+#endif

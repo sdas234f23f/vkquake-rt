@@ -1,0 +1,97 @@
+// Copyright (c) 2021 Sultim Tsyrendashiev
+// 
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+// 
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+// 
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+#version 460
+
+#define DESC_SET_FRAMEBUFFERS 0
+#define DESC_SET_GLOBAL_UNIFORM 1
+#define DESC_SET_TONEMAPPING 2
+#define TONEMAPPING_BUFFER_WRITEABLE
+#include "ShaderCommonGLSLFunc.h"
+#include "TonemappingUtils.glsl"
+
+layout(local_size_x = COMPUTE_LUM_HISTOGRAM_GROUP_SIZE_X, local_size_y = COMPUTE_LUM_HISTOGRAM_GROUP_SIZE_Y, local_size_z = 1) in;
+
+// Q2RTX-style saliency-weighted histogram over log2 luminance (photographic
+// stops) of the pre-final HDR image. Values are accumulated in fixed-point
+// so that atomic additions don't lose precision.
+// Ported from Quake 2 RTX (tone_mapping_histogram.comp), GPL v2.
+
+shared uint s_Histogram[HISTOGRAM_BINS];
+
+void main()
+{
+    const ivec2 ipos = ivec2(gl_GlobalInvocationID);
+    const ivec2 screenSize = ivec2(globalUniform.renderWidth, globalUniform.renderHeight);
+
+    const bool validThread = !any(greaterThanEqual(ipos, screenSize));
+
+    const vec3 input_color = validThread ? texelFetch(framebufPreFinal_Sampler, ipos, 0).rgb : vec3(0.0);
+
+    const uint linear_idx = gl_LocalInvocationIndex;
+
+    // init shared histogram
+    if (validThread && linear_idx < HISTOGRAM_BINS)
+    {
+        s_Histogram[linear_idx] = 0;
+    }
+
+    barrier();
+
+    // Ignore completely black pixels
+    if (validThread && getLuminance(input_color) > 0.0)
+    {
+        const float lum = max(getLuminance(input_color), exp2(min_log_luminance));
+        const float biased_log_luminance = log2(lum) * log_luminance_scale + log_luminance_bias;
+        const float histogram_bin = clamp(biased_log_luminance * HISTOGRAM_BINS, 0.0, HISTOGRAM_BINS - 1.0);
+
+        // Distribute luminance between two bins using a linear (tent) filter
+        const uint left_bin = uint(histogram_bin);
+        const uint right_bin = left_bin + 1;
+
+        // Pixel importance based on distance to the center of the screen
+        const float weight = clamp(1.0 - length(vec2(ipos) / vec2(screenSize) - vec2(0.5)) * 1.5, 0.01, 1.0);
+
+        const float right_weight_F = fract(histogram_bin) * weight;
+        const float left_weight_F = weight - right_weight_F;
+
+        // fixed-point for atomic addition
+        const uint right_weight_U = uint(right_weight_F * FIXED_POINT_FRAC_MULTIPLIER);
+        const uint left_weight_U = uint(left_weight_F * FIXED_POINT_FRAC_MULTIPLIER);
+
+        atomicAdd(s_Histogram[left_bin], left_weight_U);
+        if (right_bin < HISTOGRAM_BINS)
+        {
+            atomicAdd(s_Histogram[right_bin], right_weight_U);
+        }
+    }
+
+    barrier();
+
+    // add workgroup histogram to the global histogram
+    if (validThread && linear_idx < HISTOGRAM_BINS)
+    {
+        const int localBinValue = int(s_Histogram[linear_idx]);
+        if (localBinValue != 0)
+        {
+            atomicAdd(tonemapping.histogram[linear_idx], localBinValue);
+        }
+    }
+}

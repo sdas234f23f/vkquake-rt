@@ -12,15 +12,6 @@ if (-not $BuildDir) {
     $BuildDir = Join-Path "build" $Config
 }
 
-# RayTracedGL1 SDK: use the RTGL1_SDK_PATH environment variable if set,
-# otherwise try the sibling directory next to the repository.
-if (-not $env:RTGL1_SDK_PATH) {
-    $sibling = Join-Path (Split-Path $PSScriptRoot -Parent) "RayTracedGL1"
-    if (Test-Path (Join-Path $sibling "Include\RTGL1\RTGL1.h")) {
-        $env:RTGL1_SDK_PATH = $sibling
-    }
-}
-
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
 if (-not (Test-Path $vswhere)) {
     throw "vswhere.exe not found. Install Visual Studio Build Tools with the C++ workload."
@@ -41,9 +32,6 @@ foreach ($line in $envLines) {
 }
 
 $cmakeArgs = @("-B", $BuildDir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=$Config", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
-if ($env:RTGL1_SDK_PATH) {
-    $cmakeArgs += "-DRTGL1_SDK_PATH=$env:RTGL1_SDK_PATH"
-}
 
 cmake @cmakeArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

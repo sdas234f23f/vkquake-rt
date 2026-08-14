@@ -1,5 +1,10 @@
 # Changelog
 
+## v3.3.0
+
+### Added
+- **Decoupled from RayTracedGL1.dll (4.7)** — the Q2RTX-style ray-traced renderer is now vendored into the repository (`RTGL1/` folder: source + shaders + KTX/FidelityFX) and built as a static library linked into `vkquake.exe`. No `RayTracedGL1.dll` is required at runtime anymore. The public `RG_*` API is kept as an internal interface (`RG_STATIC`); the `.spv` shaders and blue noise are still loaded from the game data (`ovrd/shaders/`, `ovrd/BlueNoise_LDR_RGBA_128.ktx2`).
+
 ## v3.2.0
 
 ### Added

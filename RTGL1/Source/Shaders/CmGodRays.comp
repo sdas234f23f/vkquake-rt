@@ -1,0 +1,309 @@
+// Volumetric sunlight ("god rays") computed by ray marching through the
+// shadow map. Ported from Quake 2 RTX (god_rays.comp), GPL v2.
+// Runs at HALF render resolution and is bilaterally upscaled to full
+// resolution by CmGodRaysFilter.comp (Q2RTX god_rays_filter.comp).
+
+#version 460
+#extension GL_EXT_samplerless_texture_functions : enable
+
+#define DESC_SET_GOD_RAYS_SHADOW 0
+#define DESC_SET_GOD_RAYS_PARAMS 1
+#define DESC_SET_FRAMEBUFFERS 2
+#define DESC_SET_GLOBAL_UNIFORM 3
+#define DESC_SET_RANDOM 4
+#include "ShaderCommonGLSLFunc.h"
+#include "Random.h"
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// 0 = primary rays, 1 = reflection/refraction rays (Q2RTX god_rays pass_index)
+layout(push_constant, std140) uniform PushConstants
+{
+    uint passIndex;
+} push;
+
+layout(set = DESC_SET_GOD_RAYS_SHADOW, binding = 0) uniform sampler2D texShadowMap;
+
+layout(set = DESC_SET_GOD_RAYS_PARAMS, binding = 0) readonly buffer GodRaysParams_BT
+{
+    vec4 sunDirection;
+    vec4 sunColor;
+    vec4 worldCenter;
+    vec4 worldHalfSizeInv;
+    mat4 shadowMapVP;
+    float shadowMapDepthScale;
+    float godRaysIntensity;
+    float godRaysEccentricity;
+    uint godRaysEnabled;
+    float _padding;
+} godRaysParams;
+
+float GetShadow(vec3 worldPos)
+{
+    vec4 uvz = godRaysParams.shadowMapVP * vec4(worldPos, 1);
+    uvz.x = uvz.x * 0.5 + 0.5;
+    uvz.y = 0.5 - 0.5 * uvz.y;
+
+    float depthOpaque = textureLod(texShadowMap, uvz.xy, 0).x;
+
+    // EXACT Q2RTX comparison (god_rays.comp GetShadow):
+    //   return depthOpaque > uvzShadow.z ? 1 : 0;
+    // The shadow map stores window-space depth while uvz.z is clip-space z in
+    // [0,1] (the ortho projection maps the world box to clip z in [0,1], see
+    // create_orthographic_matrix). Comparing them directly is intentional: the
+    // window-vs-clip mismatch acts as a large built-in toward-sun bias, which
+    // is what keeps sun-facing surfaces from self-shadowing - that is why
+    // Q2RTX needs no explicit depth bias here. Do NOT "fix" this to a
+    // window-consistent comparison ((uvz.z+1)*0.5): it was tried and produces
+    // self-shadowing acne ("fog only past the geometry").
+    return depthOpaque > uvz.z ? 1.0 : 0.0;
+}
+
+const float PI = 3.1415926535;
+
+float ScatterPhase_HenyeyGreenstein(float cosa, float g)
+{
+    // "normalized" Henyey-Greenstein
+    const float g_sqr = g * g;
+    const float num = (1.0 - abs(g));
+    const float denom = sqrt(max(1.0 - 2.0 * g * cosa + g_sqr, 0.0));
+    const float frac = num / denom;
+    const float scale = g_sqr + (1.0 - g_sqr) / (4.0 * PI);
+    return scale * (frac * frac * frac);
+}
+
+float vmin(vec3 v) { return min(v.x, min(v.y, v.z)); }
+float vmax(vec3 v) { return max(v.x, max(v.y, v.z)); }
+
+bool IntersectRayBox(vec3 origin, vec3 direction, vec3 mins, vec3 maxs, out float tIn, out float tOut)
+{
+    vec3 t1 = (mins - origin) / direction;
+    vec3 t2 = (maxs - origin) / direction;
+    tIn = vmax(min(t1, t2));
+    tOut = vmin(max(t1, t2));
+    return tIn < tOut && tOut > 0;
+}
+
+float getDensity(vec3 p)
+{
+    // 1.0 inside the world box, falls off to 0 over 25% of world size outside
+    vec3 bounds = clamp(3.0 - 2.0 * abs((p - godRaysParams.worldCenter.xyz) * godRaysParams.worldHalfSizeInv.xyz), vec3(0), vec3(1));
+    return bounds.x * bounds.y * bounds.z;
+}
+
+float getStep(float t, float density)
+{
+    return max(1.0, mix(20.0, 5.0, density));
+}
+
+void main()
+{
+    const ivec2 pixelPos = ivec2(gl_GlobalInvocationID.xy);
+    // half-resolution pass (Q2RTX): each invocation computes one half-res pixel
+    const ivec2 screenSize = ivec2((globalUniform.renderWidth + 1) / 2, (globalUniform.renderHeight + 1) / 2);
+    if (any(greaterThanEqual(pixelPos, screenSize)))
+        return;
+
+    // DIAGNOSTIC (rt_debugflags 2048): show the whole shadow map stretched to
+    // the screen (grayscale = stored depth). This displays the "picture" the
+    // shadow map actually contains: the level seen from the sun, with holes
+    // where the sun shines through. If this picture is wrong, the shadow map
+    // render is broken; if it is right, the sampling (VP in GetShadow) is.
+    if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_GOD_RAYS) != 0)
+    {
+        if (godRaysParams.godRaysEnabled == 0)
+        {
+            imageStore(framebufGodRays, pixelPos, vec4(0.0, 1.0, 0.0, 0.0));
+            return;
+        }
+        if (getLuminance(godRaysParams.sunColor.rgb) == 0.0)
+        {
+            imageStore(framebufGodRays, pixelPos, vec4(1.0, 1.0, 0.0, 0.0));
+            return;
+        }
+
+        const vec2 mapUv = (vec2(pixelPos) + 0.5) / vec2(screenSize);
+        const float dOpaque = textureLod(texShadowMap, mapUv, 0).x;
+        imageStore(framebufGodRays, pixelPos, vec4(dOpaque * 0.25, dOpaque * 0.25, dOpaque * 0.25, 0.0));
+        return;
+    }
+
+    if (godRaysParams.godRaysEnabled == 0)
+    {
+        if (push.passIndex == 0)
+        {
+            imageStore(framebufGodRays, pixelPos, vec4(0));
+        }
+        return;
+    }
+
+    if (getLuminance(godRaysParams.sunColor.rgb) == 0.0)
+    {
+        if (push.passIndex == 0)
+        {
+            imageStore(framebufGodRays, pixelPos, vec4(0));
+        }
+        return;
+    }
+
+    // surface data for this pixel (checkerboard storage). Half-res pass
+    // (Q2RTX): pick the matching full-res sub-pixel of this half-res pixel
+    // with the rotated grid offset (Q2RTX GetRotatedGridOffset).
+    const ivec2 fullResPix = pixelPos * 2 + ivec2(pixelPos.y & 1, 1 - (pixelPos.x & 1));
+    const ivec2 cbPix = getCheckerboardPix(fullResPix);
+
+    // Reflection pass (passIndex != 0): only process pixels whose surface is a
+    // reflected/refracted ray (Q2ViewDepth < 0). Other pixels keep the result
+    // of the primary pass.
+    if (push.passIndex != 0)
+    {
+        const float q2Depth = texelFetch(framebufQ2ViewDepth_Sampler, cbPix, 0).x;
+        if (q2Depth >= 0.0)
+        {
+            return;
+        }
+    }
+
+    const vec3 surfacePos = texelFetch(framebufSurfacePosition_Sampler, cbPix, 0).xyz;
+    const vec3 direction  = texelFetch(framebufViewDirection_Sampler, cbPix, 0).xyz;
+    const vec3 throughput = texelFetch(framebufThroughput_Sampler, cbPix, 0).xyz;
+
+    // In the reflection pass the march follows the reflected segment only,
+    // starting at the reflection point (surfacePos - direction * segmentLen);
+    // the segment length is stored by the refl pass in Q2GodRaysThroughputDist.w.
+    float rayDistance;
+    if (push.passIndex != 0)
+    {
+        rayDistance = texelFetch(framebufQ2GodRaysThroughputDist_Sampler, cbPix, 0).w;
+    }
+    else
+    {
+        rayDistance = texelFetch(framebufDepthWorld_Sampler, cbPix, 0).x;
+    }
+
+    // Q2RTX marches sky pixels too, so the sun shafts are visible in the sky
+    // around the sun (the camera ray crosses the world box). On the legacy path
+    // the sky stays empty - there the legacy screen-space volumetric renders
+    // the sky shafts. For sky pixels the stored surface position is invalid,
+    // so the march starts from the camera.
+    const bool isSky = rayDistance > MAX_RAY_LENGTH;
+    if (isSky && globalUniform.coreQ2RTX == 0)
+    {
+        if (push.passIndex == 0)
+        {
+            imageStore(framebufGodRays, pixelPos, vec4(0));
+        }
+        return;
+    }
+
+    // start marching from where the ray enters the world box
+    const vec3 originalPos = isSky ? globalUniform.cameraPosition.xyz
+                                   : surfacePos - direction * rayDistance;
+
+    // Medium the camera is in (Q2RTX reads the surface material's medium; for
+    // the primary segment the camera medium is the physically correct one).
+    // In media the phase becomes more isotropic and the light is extinguished.
+    const uint medium = globalUniform.cameraMediaType;
+
+    // godRaysParams.sunDirection points TOWARD the sun (Q2RTX convention)
+    const float cosa = dot(direction, godRaysParams.sunDirection.xyz);
+    const float eccentricity = (medium == MEDIA_TYPE_VACUUM)
+        ? godRaysParams.godRaysEccentricity
+        : 0.5;
+    const float phase = ScatterPhase_HenyeyGreenstein(cosa, eccentricity);
+
+    float offset = 0.0;
+    float tIn, tOut;
+    const vec3 halfSize = 1.0 / godRaysParams.worldHalfSizeInv.xyz;
+    // Q2RTX marches a box of world_center +/- world_size*0.75 =
+    // +/- halfSize*1.5, which matches the getDensity falloff edge (density
+    // reaches 0 at |p-center| == 1.5*halfSize). The previous +/- 0.75*halfSize
+    // box was half the size and culled the density falloff region.
+    const vec3 boxMins = godRaysParams.worldCenter.xyz - halfSize * 1.5;
+    const vec3 boxMaxs = godRaysParams.worldCenter.xyz + halfSize * 1.5;
+
+    if (IntersectRayBox(originalPos, direction, boxMins, boxMaxs, tIn, tOut))
+    {
+        if (tIn > rayDistance)
+        {
+            // Q2RTX clears in both passes: a reflection whose segment misses
+            // the world box shows no god rays at all
+            imageStore(framebufGodRays, pixelPos, vec4(0));
+            return;
+        }
+
+        offset = max(tIn, offset);
+        rayDistance = min(tOut, rayDistance);
+    }
+    else
+    {
+        imageStore(framebufGodRays, pixelPos, vec4(0));
+        return;
+    }
+
+    vec3 currentPos = originalPos + direction * offset;
+    float density = getDensity(currentPos);
+
+    // extinction factors along the segment (Q2RTX get_extinction_factors)
+    vec3 extinctionFactors = vec3(0.0001);
+    if (medium == MEDIA_TYPE_WATER)
+    {
+        extinctionFactors = -log(max(globalUniform.waterColorAndDensity.rgb, vec3(1e-6)));
+    }
+    else if (medium == MEDIA_TYPE_ACID)
+    {
+        extinctionFactors = -log(max(globalUniform.acidColorAndDensity.rgb, vec3(1e-6)));
+        extinctionFactors *= max(1.0, sqrt(globalUniform.acidColorAndDensity.a));
+    }
+    // MEDIA_TYPE_GLASS: transparent, keep the vacuum extinction
+
+    vec3 through = throughput;
+    vec3 inscatter = vec3(0);
+
+    // randomize the first step to break banding
+    const uint seed = getRandomSeed(pixelPos, globalUniform.frameId);
+    const float rnd = rndBlueNoise8(seed, 0).x;
+    offset += getStep(offset, density) * (rnd - 1.0);
+
+    while (true)
+    {
+        density = getDensity(currentPos);
+        const float stepLength = getStep(offset, density);
+
+        offset += stepLength;
+        if (offset >= rayDistance)
+            break;
+
+        currentPos = originalPos + direction * offset;
+
+        // EXACT Q2RTX bias (god_rays.comp):
+        //   const vec3 shadowBias = -global_ubo.sun_direction * 20;
+        // i.e. the sample is moved 20 units AWAY from the sun. sunDirection
+        // here points TOWARD the sun (same convention as Q2RTX).
+        const vec3 shadowBias = -godRaysParams.sunDirection.xyz * 20.0;
+        const float shadow = GetShadow(currentPos + shadowBias);
+
+        const vec3 differentialInscatter = (shadow * phase * stepLength * density) * through;
+        inscatter += differentialInscatter;
+        through *= exp(-(stepLength * density) * extinctionFactors);
+    }
+
+    vec3 inscatterColor = inscatter * godRaysParams.sunColor.rgb * godRaysParams.godRaysIntensity * 0.0001;
+
+    // underwater the volumetric sunlight is much denser (Q2RTX pt_water_density)
+    if (medium == MEDIA_TYPE_WATER)
+    {
+        inscatterColor *= globalUniform.waterColorAndDensity.a * 30.0;
+    }
+
+    if (push.passIndex != 0)
+    {
+        // accumulate the reflected-segment god rays on top of the primary result
+        const vec3 prevColor = imageLoad(framebufGodRays, pixelPos).rgb;
+        imageStore(framebufGodRays, pixelPos, vec4(inscatterColor + prevColor, 0));
+    }
+    else
+    {
+        imageStore(framebufGodRays, pixelPos, vec4(inscatterColor, 0));
+    }
+}

@@ -1,0 +1,200 @@
+// Copyright (c) 2020-2021 Sultim Tsyrendashiev
+// 
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+// 
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+// 
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
+// Ported from Q2RTX (GPL v2) shader/asvgf_lf.comp.
+
+#version 460
+
+// A-trous wavelet filter for the LF (indirect diffuse) channel, computed at
+// 1/3 resolution. A simple depth/normal-guided bilateral blur over the SH data.
+
+#define DESC_SET_FRAMEBUFFERS 0
+#define DESC_SET_GLOBAL_UNIFORM 1
+#include "ShaderCommonGLSLFunc.h"
+#include "Q2Asvgf.h"
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant, std140) uniform IterationInfo
+{
+    uint iteration;
+} push;
+
+Q2SH q2LoadSH(sampler2D img_shY, sampler2D img_CoCg, ivec2 p)
+{
+    Q2SH r;
+    r.shY = texelFetch(img_shY, p, 0);
+    r.CoCg = texelFetch(img_CoCg, p, 0).xy;
+    return r;
+}
+
+void
+filter_image(
+    sampler2D img_lf_shY,
+    sampler2D img_lf_CoCg,
+    out Q2SH filtered_lf)
+{
+    ivec2 ipos_lowres = ivec2(gl_GlobalInvocationID);
+    ivec2 ipos_hires = ipos_lowres * Q2_GRAD_DWN + ivec2(1);
+
+    // Load the color of the target low-res pixel
+    Q2SH color_center_lf = q2LoadSH(img_lf_shY, img_lf_CoCg, ipos_lowres);
+
+    if(Q2_ATROUS_ITERATIONS_LF <= push.iteration)
+    {
+        filtered_lf = color_center_lf;
+        return;
+    }
+
+    // Load the parameters of the anchor pixel
+    vec3 geo_normal_center = texelFetchNormalGeometry(ipos_hires);
+    float depth_center = texelFetch(framebufQ2ViewDepth_Sampler, ipos_hires, 0).r;
+    float fwidth_depth = texelFetch(framebufDepthGrad_Sampler, ipos_hires, 0).r;
+
+    const int step_size = int(1u << (push.iteration - 1));
+
+    Q2SH sum_color_lf = color_center_lf;
+
+    float sum_w_lf = 1.0;
+
+    // Boundaries for the checkerboard field, either left or right half of the screen
+    const int width = int(globalUniform.renderWidth);
+    const int height = int(globalUniform.renderHeight);
+    int field_left = 0;
+    int field_right = width / 2;
+    if(ipos_hires.x >= field_right)
+    {
+        field_left = field_right;
+        field_right = width;
+    }
+
+    // Compute the weighted average of color from a sparse 3x3 pattern around the target pixel
+    const int r = 1;
+    for(int yy = -r; yy <= r; yy++)
+    {
+        for(int xx = -r; xx <= r; xx++)
+        {
+            ivec2 p_lowres = ipos_lowres + ivec2(xx, yy) * step_size;
+            ivec2 p_hires = p_lowres * Q2_GRAD_DWN + ivec2(1);
+
+            if(xx == 0 && yy == 0)
+                continue;
+
+            float w = float(all(greaterThanEqual(p_hires, ivec2(field_left, 0)))
+                    && all(lessThan(p_hires, ivec2(field_right, height))));
+
+            // Use geometric normals so that we can blur over larger areas.
+            // The lighting detail will be partially preserved by spherical harmonics.
+            vec3 geo_normal = texelFetchNormalGeometry(p_hires);
+
+            float depth = texelFetch(framebufQ2ViewDepth_Sampler, p_hires, 0).r;
+
+            float dist_z = abs(depth_center - depth) * fwidth_depth * Q2_FLT_ATROUS_DEPTH;
+            w *= exp(-dist_z / float(step_size * Q2_GRAD_DWN));
+            w *= Q2_WAVELET_KERNEL[abs(xx)][abs(yy)];
+
+            float w_lf = w;
+
+            if(Q2_FLT_ATROUS_NORMAL_LF > 0)
+            {
+                float GNdotGN = max(0.0, dot(geo_normal_center, geo_normal));
+                w_lf *= pow(GNdotGN, Q2_FLT_ATROUS_NORMAL_LF);
+            }
+
+            Q2SH c_lf = q2LoadSH(img_lf_shY, img_lf_CoCg, p_lowres);
+
+            // The last iteration has a filter footprint big enough to step over obstacles
+            // and produce noticeable light leaking. Prevent that by throwing away samples
+            // that are too bright.
+            if(push.iteration == 3)
+                w_lf *= clamp(1.5 - c_lf.shY.w / color_center_lf.shY.w * 0.25, 0, 1);
+
+            q2AccumulateSH(sum_color_lf, c_lf, w_lf);
+            sum_w_lf += w_lf;
+        }
+    }
+
+    filtered_lf.shY = sum_color_lf.shY / sum_w_lf;
+    filtered_lf.CoCg = sum_color_lf.CoCg / sum_w_lf;
+}
+
+void deflicker_image(
+    sampler2D img_lf_shY,
+    sampler2D img_lf_CoCg,
+    out Q2SH filtered_lf)
+{
+    ivec2 ipos_lowres = ivec2(gl_GlobalInvocationID);
+    Q2SH color_center_lf = q2LoadSH(img_lf_shY, img_lf_CoCg, ipos_lowres);
+
+    Q2SH sum_color_lf = q2InitSH();
+
+    const int r = 1;
+    const float num_pixels = square(float(r * 2 + 1)) - 1.0;
+
+    for(int yy = -r; yy <= r; yy++)
+    {
+        for(int xx = -r; xx <= r; xx++)
+        {
+            ivec2 p_lowres = ipos_lowres + ivec2(xx, yy);
+
+            if(xx == 0 && yy == 0)
+                continue;
+
+            Q2SH c_lf = q2LoadSH(img_lf_shY, img_lf_CoCg, p_lowres);
+            q2AccumulateSH(sum_color_lf, c_lf, 1.0);
+        }
+    }
+
+    float max_lum = sum_color_lf.shY.w * Q2_FLT_ATROUS_DEFLICKER_LF / num_pixels;
+    if(color_center_lf.shY.w > max_lum)
+    {
+        float ratio = max_lum / color_center_lf.shY.w;
+        color_center_lf.shY *= ratio;
+        color_center_lf.CoCg *= ratio;
+    }
+
+    filtered_lf = color_center_lf;
+}
+
+void
+main()
+{
+    ivec2 ipos = ivec2(gl_GlobalInvocationID);
+    if(any(greaterThanEqual(ipos * Q2_GRAD_DWN, ivec2(globalUniform.renderWidth, globalUniform.renderHeight))))
+        return;
+
+    Q2SH filtered_lf;
+
+    switch(push.iteration)
+    {
+    case 0: deflicker_image(framebufQ2AtrousPingLF_SH_Sampler, framebufQ2AtrousPingLF_COCG_Sampler, filtered_lf); break;
+    case 1: filter_image(framebufQ2AtrousPongLF_SH_Sampler, framebufQ2AtrousPongLF_COCG_Sampler, filtered_lf); break;
+    case 2: filter_image(framebufQ2AtrousPingLF_SH_Sampler, framebufQ2AtrousPingLF_COCG_Sampler, filtered_lf); break;
+    case 3: filter_image(framebufQ2AtrousPongLF_SH_Sampler, framebufQ2AtrousPongLF_COCG_Sampler, filtered_lf); break;
+    }
+
+    switch(push.iteration)
+    {
+    case 0: Q2_STORE_SH(framebufQ2AtrousPongLF_SH, framebufQ2AtrousPongLF_COCG, ipos, filtered_lf); break;
+    case 1: Q2_STORE_SH(framebufQ2AtrousPingLF_SH, framebufQ2AtrousPingLF_COCG, ipos, filtered_lf); break;
+    case 2: Q2_STORE_SH(framebufQ2AtrousPongLF_SH, framebufQ2AtrousPongLF_COCG, ipos, filtered_lf); break;
+    case 3: Q2_STORE_SH(framebufQ2AtrousPingLF_SH, framebufQ2AtrousPingLF_COCG, ipos, filtered_lf); break;
+    }
+}

@@ -1,0 +1,243 @@
+// Copyright (c) 2021 Sultim Tsyrendashiev
+// 
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+// 
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+// 
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+#version 460
+
+#extension GL_EXT_control_flow_attributes : require
+
+#define DESC_SET_FRAMEBUFFERS 0
+#define DESC_SET_GLOBAL_UNIFORM 1
+#define DESC_SET_TONEMAPPING 2
+#define TONEMAPPING_BUFFER_WRITEABLE
+#include "ShaderCommonGLSLFunc.h"
+#include "TonemappingUtils.glsl"
+
+// 128x1x1 dispatch, one invocation per histogram bin.
+layout(local_size_x = COMPUTE_LUM_HISTOGRAM_BIN_COUNT, local_size_y = 1, local_size_z = 1) in;
+
+// Q2RTX-style noise-aware tone curve + auto-exposure computation.
+// Ported from Quake 2 RTX (tone_mapping_curve.comp), GPL v2.
+
+shared float s_Shared[HISTOGRAM_BINS];
+
+// Shared-memory reductions keyed towards HISTOGRAM_BINS x 1 x 1 dispatches.
+
+float computeSharedSum(float val, const uint linear_idx)
+{
+    s_Shared[linear_idx] = val;
+    barrier();
+    for (uint k = 64; k >= 1; k /= 2)
+    {
+        if (linear_idx < k)
+        {
+            s_Shared[linear_idx] += s_Shared[linear_idx + k];
+        }
+        barrier();
+    }
+    val = s_Shared[0];
+    barrier();
+    return val;
+}
+
+float computeSharedMax(float val, const uint linear_idx)
+{
+    s_Shared[linear_idx] = val;
+    barrier();
+    for (uint k = 64; k >= 1; k /= 2)
+    {
+        if (linear_idx < k)
+        {
+            s_Shared[linear_idx] = max(s_Shared[linear_idx], s_Shared[linear_idx + k]);
+        }
+        barrier();
+    }
+    val = s_Shared[0];
+    barrier();
+    return val;
+}
+
+float computePrefixSum(float val, const uint linear_idx)
+{
+    s_Shared[linear_idx] = val;
+    barrier();
+    for (uint k = 1; k < 128; k *= 2)
+    {
+        const uint block_idx = linear_idx / k;
+        if ((block_idx % 2) == 1)
+        {
+            s_Shared[linear_idx] += s_Shared[k * block_idx - 1];
+        }
+        barrier();
+    }
+    val = s_Shared[linear_idx];
+    barrier();
+    return val;
+}
+
+void main()
+{
+    const ivec2 ipos = ivec2(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(ipos, ivec2(globalUniform.renderWidth, globalUniform.renderHeight))))
+        return;
+
+    const int linear_idx = int(gl_LocalInvocationIndex);
+
+    // Read histogram and normalize. Add bias to avoid an all-zero histogram.
+    float original_hist = 1.0 + float(tonemapping.histogram[linear_idx]) / FIXED_POINT_FRAC_MULTIPLIER;
+    const float hist_sum = computeSharedSum(original_hist, linear_idx);
+    const float hist_max = computeSharedMax(original_hist, linear_idx);
+
+    tonemapping.normalized[linear_idx] = original_hist / hist_max;
+
+    original_hist /= hist_sum;
+
+    // Log luminance of the bin this invocation is processing.
+    const float bin_log_luminance = (float(linear_idx) / float(HISTOGRAM_BINS)) * (max_log_luminance - min_log_luminance) + min_log_luminance;
+
+    // CDF-based estimate of the scene luminance (for eye adaptation).
+    const float histogram_cdf = computePrefixSum(original_hist, linear_idx);
+    const float histogram_cdf_prev = histogram_cdf - original_hist;
+
+    const float lower_limit = tonemapping.tmLowPercentile * 0.01;
+    const float upper_limit = tonemapping.tmHighPercentile * 0.01;
+
+    float weight_sum = 0.0;
+    float bin_sum = 0.0;
+
+    if ((lower_limit <= histogram_cdf) && (histogram_cdf_prev <= upper_limit))
+    {
+        weight_sum = bin_log_luminance * original_hist;
+        bin_sum = original_hist;
+    }
+
+    weight_sum = computeSharedSum(weight_sum, linear_idx);
+    bin_sum = computeSharedSum(bin_sum, linear_idx);
+
+    float log_target_lum = weight_sum / max(0.0001, bin_sum);
+    log_target_lum = clamp(log_target_lum, log2(tonemapping.tmMinLuminance), log2(tonemapping.tmMaxLuminance));
+
+    // Blend the luminance estimate over time (eye adaptation).
+    if (tonemapping.resetCurve == 0)
+    {
+        float log_old_lum = tonemapping.adaptedLuminance;
+        if (log_old_lum > 0.0)
+        {
+            log_old_lum = log2(log_old_lum);
+        }
+
+        const float speed = (log_old_lum < log_target_lum) ? tonemapping.tmExposureSpeedUp : tonemapping.tmExposureSpeedDown;
+        log_target_lum = mix(log_target_lum, log_old_lum, exp(-tonemapping.frameTime * speed));
+    }
+
+    if (linear_idx == 0)
+    {
+        const float adapted_luminance = exp2(log_target_lum);
+        tonemapping.adaptedLuminance = adapted_luminance;
+        // keep legacy field in sync (used by Exposure.h / RsWorld.frag)
+        tonemapping.avgLuminance = adapted_luminance;
+    }
+
+    // Noise-aware tone mapping curve (Eilertsen, Mantiuk, Unger + NVIDIA mods).
+
+    if (bin_log_luminance < tonemapping.tmNoiseStops)
+        original_hist = 0;
+
+    // Dynamic range of the display in log2 stops.
+    const float r = tonemapping.tmDynRangeStops;
+    const float delta = float(max_log_luminance - min_log_luminance) / HISTOGRAM_BINS;
+    const float r_over_delta = r / delta;
+
+    // Threshold so that slopes are never negative (iterative method, eqn. 17).
+    float rcp_hist = (original_hist > 0.0 ? 1.0 / original_hist : 0.0);
+    float thresh = 1e-16;
+    float sum_recip;
+    float len_omega;
+    float thresh_passed;
+    for (uint i = 0; i < 16; ++i)
+    {
+        thresh_passed = step(thresh, original_hist);
+        len_omega = computeSharedSum(thresh_passed, linear_idx);
+        sum_recip = computeSharedSum(rcp_hist * thresh_passed, linear_idx);
+        thresh = (len_omega - r_over_delta) / sum_recip;
+    }
+
+    // Slopes from Equation (14).
+    thresh_passed = step(thresh, original_hist);
+    len_omega = computeSharedSum(thresh_passed, linear_idx);
+    sum_recip = computeSharedSum(rcp_hist * thresh_passed, linear_idx);
+    float my_slope = (1.0 + rcp_hist * (r_over_delta - len_omega) / sum_recip) * thresh_passed;
+
+    // Blur slopes with a symmetric Gaussian kernel (14 half-weights from sigma).
+    float gaussian_sum = 0.0;
+    float weights[14];
+    for (int i = 0; i < 14; i++)
+    {
+        const float kernel_value = exp(-float(i * i) / (2.0 * tonemapping.tmSlopeBlurSigma * tonemapping.tmSlopeBlurSigma));
+        gaussian_sum += kernel_value * (i == 0 ? 1.0 : 2.0);
+        weights[i] = kernel_value;
+    }
+    for (int i = 0; i < 14; i++)
+    {
+        weights[i] /= gaussian_sum;
+    }
+
+    s_Shared[linear_idx] = my_slope;
+    barrier();
+    my_slope *= weights[0];
+    for (int dx = -13; dx <= 13; dx++)
+    {
+        if (dx != 0)
+        {
+            my_slope += weights[abs(dx)] * s_Shared[clamp(linear_idx + dx, 0, HISTOGRAM_BINS - 1)];
+        }
+    }
+
+    // Turn slopes into an inclusive prefix sum, then an exclusive, scaled one.
+    float my_tonecurve = computePrefixSum(my_slope, linear_idx);
+    my_tonecurve = (my_tonecurve - my_slope) * delta - r;
+
+    // Interpolate values below tm_noise_stops toward the auto-exposure value.
+    const float noise_stop_bin = clamp((tonemapping.tmNoiseStops * log_luminance_scale + log_luminance_bias) * HISTOGRAM_BINS, 0.0, HISTOGRAM_BINS - 1.0);
+    if (linear_idx < noise_stop_bin)
+    {
+        // s_Shared still holds the prefix sums from computePrefixSum()
+        const float my_tonecurve_at_ns = s_Shared[int(noise_stop_bin) - 1] * delta - r;
+        const float bin_log_luminance_at_ns = (float(noise_stop_bin - 1) / float(HISTOGRAM_BINS)) * (max_log_luminance - min_log_luminance) + min_log_luminance;
+        const float fudge = -(my_tonecurve_at_ns - bin_log_luminance_at_ns) / log_target_lum;
+
+        const float tone_curve_ae = bin_log_luminance - log_target_lum * fudge;
+        my_tonecurve = mix(tone_curve_ae, my_tonecurve, mix(smoothstep(0.5 * noise_stop_bin, noise_stop_bin, linear_idx), 1.0, tonemapping.tmNoiseBlend));
+    }
+
+    // Blend the curve over time (eye adaptation).
+    if (tonemapping.resetCurve == 0)
+    {
+        const float my_old_tonecurve = tonemapping.curve[linear_idx];
+
+        const float blend_speed = (my_old_tonecurve < my_tonecurve) ? tonemapping.tmExposureSpeedUp : tonemapping.tmExposureSpeedDown;
+
+        my_tonecurve = mix(my_tonecurve, my_old_tonecurve, exp(-tonemapping.frameTime * blend_speed));
+    }
+
+    tonemapping.curve[linear_idx] = my_tonecurve;
+
+    // Clear the histogram accumulator for the next frame.
+    tonemapping.histogram[linear_idx] = 0;
+}
