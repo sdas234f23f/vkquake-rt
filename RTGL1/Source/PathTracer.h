@@ -73,7 +73,6 @@ public:
                       const Volumetric*                volumetric );
     
     void TracePrimaryRays(const TraceParams &params);
-    void TraceReflectionRefractionRays(const TraceParams &params);
     // Q2RTX-style reflection/refraction pass (separate raygen), used on the
     // Q2 core path (phase 4.4.3).
     void TraceQ2ReflectionRefractionRays(const TraceParams &params);
@@ -81,7 +80,6 @@ public:
     void TraceDirectllumination(const TraceParams &params);
     void CalculateGradientsSamples(const TraceParams &params);
     void TraceIndirectllumination(const TraceParams &params);
-    void TraceVolumetric( const TraceParams& params );
 
 private:
     void TraceRays(

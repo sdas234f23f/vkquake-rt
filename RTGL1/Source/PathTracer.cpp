@@ -130,31 +130,6 @@ void PathTracer::TracePrimaryRays(const TraceParams &params)
     TraceRays(params.cmd, SBT_INDEX_RAYGEN_PRIMARY, params.width, params.height);
 }
 
-void PathTracer::TraceReflectionRefractionRays(const TraceParams &params)
-{
-    CmdLabel label(params.cmd, "Reflection/refraction rays");
-
-    typedef FramebufferImageIndex FI;
-    FI fs[] =
-    {
-        FI::FB_IMAGE_INDEX_ALBEDO,
-        FI::FB_IMAGE_INDEX_NORMAL,
-        FI::FB_IMAGE_INDEX_NORMAL_GEOMETRY,
-        FI::FB_IMAGE_INDEX_METALLIC_ROUGHNESS,
-        FI::FB_IMAGE_INDEX_DEPTH_WORLD,
-        FI::FB_IMAGE_INDEX_MOTION,
-        FI::FB_IMAGE_INDEX_SURFACE_POSITION,
-        FI::FB_IMAGE_INDEX_VISIBILITY_BUFFER,
-        FI::FB_IMAGE_INDEX_VIEW_DIRECTION,
-        FI::FB_IMAGE_INDEX_THROUGHPUT,
-        FI::FB_IMAGE_INDEX_PRIMARY_TO_REFL_REFR,
-    };
-    params.framebuffers->BarrierMultiple(params.cmd, params.frameIndex, fs);
-
-
-    TraceRays(params.cmd, SBT_INDEX_RAYGEN_REFL_REFR, params.width, params.height);
-}
-
 void PathTracer::TraceQ2ReflectionRefractionRays(const TraceParams &params)
 {
     CmdLabel label(params.cmd, "Q2 Reflection/refraction rays");
@@ -274,15 +249,4 @@ void PathTracer::TraceIndirectllumination(const TraceParams &params)
 
         TraceRays( params.cmd, SBT_INDEX_RAYGEN_INDIRECT_FINAL, params.width, params.height );
     }
-}
-
-void PathTracer::TraceVolumetric( const TraceParams& params )
-{
-    CmdLabel label( params.cmd, "Volumetric illumination" );
-
-    TraceRays( params.cmd,
-               SBT_INDEX_RAYGEN_VOLUMETRIC,
-               VOLUMETRIC_SIZE_X,
-               VOLUMETRIC_SIZE_Y,
-               VOLUMETRIC_SIZE_Z );
 }

@@ -58,7 +58,6 @@ set(RTGL1_SOURCES
     Source/CubemapUploader.cpp
     Source/GeomInfoManager.cpp
     Source/VertexPreprocessing.cpp
-    Source/Denoiser.cpp
     Source/RasterizerPipelines.cpp
     Source/RenderCubemap.cpp
     Source/DepthCopying.cpp

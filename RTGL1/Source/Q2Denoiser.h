@@ -20,7 +20,11 @@
 
 #pragma once
 
-#include "Denoiser.h"
+#include "ASManager.h"
+#include "Framebuffers.h"
+#include "GlobalUniform.h"
+#include "IShaderDependency.h"
+#include "ShaderManager.h"
 
 namespace RTGL1
 {

@@ -250,14 +250,7 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
         framebuffers,
         shaderManager);
 
-    denoiser            = std::make_shared<Denoiser>(
-        device,
-        framebuffers,
-        shaderManager,
-        uniform,
-        scene->GetASManager());
-
-    // new Q2RTX-style core path denoiser (full ASVGF + interleave)
+    // Q2RTX-style core path denoiser (full ASVGF + interleave)
     q2Denoiser          = std::make_shared<Q2Denoiser>(
         device,
         framebuffers,
@@ -287,7 +280,6 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
 #undef SIMPLE_EFFECT_CONSTRUCTOR_PARAMS
 
 
-    shaderManager->Subscribe(denoiser);
     shaderManager->Subscribe(q2Denoiser);
     shaderManager->Subscribe(imageComposition);
     shaderManager->Subscribe(rasterizer);
@@ -345,7 +337,6 @@ VulkanDevice::~VulkanDevice()
     effectColorTint.reset();
     effectCrtDemodulateEncode.reset();
     effectCrtDecode.reset();
-    denoiser.reset();
     uniform.reset();
     scene.reset();
     shaderManager.reset();
