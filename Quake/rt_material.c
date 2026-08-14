@@ -42,6 +42,7 @@ static qboolean rt_initialized = false;
 static cmd_function_t *rt_mat_cmd = NULL;
 
 static cvar_t rt_materials = { "rt_materials", "1", CVAR_ARCHIVE };
+cvar_t rt_mat_debug = { "rt_mat_debug", "0", 0 };
 
 // ---------------------------------------------------------------------------
 // tiny TGA decoder (type 2 uncompressed / type 10 RLE, 24/32-bit) from memory
@@ -569,6 +570,7 @@ void RT_MAT_Init(void)
     rt_initialized = true;
 
     Cvar_RegisterVariable(&rt_materials);
+    Cvar_RegisterVariable(&rt_mat_debug);
 
     rt_global_count = 0;
     rt_map_count = 0;
@@ -619,11 +621,39 @@ void RT_MAT_ChangeMap(const char *mapname)
     rt_mat_load_cb(name, &ctx);
 }
 
+// World textures loaded from the BSP (no external HD file) get a name like
+// "maps/e1m1.bsp:*lava1" or "maps/e1m1.bsp:e1u1/foo". Convert them to the
+// "textures/..." convention used by .mat files (warp '*' becomes '#').
+static void rt_mat_normalize_name(const char *name, char *out, size_t outsize)
+{
+    q_strlcpy(out, name, outsize);
+
+    // find ".bsp" anywhere in the path; everything after the first ':' that
+    // follows it is the BSP texture name (may contain sub-dirs, e.g.
+    // "maps/e1m1.bsp:e1u1/foo")
+    char *bsp = strstr(out, ".bsp");
+    if (bsp)
+    {
+        char *colon = strchr(bsp, ':');
+        if (colon)
+        {
+            char texname[MAX_QPATH];
+            q_strlcpy(texname, colon + 1, sizeof(texname));
+            if (texname[0] == '*')
+            {
+                texname[0] = '#'; // warp textures use '#'
+            }
+            q_snprintf(out, outsize, "textures/%s", texname);
+        }
+    }
+
+    q_strlwr(out);
+}
+
 static rt_material_t *rt_mat_find_in(const char *name, rt_material_t *first, int count)
 {
     char n[MAX_QPATH];
-    q_strlcpy(n, name, sizeof(n));
-    q_strlwr(n);
+    rt_mat_normalize_name(name, n, sizeof(n));
     // strip a trailing file extension, but only if it is really at the end:
     // model skin names like "progs/armor.mdl:frame0" must stay intact
     char *dot = strrchr(n, '.');
@@ -638,9 +668,20 @@ static rt_material_t *rt_mat_find_in(const char *name, rt_material_t *first, int
         {
             if (!strcmp(first[i].name, n))
             {
+                if (CVAR_TO_BOOL (rt_mat_debug))
+                {
+                    Con_Printf("RT: material lookup '%s' -> '%s' FOUND (emissive=%s gloss=%s)\n",
+                               name, n,
+                               first[i].filename_emissive[0] ? first[i].filename_emissive : "-",
+                               first[i].filename_gloss[0] ? first[i].filename_gloss : "-");
+                }
                 return &first[i];
             }
         }
+    }
+    if (CVAR_TO_BOOL (rt_mat_debug))
+    {
+        Con_Printf("RT: material lookup '%s' -> '%s' NOT FOUND\n", name, n);
     }
     return NULL;
 }
@@ -706,8 +747,7 @@ qboolean RT_MAT_AutoDetect(const char *name, rt_material_t *out)
     }
 
     rt_mat_reset(out);
-    q_strlcpy(out->name, name, sizeof(out->name));
-    q_strlwr(out->name);
+    rt_mat_normalize_name(name, out->name, sizeof(out->name));
     char *dot = strrchr(out->name, '.');
     if (dot && !strchr(dot, ':'))
     {

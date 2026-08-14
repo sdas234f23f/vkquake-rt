@@ -461,8 +461,32 @@ static inline uint32_t RT_PackColorToUint32_FromFloat01(float r, float g, float 
 	do                                                                              \
 	{                                                                               \
 		extern cvar_t rt_globallight_mult;                                          \
+		extern cvar_t rt_brightness;                                                \
+		extern cvar_t rt_light_color_r, rt_light_color_g, rt_light_color_b;         \
 		float         area = (witharea) ? RT_QUAKE_LIGHT_AREA_INTENSITY_FIX : 1.0f; \
-		VectorScale ((color), CVAR_TO_FLOAT (rt_globallight_mult) * area, (color)); \
+		float         base = CVAR_TO_FLOAT (rt_globallight_mult) * area * CVAR_TO_FLOAT (rt_brightness); \
+		(color)[0] *= base * (CLAMP (0, CVAR_TO_INT32 (rt_light_color_r), 255) / 255.0f); \
+		(color)[1] *= base * (CLAMP (0, CVAR_TO_INT32 (rt_light_color_g), 255) / 255.0f); \
+		(color)[2] *= base * (CLAMP (0, CVAR_TO_INT32 (rt_light_color_b), 255) / 255.0f); \
+	} while (0)
+// RGB tint applied to every light source (sun, dynamic, world, ambient).
+// rt_brightness is handled separately where scalar scaling is enough.
+#define RT_APPLY_LIGHT_TINT(color)                                              \
+	do                                                                          \
+	{                                                                           \
+		extern cvar_t rt_light_color_r, rt_light_color_g, rt_light_color_b;     \
+		(color)[0] *= CLAMP (0, CVAR_TO_INT32 (rt_light_color_r), 255) / 255.0f; \
+		(color)[1] *= CLAMP (0, CVAR_TO_INT32 (rt_light_color_g), 255) / 255.0f; \
+		(color)[2] *= CLAMP (0, CVAR_TO_INT32 (rt_light_color_b), 255) / 255.0f; \
+	} while (0)
+// RGB tint applied to the sky display color (independent from the sun light).
+#define RT_APPLY_SKY_COLOR(color)                                              \
+	do                                                                         \
+	{                                                                          \
+		extern cvar_t rt_sky_color_r, rt_sky_color_g, rt_sky_color_b;          \
+		(color)[0] *= CLAMP (0, CVAR_TO_INT32 (rt_sky_color_r), 255) / 255.0f; \
+		(color)[1] *= CLAMP (0, CVAR_TO_INT32 (rt_sky_color_g), 255) / 255.0f; \
+		(color)[2] *= CLAMP (0, CVAR_TO_INT32 (rt_sky_color_b), 255) / 255.0f; \
 	} while (0)
 #define RT_INIT_DEFAULT_LIGHT_COLOR(color)                                      \
 	do                                                                          \

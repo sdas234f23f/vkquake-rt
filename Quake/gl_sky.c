@@ -631,6 +631,19 @@ void Sky_ClipPoly (int nump, vec3_t vecs, int stage)
 
 #endif // RT_SKY_CULLING
 
+// 4.6: sky display tint = rt_sky_color_* * rt_sky_brightness * rt_brightness.
+// Applied to every sky rendering path (sky polys, skybox, cloud layers) so
+// the primary sky (sampled straight from the render cubemap) can be tinted
+// or blackened without affecting the sun light (rt_sky_light_*).
+static void RT_GetSkyTintColor (float color[3])
+{
+	extern cvar_t rt_sky_color_r, rt_sky_color_g, rt_sky_color_b, rt_sky_brightness, rt_brightness;
+	const float mult = CVAR_TO_FLOAT (rt_sky_brightness) * CVAR_TO_FLOAT (rt_brightness);
+	color[0] = mult * (CLAMP (0, CVAR_TO_INT32 (rt_sky_color_r), 255) / 255.0f);
+	color[1] = mult * (CLAMP (0, CVAR_TO_INT32 (rt_sky_color_g), 255) / 255.0f);
+	color[2] = mult * (CLAMP (0, CVAR_TO_INT32 (rt_sky_color_b), 255) / 255.0f);
+}
+
 /*
 ================
 Sky_ProcessPoly
@@ -844,7 +857,7 @@ Sky_DrawSkyBox
 FIXME: eliminate cracks by adding an extra vert on tjuncs
 ==============
 */
-void Sky_DrawSkyBox (cb_context_t *cbx)
+void Sky_DrawSkyBox (cb_context_t *cbx, const float skyTint[3])
 {
 	int i;
 
@@ -885,7 +898,7 @@ void Sky_DrawSkyBox (cb_context_t *cbx)
 			.indexCount = RT_GetFanIndexCount (countof (vertices)),
 			.pIndices = RT_GetFanIndices (countof (vertices)),
 			.transform = RT_TRANSFORM_IDENTITY,
-			.color = RT_COLOR_WHITE,
+			.color = {skyTint[0], skyTint[1], skyTint[2], 1.0f},
 			.material = texture ? texture->rtmaterial : RG_NO_MATERIAL,
 			.pipelineState = 0,
 			.blendFuncSrc = 0,
@@ -960,10 +973,12 @@ void Sky_GetTexCoord (const vec3_t v, float speed, float *s, float *t)
 Sky_DrawFaceQuad
 ===============
 */
-void Sky_DrawFaceQuad (cb_context_t *cbx, glpoly_t *p, float alpha)
+void Sky_DrawFaceQuad (cb_context_t *cbx, glpoly_t *p, float alpha, const float skyTint[3])
 {
 	const float *src = p->verts[0];
-	
+
+	const uint32_t packedTint = RT_PackColorToUint32_FromFloat01 (skyTint[0], skyTint[1], skyTint[2], 1.0f);
+
 	const uint32_t *indices = RT_GetFanIndices (4);
 	const int       indexcount = RT_GetFanIndexCount (4);
 
@@ -990,7 +1005,7 @@ void Sky_DrawFaceQuad (cb_context_t *cbx, glpoly_t *p, float alpha)
 			dst[i].position[1] = v[1];
 			dst[i].position[2] = v[2];
 			Sky_GetTexCoord (v, alphalayer ? 16 : 8, &dst[i].texCoord[0], &dst[i].texCoord[1]);
-			dst[i].packedColor = RT_PACKED_COLOR_WHITE;
+			dst[i].packedColor = packedTint;
 		}
 
 
@@ -1007,7 +1022,7 @@ Sky_DrawFace
 ==============
 */
 
-void Sky_DrawFace (cb_context_t *cbx, int axis, float alpha)
+void Sky_DrawFace (cb_context_t *cbx, int axis, float alpha, const float skyTint[3])
 {
 	rt_skybatch_solid.verts_count = 0;
 	rt_skybatch_alpha.verts_count = 0;
@@ -1054,7 +1069,7 @@ void Sky_DrawFace (cb_context_t *cbx, int axis, float alpha)
 
 			VectorAdd (p.verts[0], temp, p.verts[3]);
 
-			Sky_DrawFaceQuad (cbx, &p, alpha);
+			Sky_DrawFaceQuad (cbx, &p, alpha, skyTint);
 		}
 	}
 
@@ -1090,7 +1105,7 @@ Sky_DrawSkyLayers
 draws the old-style scrolling cloud layers
 ==============
 */
-void Sky_DrawSkyLayers (cb_context_t *cbx)
+void Sky_DrawSkyLayers (cb_context_t *cbx, const float skyTint[3])
 {
 	int i;
 	if (!solidskytexture || !alphaskytexture)
@@ -1098,7 +1113,7 @@ void Sky_DrawSkyLayers (cb_context_t *cbx)
 
 	for (i = 0; i < 6; i++)
 		//if (skymins[0][i] < skymaxs[0][i] && skymins[1][i] < skymaxs[1][i])
-			Sky_DrawFace (cbx, i, r_skyalpha.value);
+			Sky_DrawFace (cbx, i, r_skyalpha.value, skyTint);
 }
 
 /*
@@ -1142,6 +1157,17 @@ void Sky_DrawSky (cb_context_t *cbx)
 	else
 		memcpy (color, skyflatcolor, 3 * sizeof (float));
 
+	// 4.6: sky display color + brightness modulate the sky surfaces drawn into
+	// the ray-traced sky cubemap (the primary sky color comes straight from
+	// that cubemap), so the sky can be tinted or blackened with
+	// rt_sky_color_* / rt_sky_brightness / rt_brightness without touching the
+	// sun light (rt_sky_light_*).
+	float skyTint[3];
+	RT_GetSkyTintColor (skyTint);
+	color[0] *= skyTint[0];
+	color[1] *= skyTint[1];
+	color[2] *= skyTint[2];
+
 	Sky_ProcessTextureChains (cbx, color);
 	Sky_ProcessEntities (cbx, color);
 
@@ -1158,9 +1184,9 @@ void Sky_DrawSky (cb_context_t *cbx)
 #endif
 
 		if (skybox_name[0])
-			Sky_DrawSkyBox (cbx);
+			Sky_DrawSkyBox (cbx, skyTint);
 		else
-			Sky_DrawSkyLayers (cbx);
+			Sky_DrawSkyLayers (cbx, skyTint);
 	}
 
 	Fog_EnableGFog (cbx);

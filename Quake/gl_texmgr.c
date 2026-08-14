@@ -1174,6 +1174,24 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	if (emisBuf) Mem_Free (emisBuf);
 	if (glossBuf) Mem_Free (glossBuf);
 
+	// 4.6 debug: report which material was applied and the average emissive
+	extern cvar_t rt_mat_debug;
+	if (CVAR_TO_BOOL (rt_mat_debug))
+	{
+		double emSum = 0.0;
+		for (int i = 0; i < npix; i++)
+		{
+			emSum += rme[i * 4 + 2];
+		}
+		Con_Printf ("RT: applied material '%s' (glt='%s') base=%s norm=%s emis=%s gloss=%s avg_emis=%.1f/255\n",
+		            mat->name, glt->name,
+		            mat->filename_base[0] ? mat->filename_base : "-",
+		            mat->filename_normals[0] ? mat->filename_normals : "-",
+		            mat->filename_emissive[0] ? mat->filename_emissive : "-",
+		            mat->filename_gloss[0] ? mat->filename_gloss : "-",
+		            npix > 0 ? emSum / npix : 0.0);
+	}
+
 	RgMaterialCreateInfo info = {
 		.flags = TexMgr_GetRtFlags (glt),
 		.size = {tw, th},

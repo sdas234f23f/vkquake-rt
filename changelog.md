@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.2.0
+
+### Added
+- **Master brightness** — `rt_brightness` cvar scales all light sources (sun, dynamic, world, ambient), the volumetric light and the sky
+- **Sky display color** — `rt_sky_color_r/g/b` tints (or blackens) the sky independently of the sun light (`rt_sky_light_*`); applied to every sky path (solid sky, skybox, cloud layers) and to the procedural sky
+- **Sky brightness** — `rt_sky_brightness` cvar scales the sky display for all sky types
+- **Light color tint** — `rt_light_color_r/g/b` applies an RGB tint to every light source (sun, dynamic, world, ambient, volumetric)
+
+### Fixed
+- Material lookup now normalizes BSP-sourced texture names (`maps/<map>.bsp:*lava1` → `textures/#lava1`, `maps/<map>.bsp:+0_med100` → `textures/+0_med100`, sub-directories like `e1u1/foo` included), so `.mat`/auto-detected materials apply to world surfaces that have no external HD base texture
+- Sky tint/brightness is now applied to the skybox and cloud layers as well (previously only the solid-sky polys were modulated), so `rt_sky_color`/`rt_sky_brightness`/`rt_brightness` work on every sky type
+
 ## v3.1.0
 
 ### Added

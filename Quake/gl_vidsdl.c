@@ -150,6 +150,14 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_sky_light_r, "255") \
 	CVAR_DEF_T (rt_sky_light_g, "255") \
 	CVAR_DEF_T (rt_sky_light_b, "255") \
+	CVAR_DEF_T (rt_sky_color_r, "255") \
+	CVAR_DEF_T (rt_sky_color_g, "255") \
+	CVAR_DEF_T (rt_sky_color_b, "255") \
+	CVAR_DEF_T (rt_sky_brightness, "1.0") \
+	CVAR_DEF_T (rt_brightness, "1.0") \
+	CVAR_DEF_T (rt_light_color_r, "255") \
+	CVAR_DEF_T (rt_light_color_g, "255") \
+	CVAR_DEF_T (rt_light_color_b, "255") \
 	CVAR_DEF_T (rt_sky_clouds, "0") \
 	CVAR_DEF_T (rt_sky_cloud_color_r, "255") \
 	CVAR_DEF_T (rt_sky_cloud_color_g, "255") \
@@ -1135,6 +1143,9 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	float skyMult = 1.0f / CLAMP (0.02f, RT_Luminance (skyflatcolor), 1.0f);
 	skyMult *= CVAR_TO_FLOAT (rt_sky);
 
+	// 4.6: sky brightness (all sky types, incl. procedural) + master brightness
+	const float skyBrightness = CVAR_TO_FLOAT (rt_sky_brightness) * CVAR_TO_FLOAT (rt_brightness);
+
 	const int usePhysicalSky = CVAR_TO_BOOL (rt_physical_sky) != 0;
 
 	vec3_t sky_base_color;
@@ -1148,14 +1159,20 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	{
 		VectorCopy (skyflatcolor, sky_base_color);
 	}
+	// 4.6: sky display color (rt_sky_color_*) + master brightness. The sky
+	// display is decoupled from the sun light color (rt_sky_light_*), so the
+	// sky can be tinted or blackened without killing the sun light.
+	VectorScale (sky_base_color, skyBrightness, sky_base_color);
+	RT_APPLY_SKY_COLOR (sky_base_color);
 
 	RgDrawFrameSkyParams sky_params = {
-		// procedural sky has its own brightness, so skyColorMultiplier is not applied there
 		.skyType = CVAR_TO_BOOL (r_fastsky) ? RG_SKY_TYPE_COLOR
 		         : usePhysicalSky ? RG_SKY_TYPE_PROCEDURAL
 		         : RG_SKY_TYPE_RASTERIZED_GEOMETRY,
 		.skyColorDefault = RT_VEC3 (sky_base_color),
-		.skyColorMultiplier = usePhysicalSky ? 1.0f : skyMult,
+		// for the procedural sky this is passed as its brightness (skyParams[0]);
+		// for rasterized/color skies it scales the sky in reflections (getSky)
+		.skyColorMultiplier = usePhysicalSky ? skyBrightness : skyMult * skyBrightness,
 		// repurposed field: carries the procedural sky tint strength (rt_sky_tint)
 		.skyColorSaturation = CVAR_TO_FLOAT (rt_sky_tint),
 		.skyViewerPosition = RT_VEC3 (r_origin),
@@ -1190,13 +1207,21 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 		VectorCopy (skyflatcolor, volume_light_color);
 	}
 
+	// 4.6: master brightness + RGB tint for the volumetric light and ambient
+	VectorScale (volume_light_color, CVAR_TO_FLOAT (rt_volume_lintensity) * CVAR_TO_FLOAT (rt_brightness), volume_light_color);
+	RT_APPLY_LIGHT_TINT (volume_light_color);
+
+	vec3_t volume_ambient_color;
+	VectorScale (skyflatcolor, CVAR_TO_FLOAT (rt_volume_ambient) * CVAR_TO_FLOAT (rt_brightness), volume_ambient_color);
+	RT_APPLY_LIGHT_TINT (volume_ambient_color);
+
 	RgDrawFrameVolumetricParams volumetric_params = {
 		.enable = CVAR_TO_UINT32 (rt_volume_type) != 0,
 		.useSimpleDepthBased = CVAR_TO_UINT32 (rt_volume_type) == 1 || CVAR_TO_BOOL (rt_classic_render),
 		.volumetricFar = CVAR_TO_FLOAT (rt_volume_far),
-		.ambientColor = RT_VEC3_MULT (skyflatcolor, CVAR_TO_FLOAT(rt_volume_ambient)),
+		.ambientColor = RT_VEC3 (volume_ambient_color),
 		.scaterring = CVAR_TO_FLOAT (rt_volume_scatter),
-		.sourceColor = RT_VEC3_MULT (volume_light_color, CVAR_TO_FLOAT (rt_volume_lintensity)),
+		.sourceColor = RT_VEC3 (volume_light_color),
 		.sourceDirection = RT_AnglesToDir (volume_light_angles),
 		.sourceAssymetry = CVAR_TO_FLOAT (rt_volume_lassymetry),
 	};
