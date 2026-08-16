@@ -108,10 +108,15 @@ void main()
     const vec2 nearest_render_pos = (vec2(opos) + vec2(0.5)) * render_to_output - vec2(0.5) - sub_pixel_jitter;
     const ivec2 int_render_pos = ivec2(clamp(round(nearest_render_pos), vec2(0), vec2(renderWidth - 1, renderHeight - 1)));
 
-    const vec3 color_center = texelFetch(framebufFinal_Sampler, int_render_pos, 0).rgb;
-    vec3 color_output = color_center;
+    const vec3 color_center_raw = texelFetch(framebufFinal_Sampler, int_render_pos, 0).rgb;
 
-    // Color moments in a 3x3 window
+    // Remove or reduce single-pixel sparkles by clamping the center color
+    // to its surroundings (Q2RTX asvgf_taau anti-sparkle,
+    // flt_taa_anti_sparkle = 0.25).
+    const float flt_taa_anti_sparkle = 0.25;
+    const float anti_sparkle_scale = pow(min(1.0, flt_taa_anti_sparkle), -0.25);
+
+    // Color moments in a 3x3 window (the 8 neighbors first, then the center).
     vec3 mom1 = vec3(0.0);
     vec3 mom2 = vec3(0.0);
     {
@@ -120,6 +125,8 @@ void main()
         {
             for(int xx = -r; xx <= r; xx++)
             {
+                if(xx == 0 && yy == 0)
+                    continue;
                 ivec2 p = int_render_pos + ivec2(xx, yy);
                 p = clamp(p, ivec2(0), ivec2(renderWidth - 1, renderHeight - 1));
                 vec3 c = texelFetch(framebufFinal_Sampler, p, 0).rgb;
@@ -127,10 +134,19 @@ void main()
                 mom2 += c * c;
             }
         }
+    }
+
+    vec3 color_center = min(color_center_raw, anti_sparkle_scale * mom1 / 8.0);
+
+    mom1 += color_center;
+    mom2 += color_center * color_center;
+    {
         const float num_pix = 9.0;
         mom1 /= num_pix;
         mom2 /= num_pix;
     }
+
+    vec3 color_output = color_center;
 
     // Find the longest motion vector in a 3x3 window
     vec2 motion;

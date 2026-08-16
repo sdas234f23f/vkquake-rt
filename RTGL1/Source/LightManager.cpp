@@ -66,6 +66,27 @@ RTGL1::LightManager::LightManager(
         buf.Init(_allocator, sizeof(ShLightInCell) * GRID_LIGHTS_COUNT, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "Lights grid");
     }
 
+    // Q2RTX-style per-cell light lists + adaptive shadow statistics
+    cellLightCount.Init(_allocator,
+        sizeof(uint32_t) * Q2_LIGHT_LIST_CELL_COUNT,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "Q2 cell light count");
+
+    cellLightList.Init(_allocator,
+        sizeof(uint32_t) * Q2_LIGHT_LIST_CELL_COUNT * Q2_LIGHT_LIST_MAX_PER_CELL,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "Q2 cell light list");
+
+    lightStats.Init(_allocator,
+        sizeof(uint32_t) * Q2_LIGHT_LIST_CELL_COUNT * Q2_LIGHT_LIST_MAX_PER_CELL * Q2_LIGHT_LIST_STATS_SIDES * 2 * Q2_LIGHT_LIST_STATS_BUFFERS,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "Q2 light stats");
+
+    lightCountsHistory.Init(_allocator,
+        sizeof(uint32_t) * Q2_LIGHT_LIST_CELL_COUNT * Q2_LIGHT_LIST_STATS_BUFFERS,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "Q2 light counts history");
+
     prevToCurIndex = std::make_shared<AutoBuffer>(device, _allocator);
     prevToCurIndex->Create(sizeof(uint32_t) * LIGHT_ARRAY_MAX_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Lights buffer - prev to cur");
 
@@ -440,6 +461,60 @@ void RTGL1::LightManager::BarrierLightGrid(VkCommandBuffer cmd, uint32_t frameIn
     svkCmdPipelineBarrier2KHR(cmd, &dependency);
 }
 
+void RTGL1::LightManager::ResetLightStats(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t frameId)
+{
+    // Ring slot for the current (monotonic) frame id. frameId keeps increasing,
+    // so slot = frameId % Q2_LIGHT_LIST_STATS_BUFFERS (the in-flight frameIndex
+    // only alternates 0/1 and must not be used for ring indexing).
+    const uint32_t slot = frameId % Q2_LIGHT_LIST_STATS_BUFFERS;
+
+    // Zero the stats slot for this frame (the direct pass will accumulate into
+    // it this frame; the CDF reads the previous frames' slots).
+    const VkDeviceSize statsSlotSize =
+        sizeof(uint32_t) * Q2_LIGHT_LIST_CELL_COUNT * Q2_LIGHT_LIST_MAX_PER_CELL *
+        Q2_LIGHT_LIST_STATS_SIDES * 2;
+    vkCmdFillBuffer(cmd, lightStats.GetBuffer(), statsSlotSize * slot, statsSlotSize, 0);
+
+    // Store the freshly built per-cell counts into the history ring slot.
+    VkBufferCopy bc = {};
+    bc.size = sizeof(uint32_t) * Q2_LIGHT_LIST_CELL_COUNT;
+    bc.dstOffset = sizeof(uint32_t) * Q2_LIGHT_LIST_CELL_COUNT * slot;
+    vkCmdCopyBuffer(cmd, cellLightCount.GetBuffer(), lightCountsHistory.GetBuffer(), 1, &bc);
+}
+
+void RTGL1::LightManager::BarrierQ2CellLists(VkCommandBuffer cmd, uint32_t frameIndex)
+{
+    VkBuffer buffers[] =
+    {
+        cellLightCount.GetBuffer(),
+        cellLightList.GetBuffer(),
+        lightStats.GetBuffer(),
+        lightCountsHistory.GetBuffer(),
+    };
+
+    VkBufferMemoryBarrier2 barriers[std::size(buffers)] = {};
+    for (uint32_t i = 0; i < std::size(buffers); i++)
+    {
+        barriers[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        barriers[i].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        barriers[i].srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barriers[i].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+        barriers[i].dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        barriers[i].buffer = buffers[i];
+        barriers[i].offset = 0;
+        barriers[i].size = VK_WHOLE_SIZE;
+    }
+
+    VkDependencyInfo dependency =
+    {
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .bufferMemoryBarrierCount = std::size(barriers),
+        .pBufferMemoryBarriers = barriers
+    };
+
+    svkCmdPipelineBarrier2KHR(cmd, &dependency);
+}
+
 VkDescriptorSetLayout RTGL1::LightManager::GetDescSetLayout()
 {
     return descSetLayout;
@@ -478,6 +553,10 @@ constexpr uint32_t BINDINGS[] =
     BINDING_LIGHT_SOURCES_INDEX_CUR_TO_PREV,
     BINDING_INITIAL_LIGHTS_GRID,
     BINDING_INITIAL_LIGHTS_GRID_PREV,
+    BINDING_LIGHT_SOURCES_Q2_CELL_COUNT,
+    BINDING_LIGHT_SOURCES_Q2_CELL_LIST,
+    BINDING_LIGHT_SOURCES_Q2_LIGHT_STATS,
+    BINDING_LIGHT_SOURCES_Q2_LIGHT_COUNTS_HISTORY,
 };
 
 void RTGL1::LightManager::CreateDescriptors()
@@ -553,6 +632,10 @@ void RTGL1::LightManager::UpdateDescriptors(uint32_t frameIndex)
         curToPrevIndex->GetDeviceLocal(),
         initialLightsGrid[frameIndex].GetBuffer(),
         initialLightsGrid[Utils::GetPreviousByModulo(frameIndex, MAX_FRAMES_IN_FLIGHT)].GetBuffer(),
+        cellLightCount.GetBuffer(),
+        cellLightList.GetBuffer(),
+        lightStats.GetBuffer(),
+        lightCountsHistory.GetBuffer(),
     };
     static_assert(std::size(BINDINGS) == std::size(buffers));
 

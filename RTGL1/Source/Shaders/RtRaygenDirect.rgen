@@ -32,11 +32,23 @@
 #define DESC_SET_LIGHT_SOURCES 6
 #define LIGHT_SAMPLE_METHOD (LIGHT_SAMPLE_METHOD_DIRECT)
 #include "RaygenCommon.h"
+#include "Q2Asvgf.h"
+#include "Q2LightLists.h"
+
+// RNG salts for the Q2RTX-style NEE direct pass. The non-sun lights are
+// sampled twice per pixel (2x rays), each sample gets its own salt range.
+#define Q2_RNG_CELL_SELECT 200   // per sample: 200+4*s .. 200+4*s+2
+#define Q2_RNG_LIGHT_POINT 208   // per sample: 208+2*s, 208+2*s+1
+#define Q2_RNG_SUN_DISK 212      // the sun keeps a single ray
 
 void main()
 {
     const ivec2 pix = ivec2(gl_LaunchIDEXT.xy);
-    const uint seed = getRandomSeed(pix, globalUniform.frameId);
+
+    // Gradient sample pixels carry the previous frame's RNG seed (patched by
+    // the Q2RTX-style gradient reproject) so this pass re-traces them with the
+    // same random numbers as the previous frame.
+    const uint seed = texelFetch(framebufQ2RngSeed_Sampler, pix, 0).r;
 
     const Surface surf = fetchGbufferSurface(pix);
 
@@ -45,23 +57,86 @@ void main()
         imageStore(framebufUnfilteredDirect, pix, uvec4(0));
         imageStore(framebufUnfilteredSpecular, pix, uvec4(0));
         imageStore(framebufGradientInputs, pix, vec4(0.0));
-        imageStoreReservoir(emptyReservoir(), pix);
         return;
     }
 
-    vec3 diffuse, specular;
-    float distToLight;
-    Reservoir r = processDirectIllumination(
-        seed,
-        pix, 
-        surf,
-        distToLight,
-        diffuse, specular);
+    const bool isGradient = q2GetIsGradient(pix);
+    const int cell = q2CellToLinear(q2WorldToCell(surf.position));
 
-    // demodulate for denoising
-    imageStoreUnfilteredDirect(pix, diffuse);
-    imageStoreUnfilteredSpecular(pix, demodulateSpecular(specular, surf.specularColor));
-    imageStore(framebufViewDirection, pix, vec4(-surf.toViewerDir, distToLight));
-    imageStore(framebufGradientInputs, pix, vec4(getLuminance(diffuse), getLuminance(specular), 0, 0));
-    imageStoreReservoir(r, pix);
+    // Phong params for the CDF mass (Q2RTX get_direct_illumination)
+    const float alpha = square(surf.roughness);
+    const float phongExp = q2RoughnessSquareToSpecPower(alpha);
+    const float phongScale = min(100.0, 1.0 / (M_PI * max(alpha * alpha, 1e-4)));
+    const float phongWeight = clamp(
+        getLuminance(surf.specularColor) / (getLuminance(surf.specularColor) + getLuminance(surf.albedo)),
+        0.0, 0.9);
+
+    vec3 directDiffuse = vec3(0.0);
+    vec3 directSpecular = vec3(0.0);
+
+    // 1) NEE from the per-cell light list (Q2RTX light-selection CDF).
+    //    2 independent light samples per pixel (2x non-sun rays): each sample
+    //    is a complete unbiased NEE estimate, so the two are averaged -> half
+    //    the variance of a single light ray.
+    const int Q2_NEE_LIGHT_SAMPLES = 2;
+
+    for (int s = 0; s < Q2_NEE_LIGHT_SAMPLES; s++)
+    {
+        const uint saltBase = uint(Q2_RNG_CELL_SELECT) + uint(s) * 4u;
+        const vec3 rng = vec3(
+            rnd16(seed, saltBase),
+            rnd16(seed, saltBase + 1u),
+            rnd16(seed, saltBase + 2u));
+
+        uint lightIndex = LIGHT_INDEX_NONE;
+        uint lightSlot = 0u;
+        float lightPdf = 0.0;
+        q2SampleCellLights(cell, surf.position, surf.normal, surf.toViewerDir,
+                           phongExp, phongScale, phongWeight, isGradient, rng,
+                           lightIndex, lightSlot, lightPdf);
+
+        if (lightIndex != LIGHT_INDEX_NONE && lightPdf > 0.0)
+        {
+            const vec2 pointRnd = rnd16_2(seed, uint(Q2_RNG_LIGHT_POINT) + uint(s) * 2u) * 0.99;
+            const LightSample light = sampleLight(lightSources[lightIndex], surf.position, pointRnd);
+
+            if (getLuminance(light.color) > 0.0)
+            {
+                const float vis = traceVisibility(surf, light.position, lightIndex);
+
+                // Adaptive shadow statistics for the next frames' CDF (occluded
+                // lights get a smaller mass -> sampled less -> stable choice).
+                q2AccumulateLightStats(cell, lightSlot, surf.normal, vis);
+
+                vec3 d, s;
+                shade(surf, light, 1.0 / lightPdf, d, s);
+                directDiffuse += d * vis;
+                directSpecular += s * vis;
+            }
+        }
+    }
+    directDiffuse  *= (1.0 / float(Q2_NEE_LIGHT_SAMPLES));
+    directSpecular *= (1.0 / float(Q2_NEE_LIGHT_SAMPLES));
+
+    // 2) Sun (directional light) - always sampled, stable (Q2RTX get_sunlight)
+    if (globalUniform.directionalLightExists != 0)
+    {
+        const DirectionalLight sun = decodeAsDirectionalLight(lightSources[LIGHT_ARRAY_DIRECTIONAL_LIGHT_OFFSET]);
+        const vec2 sunRnd = rnd16_2(seed, Q2_RNG_SUN_DISK) * 0.99;
+        const LightSample sunLight = sampleDirectionalLight(sun, surf.position, sunRnd);
+
+        const float sunVis = traceVisibility(surf, sunLight.position, LIGHT_ARRAY_DIRECTIONAL_LIGHT_OFFSET);
+
+        vec3 d, s;
+        shade(surf, sunLight, 1.0, d, s); // pdf = 1 (sun is always sampled)
+        directDiffuse += d * sunVis;
+        directSpecular += s * sunVis;
+    }
+
+    // Demodulate for denoising and store (same outputs as before - the Q2
+    // adapter + ASVGF denoiser are unchanged).
+    imageStoreUnfilteredDirect(pix, directDiffuse);
+    imageStoreUnfilteredSpecular(pix, demodulateSpecular(directSpecular, surf.specularColor));
+    imageStore(framebufViewDirection, pix, vec4(-surf.toViewerDir, MAX_RAY_LENGTH));
+    imageStore(framebufGradientInputs, pix, vec4(getLuminance(directDiffuse), getLuminance(directSpecular), 0, 0));
 }

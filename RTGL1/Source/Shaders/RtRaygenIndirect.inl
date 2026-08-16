@@ -206,7 +206,8 @@ float getDiffuseWeight( float roughness )
 #define TEMPORAL_SAMPLES_INDIR    1
 #define TEMPORAL_RADIUS_INDIR_MAX 2.0
 
-#define SPATIAL_SAMPLES_INDIR 4
+// No spatial reuse (Q2RTX-style): per-pixel independent indirect sampling.
+#define SPATIAL_SAMPLES_INDIR 0
 #define SPATIAL_RADIUS_INDIR  8.0
 
 #define DEBUG_TRACE_BIAS_CORRECT_RAY 0
@@ -217,7 +218,11 @@ float getDiffuseWeight( float roughness )
 void main()
 {
     const ivec2 pix = ivec2(gl_LaunchIDEXT.xy);
-    const uint seed = getRandomSeed(pix, globalUniform.frameId);
+
+    // Gradient sample pixels carry the previous frame's RNG seed (patched by
+    // the Q2RTX-style gradient reproject) -> the indirect pass re-traces them
+    // with the same random numbers as the previous frame.
+    const uint seed = texelFetch(framebufQ2RngSeed_Sampler, pix, 0).r;
     uint salt = RANDOM_SALT_RESAMPLE_INDIRECT_BASE;
 
     Surface surf = fetchGbufferSurface(pix);
@@ -253,7 +258,11 @@ ReservoirIndirect loadInitialSampleAsReservoir( const ivec2 pix )
 void main()
 {
     const ivec2 pix  = ivec2( gl_LaunchIDEXT.xy );
-    const uint  seed = getRandomSeed( pix, globalUniform.frameId );
+
+    // Gradient sample pixels carry the previous frame's RNG seed (patched by
+    // the Q2RTX-style gradient reproject) -> the indirect pass re-traces them
+    // with the same random numbers as the previous frame.
+    const uint  seed = texelFetch( framebufQ2RngSeed_Sampler, pix, 0 ).r;
     uint        salt = RANDOM_SALT_RESAMPLE_INDIRECT_BASE;
 
     Surface surf = fetchGbufferSurface( pix );

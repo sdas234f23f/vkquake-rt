@@ -771,6 +771,16 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
     {
         lightGrid->Build(cmd, frameIndex, uniform, blueNoise, scene->GetLightManager());
 
+        // Q2RTX-style per-cell light lists + adaptive shadow statistics.
+        // Runs alongside the ReSTIR light grid (which is still used by the
+        // ReSTIR passes until the NEE port replaces them).
+        {
+            auto lightManager = scene->GetLightManager();
+            lightGrid->Q2Build(cmd, frameIndex, uniform, blueNoise, lightManager);
+            lightManager->ResetLightStats(cmd, frameIndex, uniform->GetData()->frameId);
+            lightManager->BarrierQ2CellLists(cmd, frameIndex);
+        }
+
         decalManager->SubmitForFrame(cmd, frameIndex);
         portalList->SubmitForFrame(cmd, frameIndex);
 
@@ -883,10 +893,16 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
             godRays->Filter(cmd, frameIndex);
         }
 
+        // Q2RTX-style gradient reproject runs BEFORE the lighting passes: it
+        // patches the RNG seed + G-buffer at gradient sample pixels so the
+        // lighting re-traces them with the previous frame's random numbers
+        // (noise cancels in the gradient comparison, clean dark areas).
+        q2Denoiser->GradientReproject(cmd, frameIndex, uniform);
+
         scene->GetLightManager()->BarrierLightGrid(cmd, frameIndex);
         pathTracer->CalculateInitialReservoirs(params);
         pathTracer->TraceDirectllumination(params);
-        pathTracer->TraceIndirectllumination(params);
+        pathTracer->TraceQ2Indirectllumination(params);
 
         // The legacy screen-space volumetric was removed (4.7: only the Q2RTX
         // renderer); fog is handled by the traced fog volumes + god rays.

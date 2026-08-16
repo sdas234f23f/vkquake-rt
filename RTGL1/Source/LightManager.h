@@ -63,6 +63,12 @@ public:
     void CopyFromStaging(VkCommandBuffer cmd, uint32_t frameIndex);
     void BarrierLightGrid(VkCommandBuffer cmd, uint32_t frameIndex);
 
+    // Q2RTX-style per-cell light lists + adaptive shadow statistics.
+    // cellLightCount / cellLightList are built by CmQ2LightListBuild.comp;
+    // lightStats / lightCountsHistory are ring buffers (reset + copy per frame).
+    void ResetLightStats(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t frameId);
+    void BarrierQ2CellLists(VkCommandBuffer cmd, uint32_t frameIndex);
+
     VkDescriptorSetLayout GetDescSetLayout();
     VkDescriptorSet GetDescSet(uint32_t frameIndex);
 
@@ -82,6 +88,16 @@ private:
     std::shared_ptr<AutoBuffer> lightsBuffer;
     Buffer lightsBuffer_Prev;
     Buffer initialLightsGrid[MAX_FRAMES_IN_FLIGHT];
+
+    // Q2RTX-style per-cell light lists + adaptive shadow statistics (see
+    // Q2_LIGHT_LIST_* constants). Single storage buffer each, indexed with
+    // a manual frame offset (no descriptor arrays needed):
+    //   lightStats         : [3][CELL_COUNT * MAX_PER_CELL * SIDES * 2] uint
+    //   lightCountsHistory : [3][CELL_COUNT] uint
+    Buffer cellLightCount;
+    Buffer cellLightList;
+    Buffer lightStats;
+    Buffer lightCountsHistory;
 
     // Match light indices between current and previous frames
     std::shared_ptr<AutoBuffer> prevToCurIndex;

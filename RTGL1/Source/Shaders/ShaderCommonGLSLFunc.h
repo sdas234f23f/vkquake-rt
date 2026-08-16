@@ -199,6 +199,29 @@ layout(set = DESC_SET_LIGHT_SOURCES, binding = BINDING_INITIAL_LIGHTS_GRID_PREV)
 {
     ShLightInCell initialLightsGrid_Prev[];
 };
+
+// Q2RTX-style per-cell light lists + adaptive shadow statistics.
+// q2LightStats / q2LightCountsHistory are ring buffers: the current frame's
+// slot is [frameId % Q2_LIGHT_LIST_STATS_BUFFERS].
+layout(set = DESC_SET_LIGHT_SOURCES, binding = BINDING_LIGHT_SOURCES_Q2_CELL_COUNT) buffer Q2CellLightCount_BT
+{
+    uint q2CellLightCount[];
+};
+
+layout(set = DESC_SET_LIGHT_SOURCES, binding = BINDING_LIGHT_SOURCES_Q2_CELL_LIST) buffer Q2CellLightList_BT
+{
+    uint q2CellLightList[];
+};
+
+layout(set = DESC_SET_LIGHT_SOURCES, binding = BINDING_LIGHT_SOURCES_Q2_LIGHT_STATS) buffer Q2LightStats_BT
+{
+    uint q2LightStats[];
+};
+
+layout(set = DESC_SET_LIGHT_SOURCES, binding = BINDING_LIGHT_SOURCES_Q2_LIGHT_COUNTS_HISTORY) buffer Q2LightCountsHistory_BT
+{
+    uint q2LightCountsHistory[];
+};
 #endif
 
 

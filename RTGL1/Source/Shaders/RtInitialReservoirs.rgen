@@ -36,7 +36,13 @@
 void main()
 {
     const ivec2 pix = ivec2(gl_LaunchIDEXT.xy);
-    const uint seed = getRandomSeed(pix, globalUniform.frameId);
+
+    // Read the RNG seed that the primary pass stored (and that the Q2RTX-style
+    // gradient reproject patched with the PREVIOUS frame's seed at gradient
+    // sample pixels, so those pixels are re-traced with the previous frame's
+    // random numbers -> noise cancels in the gradient comparison).
+    const uint seed = texelFetch(framebufQ2RngSeed_Sampler, pix, 0).r;
+
     const Surface surf = fetchGbufferSurface(pix);
 
     if (surf.isSky)

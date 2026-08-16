@@ -100,6 +100,7 @@ RayTracingPipeline::RayTracingPipeline( VkDevice                           _devi
         { "RGenDirect",             nullptr },
         { "RGenIndirectInit",       &indirectIlluminationMaxAlbedoLayers },
         { "RGenIndirectFinal",      &indirectIlluminationMaxAlbedoLayers },
+        { "RGenQ2Indirect",         &indirectIlluminationMaxAlbedoLayers },
         { "RGenGradients",          nullptr },
         { "RInitialReservoirs",     nullptr },
         { "RVolumetric",            nullptr },
@@ -138,6 +139,7 @@ RayTracingPipeline::RayTracingPipeline( VkDevice                           _devi
     AddRayGenGroup(toIndex("RInitialReservoirs"));                  assert(raygenShaderCount - 1 == SBT_INDEX_RAYGEN_INITIAL_RESERVOIRS);
     AddRayGenGroup(toIndex("RVolumetric"));                         assert(raygenShaderCount - 1 == SBT_INDEX_RAYGEN_VOLUMETRIC);
     AddRayGenGroup(toIndex("RGenQ2ReflRefr"));                      assert(raygenShaderCount - 1 == SBT_INDEX_RAYGEN_Q2_REFL_REFR);
+    AddRayGenGroup(toIndex("RGenQ2Indirect"));                      assert(raygenShaderCount - 1 == SBT_INDEX_RAYGEN_Q2_INDIRECT);
 
     AddMissGroup(toIndex("RMiss"));                                 assert(missShaderCount - 1 == SBT_INDEX_MISS_DEFAULT);
     AddMissGroup(toIndex("RMissShadow"));                           assert(missShaderCount - 1 == SBT_INDEX_MISS_SHADOW);
@@ -291,7 +293,8 @@ void RayTracingPipeline::GetEntries(
             sbtRayGenIndex == SBT_INDEX_RAYGEN_GRADIENTS ||
             sbtRayGenIndex == SBT_INDEX_RAYGEN_INITIAL_RESERVOIRS ||
             sbtRayGenIndex == SBT_INDEX_RAYGEN_VOLUMETRIC ||
-            sbtRayGenIndex == SBT_INDEX_RAYGEN_Q2_REFL_REFR );
+            sbtRayGenIndex == SBT_INDEX_RAYGEN_Q2_REFL_REFR ||
+            sbtRayGenIndex == SBT_INDEX_RAYGEN_Q2_INDIRECT );
 
     VkDeviceAddress bufferAddress = shaderBindingTable->GetDeviceAddress();
 

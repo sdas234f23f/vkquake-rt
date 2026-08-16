@@ -78,6 +78,9 @@ public:
     void TraceQ2ReflectionRefractionRays(const TraceParams &params);
     void CalculateInitialReservoirs(const TraceParams &params);
     void TraceDirectllumination(const TraceParams &params);
+    // Q2RTX-style single-pass indirect illumination (NEE at the bounce hit,
+    // no ReSTIR) - replaces the Init+Final ReSTIR indirect passes.
+    void TraceQ2Indirectllumination(const TraceParams &params);
     void CalculateGradientsSamples(const TraceParams &params);
     void TraceIndirectllumination(const TraceParams &params);
 

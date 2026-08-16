@@ -427,6 +427,23 @@ static int rt_mat_load_file(const char *file_name, rt_material_t *dest, int max_
             }
         }
 
+        // trim leading whitespace. The .mat files indent keys with spaces
+        // (Q2RTX convention), so without this the key/value split below would
+        // treat the leading space as the key/value separator and drop every
+        // attribute (key becomes ""). This silently disabled the whole .mat
+        // attribute system.
+        {
+            char *sp = linebuf;
+            while (*sp == ' ' || *sp == '\t')
+            {
+                sp++;
+            }
+            if (sp != linebuf)
+            {
+                memmove(linebuf, sp, strlen(sp) + 1);
+            }
+        }
+
         // trim trailing whitespace
         size_t l = strlen(linebuf);
         while (l > 0 && (linebuf[l - 1] == ' ' || linebuf[l - 1] == '\t' || linebuf[l - 1] == '\r'))

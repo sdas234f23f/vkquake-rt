@@ -260,6 +260,10 @@ CONST = {
     "BINDING_LIGHT_SOURCES_INDEX_CUR_TO_PREV"   : 3,
     "BINDING_INITIAL_LIGHTS_GRID"               : 4,
     "BINDING_INITIAL_LIGHTS_GRID_PREV"          : 5,
+    "BINDING_LIGHT_SOURCES_Q2_CELL_COUNT"       : 6,
+    "BINDING_LIGHT_SOURCES_Q2_CELL_LIST"        : 7,
+    "BINDING_LIGHT_SOURCES_Q2_LIGHT_STATS"      : 8,
+    "BINDING_LIGHT_SOURCES_Q2_LIGHT_COUNTS_HISTORY" : 9,
     "BINDING_LENS_FLARES_CULLING_INPUT"         : 0,
     "BINDING_LENS_FLARES_DRAW_CMDS"             : 1,
     "BINDING_DRAW_LENS_FLARES_INSTANCES"        : 0,
@@ -301,6 +305,7 @@ CONST = {
     "SBT_INDEX_RAYGEN_INITIAL_RESERVOIRS"   : 6,
     "SBT_INDEX_RAYGEN_VOLUMETRIC"           : 7,
     "SBT_INDEX_RAYGEN_Q2_REFL_REFR"         : 8,
+    "SBT_INDEX_RAYGEN_Q2_INDIRECT"          : 9,
     "SBT_INDEX_MISS_DEFAULT"                : 0,
     "SBT_INDEX_MISS_SHADOW"                 : 1,
     "SBT_INDEX_HITGROUP_FULLY_OPAQUE"       : 0,
@@ -426,6 +431,17 @@ CONST = {
     "LIGHT_GRID_SIZE_Z"                     : 16,
     "LIGHT_GRID_CELL_SIZE"                  : 128,
     "COMPUTE_LIGHT_GRID_GROUP_SIZE_X"       : 256,
+
+    # Q2RTX-style per-cell light lists (cells act as clusters). The cell grid
+    # is the same 16^3 camera-centered grid as the light grid.
+    "Q2_LIGHT_LIST_SIZE_X"                  : 16,
+    "Q2_LIGHT_LIST_SIZE_Y"                  : 16,
+    "Q2_LIGHT_LIST_SIZE_Z"                  : 16,
+    "Q2_LIGHT_LIST_CELL_COUNT"              : "16 * 16 * 16",
+    "Q2_LIGHT_LIST_MAX_PER_CELL"            : 32,
+    "Q2_LIGHT_LIST_STATS_SIDES"             : 6,
+    "Q2_LIGHT_LIST_STATS_BUFFERS"           : 3,
+    "COMPUTE_Q2_LIGHT_LIST_GROUP_SIZE_X"    : 64,
 
     "PORTAL_INDEX_NONE"                     : 63,
     "PORTAL_MAX_COUNT"                      : 63,
@@ -815,7 +831,7 @@ FRAMEBUF_FLAGS_ENUM = {
 
 FRAMEBUFFERS = {
     # (image name)                      : (base format type, components,    flags)
-    "Albedo"                            : (TYPE_PACK_11,    COMPONENT_RGB,  FRAMEBUF_FLAGS_IS_ATTACHMENT),
+    "Albedo"                            : (TYPE_PACK_11,    COMPONENT_RGB,  FRAMEBUF_FLAGS_IS_ATTACHMENT | FRAMEBUF_FLAGS_STORE_PREV),
     "IsSky"                             : (TYPE_UINT8,      COMPONENT_R,    0),
     "Normal"                            : (TYPE_UINT32,     COMPONENT_R,    FRAMEBUF_FLAGS_STORE_PREV),
     "NormalGeometry"                    : (TYPE_UINT32,     COMPONENT_R,    FRAMEBUF_FLAGS_STORE_PREV),
@@ -831,7 +847,7 @@ FRAMEBUFFERS = {
     "UnfilteredIndirectSH_B"            : (TYPE_FLOAT16,    COMPONENT_RGBA, 0),
     "SurfacePosition"                   : (TYPE_FLOAT32,    COMPONENT_RGBA, FRAMEBUF_FLAGS_STORE_PREV),
     "VisibilityBuffer"                  : (TYPE_FLOAT32,    COMPONENT_RGBA, FRAMEBUF_FLAGS_STORE_PREV),
-    "ViewDirection"                     : (TYPE_FLOAT16,    COMPONENT_RGBA, 0),
+    "ViewDirection"                     : (TYPE_FLOAT16,    COMPONENT_RGBA, FRAMEBUF_FLAGS_STORE_PREV),
     "PrimaryToReflRefr"                 : (TYPE_UINT32,     COMPONENT_RGBA, 0),
     "Throughput"                        : (TYPE_FLOAT16,    COMPONENT_RGBA, 0),
     "PreFinal"                          : (TYPE_PACK_11,    COMPONENT_RGB,  0),

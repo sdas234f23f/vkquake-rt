@@ -51,9 +51,13 @@ static int world_texend[NUM_WORLD_CBX];
 
 extern RgVertex *rtallbrushvertices;
 
+// Phase 1.5: world light surfaces can be uploaded as TRIANGLE (area) lights,
+// like Q2RTX generates light polygons from emissive faces. TEMPORARILY DISABLED
+// (rt_arealights 0): the sphere conversion below is the proven pre-1.5 path.
+// Re-enable with rt_arealights 1 (triangles for POLY_LIGHT + emissive materials).
 #define RT_USE_SPHERE_INSTEAD_OF_POLY 1
 
-#define MAX_WORLDLIGHTS_COUNT 1024
+#define MAX_WORLDLIGHTS_COUNT 2048
 static RgPolygonalLightUploadInfo rt_wldlights_tri[MAX_WORLDLIGHTS_COUNT];
 static int                        rt_wldlights_tri_count = 0;
 static RgSphericalLightUploadInfo rt_wldlights_sph[MAX_WORLDLIGHTS_COUNT];
@@ -865,11 +869,17 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 	gltexture_t *diffuse_tex = r_lightmap_cheatsafe ? NULL : s->diffuse_tex;
 	gltexture_t *lightmap_tex = r_fullbright_cheatsafe ? NULL : s->lightmap_tex;
 
-	if (diffuse_tex && diffuse_tex->rtcustomtextype == RT_CUSTOMTEXTUREINFO_TYPE_POLY_LIGHT)
+	// Curated poly light textures (@POLY_LIGHT, e.g. *light*) become light
+	// sources; with RT_USE_SPHERE_INSTEAD_OF_POLY they are converted to sphere
+	// lights. (The 1.5 emissive-material area-light generation was removed.)
+	const qboolean is_poly_light = diffuse_tex && diffuse_tex->rtcustomtextype == RT_CUSTOMTEXTUREINFO_TYPE_POLY_LIGHT;
+
+	if (is_poly_light)
 	{
 		const RgTransform transf = RT_GetBrushModelMatrix (s->ent);
 
-		vec3_t color = RT_VEC3 (diffuse_tex->rtlightcolor);
+		vec3_t color;
+		VectorCopy (diffuse_tex->rtlightcolor, color);
 		VectorScale (color, CVAR_TO_FLOAT (rt_plight_intensity), color);
 		RT_FIXUP_LIGHT_INTENSITY (color, true);
 
@@ -916,7 +926,7 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 				}
 				else
 				{
-					assert (false);
+					// overflow: skip (don't assert - large maps may exceed the cap)
 				}
 			}
 		}

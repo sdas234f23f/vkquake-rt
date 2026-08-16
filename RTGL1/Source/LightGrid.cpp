@@ -34,6 +34,7 @@ RTGL1::LightGrid::LightGrid(
     : device(_device)
     , pipelineLayout(VK_NULL_HANDLE)
     , gridBuildPipeline(VK_NULL_HANDLE)
+    , q2ListBuildPipeline(VK_NULL_HANDLE)
 {
     VkDescriptorSetLayout setLayouts[] =
     {
@@ -93,6 +94,31 @@ void RTGL1::LightGrid::Build(
     vkCmdDispatch(cmd, wgCountX, 1, 1);
 }
 
+void RTGL1::LightGrid::Q2Build(
+    VkCommandBuffer cmd, uint32_t frameIndex,
+    const std::shared_ptr<GlobalUniform> &uniform,
+    const std::shared_ptr<BlueNoise> &blueNoise,
+    const std::shared_ptr<LightManager> &lightManager)
+{
+    CmdLabel label(cmd, "Q2 light list build");
+
+    VkDescriptorSet sets[] =
+    {
+        uniform->GetDescSet(frameIndex),
+        blueNoise->GetDescSet(),
+        lightManager->GetDescSet(frameIndex),
+    };
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+        pipelineLayout,
+        0, std::size(sets), sets,
+        0, nullptr);
+
+    uint32_t wgCountX = Utils::GetWorkGroupCount(static_cast<uint32_t>(Q2_LIGHT_LIST_CELL_COUNT), COMPUTE_Q2_LIGHT_LIST_GROUP_SIZE_X);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, q2ListBuildPipeline);
+    vkCmdDispatch(cmd, wgCountX, 1, 1);
+}
+
 void RTGL1::LightGrid::OnShaderReload(const ShaderManager* shaderManager)
 {
     DestroyPipelines();
@@ -110,6 +136,16 @@ void RTGL1::LightGrid::CreatePipelines(const ShaderManager* shaderManager)
     VK_CHECKERROR(r);
 
     SET_DEBUG_NAME(device, gridBuildPipeline, VK_OBJECT_TYPE_PIPELINE, "Light grid build pipeline");
+
+    plInfo = {};
+    plInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    plInfo.layout = pipelineLayout;
+    plInfo.stage = shaderManager->GetStageInfo("CQ2LightListBuild");
+
+    r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &plInfo, nullptr, &q2ListBuildPipeline);
+    VK_CHECKERROR(r);
+
+    SET_DEBUG_NAME(device, q2ListBuildPipeline, VK_OBJECT_TYPE_PIPELINE, "Q2 light list build pipeline");
 }
 
 void RTGL1::LightGrid::DestroyPipelines()
@@ -117,4 +153,6 @@ void RTGL1::LightGrid::DestroyPipelines()
     vkDestroyPipeline(device, gridBuildPipeline, nullptr);
     gridBuildPipeline = VK_NULL_HANDLE;
 
+    vkDestroyPipeline(device, q2ListBuildPipeline, nullptr);
+    q2ListBuildPipeline = VK_NULL_HANDLE;
 }

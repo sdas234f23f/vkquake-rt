@@ -56,6 +56,14 @@ public:
     void Denoise(
         VkCommandBuffer cmd, uint32_t frameIndex,
         const std::shared_ptr<const GlobalUniform> &uniform);
+    // Q2RTX-style gradient reproject. Runs BEFORE the lighting passes: matches
+    // gradient sample pixels to the previous frame and patches their G-buffer
+    // (RNG seed, normal, base color, metallic, position, view direction) so
+    // the lighting re-traces them with the previous frame's random numbers.
+    // (The Denoise pass only computes the gradient images + filters.)
+    void GradientReproject(
+        VkCommandBuffer cmd, uint32_t frameIndex,
+        const std::shared_ptr<const GlobalUniform> &uniform);
     // TAAU upscaler for the new core path. Takes the tonemapped Final at render
     // resolution and writes UpscaledPing at the upscaled resolution.
     void ApplyTAAU(

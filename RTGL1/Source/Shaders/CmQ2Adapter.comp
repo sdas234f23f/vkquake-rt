@@ -27,6 +27,12 @@
 //
 // The ASVGF denoiser then operates on these channels (see CmQ2Temporal.comp,
 // CmQ2AtrousLF.comp, CmQ2Atrous.comp).
+//
+// ReSTIR produces fireflies (a light with a tiny targetPdf wins the reservoir,
+// the MIS weight 1/targetPdf explodes). Q2RTX's NEE avoids them via a
+// visibility-aware light CDF + output clamping; we clamp outliers here against
+// the 3x3 neighborhood before the ASVGF sees them, so the temporal history
+// does not accumulate the spikes.
 
 #define DESC_SET_FRAMEBUFFERS 0
 #define DESC_SET_GLOBAL_UNIFORM 1
@@ -35,17 +41,65 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
+// Clamp a firefly (a pixel much brighter than its neighborhood) down to
+// maxNeighborLum * Q2_FIREFLY_FACTOR. A generous factor keeps legitimate
+// bright features (torches, light fixtures) intact and only kills the extreme
+// ReSTIR outliers.
+#define Q2_FIREFLY_FACTOR 8.0
+#define Q2_FIREFLY_MIN_LUM 1.0
+
+vec3 q2AntiFirefly(const ivec2 pix, const vec3 center, const usampler2D buf, const int width, const int height)
+{
+    float maxNeighborLum = 0.0;
+    float centerLum = getLuminance(center);
+
+    if (centerLum < Q2_FIREFLY_MIN_LUM)
+    {
+        return center;
+    }
+
+    for (int yy = -1; yy <= 1; yy++)
+    {
+        for (int xx = -1; xx <= 1; xx++)
+        {
+            if (xx == 0 && yy == 0)
+            {
+                continue;
+            }
+
+            const ivec2 p = pix + ivec2(xx, yy);
+            if (p.x < 0 || p.x >= width || p.y < 0 || p.y >= height)
+            {
+                continue;
+            }
+
+            const vec3 c = decodeE5B9G9R9(texelFetch(buf, p, 0).r);
+            maxNeighborLum = max(maxNeighborLum, getLuminance(c));
+        }
+    }
+
+    const float limit = maxNeighborLum * Q2_FIREFLY_FACTOR;
+    if (centerLum > limit)
+    {
+        return center * (limit / centerLum);
+    }
+
+    return center;
+}
+
 void main()
 {
     const ivec2 pix = ivec2(gl_GlobalInvocationID);
+    const int width = int(globalUniform.renderWidth);
+    const int height = int(globalUniform.renderHeight);
 
-    if (pix.x >= int(globalUniform.renderWidth) || pix.y >= int(globalUniform.renderHeight))
+    if (pix.x >= width || pix.y >= height)
     {
         return;
     }
 
-    const vec3 diffuse = texelFetchUnfilteredDirect(pix);
-    const vec3 specular = texelFetchUnfilteredSpecular(pix);
+    const vec3 diffuse = q2AntiFirefly(pix, texelFetchUnfilteredDirect(pix), framebufUnfilteredDirect_Sampler, width, height);
+    const vec3 specular = q2AntiFirefly(pix, texelFetchUnfilteredSpecular(pix), framebufUnfilteredSpecular_Sampler, width, height);
     const SH indir = texelFetchUnfilteredIndirectSH(pix);
 
     // HF: direct diffuse irradiance (no albedo, as in RTGL1 shade()), scaled for storage

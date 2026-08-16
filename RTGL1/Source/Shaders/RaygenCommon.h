@@ -488,7 +488,11 @@ Reservoir selectLight_Direct(const ivec2 pix, uint seed, const Surface surf, con
 {
     #define TEMPORAL_SAMPLES 1
     #define TEMPORAL_RADIUS 2
-    #define SPATIAL_SAMPLES 8
+    // No spatial reuse (Q2RTX-style): each pixel's direct light is chosen
+    // independently (light grid + previous frame reservoir). Spatial reuse
+    // produced spatially correlated noise that the ASVGF (designed for
+    // independent per-pixel noise) could not clean in dark areas.
+    #define SPATIAL_SAMPLES 0
     #define SPATIAL_RADIUS 30
 
     const ivec3 chRenderArea = getCheckerboardedRenderArea(pix); // assuming that pix is checkerboarded

@@ -45,13 +45,16 @@
 #define Q2_STORAGE_SCALE_HDR 128.0
 
 // ASVGF tuning parameters. Base values are the Q2RTX cvars defaults, but the
-// HF/SPEC antilag is reduced (1.0 -> 0.5, 2.0 -> 1.0) because the lighting
-// input here is RTGL1 ReSTIR, which is noisier per-frame than the Q2RTX path
-// tracer; the old RTGL1 gradient estimation used ~0.25*rel_diff effective
-// sensitivity and showed much less dark-area noise.
-#define Q2_FLT_ANTILAG_HF 0.5
-#define Q2_FLT_ANTILAG_LF 0.2
-#define Q2_FLT_ANTILAG_SPEC 1.0
+// HF/SPEC antilag is reduced because the lighting input here is RTGL1 ReSTIR,
+// which is noisier per-frame than the Q2RTX path tracer: the gradient compares
+// two independent noisy samples (Q2RTX re-traces with the previous RNG seed,
+// which cancels the noise), so in dark areas the gradient is noise-dominated
+// and would otherwise collapse the temporal history. The spatial filters match
+// the Q2RTX defaults (flt_atrous_depth 0.5, flt_atrous_lum_hf 16,
+// flt_atrous_normal_spec 1) to maximize dark-area noise removal.
+#define Q2_FLT_ANTILAG_HF 0.25
+#define Q2_FLT_ANTILAG_LF 0.15
+#define Q2_FLT_ANTILAG_SPEC 0.5
 #define Q2_FLT_ANTILAG_SPEC_MOTION 0.004
 #define Q2_FLT_GRAD_WEAPON 0.25
 #define Q2_FLT_MIN_ALPHA_COLOR_HF 0.02
@@ -66,11 +69,11 @@
 #define Q2_ATROUS_ITERATIONS_LF 4
 #define Q2_ATROUS_ITERATIONS_HF 4
 #define Q2_ATROUS_ITERATIONS_SPEC 4
-#define Q2_FLT_ATROUS_DEPTH 1.0
+#define Q2_FLT_ATROUS_DEPTH 0.5
 #define Q2_FLT_ATROUS_NORMAL_LF 8.0
 #define Q2_FLT_ATROUS_NORMAL_HF 16.0
-#define Q2_FLT_ATROUS_NORMAL_SPEC 16.0
-#define Q2_FLT_ATROUS_LUM_HF 8.0
+#define Q2_FLT_ATROUS_NORMAL_SPEC 1.0
+#define Q2_FLT_ATROUS_LUM_HF 16.0
 #define Q2_FLT_ATROUS_DEFLICKER_LF 0.75
 
 const float Q2_GAUSSIAN_KERNEL[2][2] = {

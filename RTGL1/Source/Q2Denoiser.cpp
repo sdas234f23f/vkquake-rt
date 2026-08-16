@@ -321,6 +321,73 @@ void Q2Denoiser::OnShaderReload(const ShaderManager *shaderManager)
     CreatePipelines(shaderManager);
 }
 
+void Q2Denoiser::GradientReproject(
+    VkCommandBuffer cmd, uint32_t frameIndex,
+    const std::shared_ptr<const GlobalUniform> &uniform)
+{
+    typedef FramebufferImageIndex FI;
+
+    VkDescriptorSet sets[] =
+    {
+        framebuffers->GetDescSet(frameIndex),
+        uniform->GetDescSet(frameIndex)
+    };
+
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                        pipelineLayout,
+                        0, std::size(sets), sets,
+                        0, nullptr);
+
+    const uint32_t wgGradX = Utils::GetWorkGroupCount(uniform->GetData()->renderWidth / COMPUTE_ASVGF_STRATA_SIZE, COMPUTE_GRADIENT_ATROUS_GROUP_SIZE_X);
+    const uint32_t wgGradY = Utils::GetWorkGroupCount(uniform->GetData()->renderHeight / COMPUTE_ASVGF_STRATA_SIZE, COMPUTE_GRADIENT_ATROUS_GROUP_SIZE_X);
+
+    CmdLabel label(cmd, "Q2 ASVGF gradient reproject (before lighting)");
+
+    // Reads the previous frame G-buffer + gradient data and patches the current
+    // frame G-buffer + RNG seed at gradient sample pixels (see CmQ2GradientReproject.comp),
+    // so the lighting passes that run next re-trace those pixels with the
+    // previous frame's random number sequence (Q2RTX asvgf_gradient_reproject).
+    FI fs[] =
+    {
+        // current frame inputs (written by primary / reflections / god rays)
+        FI::FB_IMAGE_INDEX_Q2_VIEW_DEPTH,
+        FI::FB_IMAGE_INDEX_NORMAL_GEOMETRY,
+        FI::FB_IMAGE_INDEX_MOTION,
+        // previous frame inputs
+        FI::FB_IMAGE_INDEX_Q2_GRAD_SMPL_POS_PREV,
+        FI::FB_IMAGE_INDEX_Q2_VIEW_DEPTH_PREV,
+        FI::FB_IMAGE_INDEX_Q2_COLOR_H_F_PREV,
+        FI::FB_IMAGE_INDEX_Q2_COLOR_SPEC_PREV,
+        // NOTE: Q2_RNG_SEED_PREV is the LAST framebuffer in the list, and
+        // FrameIndexToFBIndex(i, frameIndex) = i + frameIndex for swappable
+        // pairs -> it would resolve to i+2 (out of range) at frameIndex 1.
+        // The prev RNG seed image is barriered via Q2_RNG_SEED (current),
+        // which resolves to the physical prev image at frameIndex 1.
+        FI::FB_IMAGE_INDEX_Q2_BASE_COLOR_PREV,
+        FI::FB_IMAGE_INDEX_Q2_METALLIC_PREV,
+        FI::FB_IMAGE_INDEX_NORMAL_PREV,
+        FI::FB_IMAGE_INDEX_METALLIC_ROUGHNESS_PREV,
+        FI::FB_IMAGE_INDEX_SURFACE_POSITION_PREV,
+        FI::FB_IMAGE_INDEX_VIEW_DIRECTION_PREV,
+        FI::FB_IMAGE_INDEX_ALBEDO_PREV,
+        // current frame outputs (patched G-buffer)
+        FI::FB_IMAGE_INDEX_Q2_GRAD_SMPL_POS,
+        FI::FB_IMAGE_INDEX_Q2_GRAD_H_F_SPEC_PING,
+        FI::FB_IMAGE_INDEX_Q2_RNG_SEED,
+        FI::FB_IMAGE_INDEX_Q2_BASE_COLOR,
+        FI::FB_IMAGE_INDEX_Q2_METALLIC,
+        FI::FB_IMAGE_INDEX_NORMAL,
+        FI::FB_IMAGE_INDEX_METALLIC_ROUGHNESS,
+        FI::FB_IMAGE_INDEX_SURFACE_POSITION,
+        FI::FB_IMAGE_INDEX_VIEW_DIRECTION,
+        FI::FB_IMAGE_INDEX_ALBEDO,
+    };
+    framebuffers->BarrierMultiple(cmd, frameIndex, fs);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, gradientReproject);
+    vkCmdDispatch(cmd, wgGradX, wgGradY, 1);
+}
+
 void Q2Denoiser::Denoise(
     VkCommandBuffer cmd, uint32_t frameIndex,
     const std::shared_ptr<const GlobalUniform> &uniform)
@@ -348,24 +415,6 @@ void Q2Denoiser::Denoise(
 
     const uint32_t wgGradX = Utils::GetWorkGroupCount(uniform->GetData()->renderWidth / COMPUTE_ASVGF_STRATA_SIZE, COMPUTE_GRADIENT_ATROUS_GROUP_SIZE_X);
     const uint32_t wgGradY = Utils::GetWorkGroupCount(uniform->GetData()->renderHeight / COMPUTE_ASVGF_STRATA_SIZE, COMPUTE_GRADIENT_ATROUS_GROUP_SIZE_X);
-
-    // Q2RTX-style gradient pipeline (produces Q2GradLF / Q2GradHFSpec for the
-    // temporal pass): reproject -> gradient img -> gradient atrous (7 iters).
-    {
-        CmdLabel label(cmd, "Q2 ASVGF gradient reproject");
-
-        FI fs[] =
-        {
-            FI::FB_IMAGE_INDEX_Q2_GRAD_SMPL_POS_PREV,
-            FI::FB_IMAGE_INDEX_Q2_VIEW_DEPTH_PREV,
-            FI::FB_IMAGE_INDEX_Q2_COLOR_H_F_PREV,
-            FI::FB_IMAGE_INDEX_Q2_COLOR_SPEC_PREV,
-        };
-        framebuffers->BarrierMultiple(cmd, frameIndex, fs);
-
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, gradientReproject);
-        vkCmdDispatch(cmd, wgGradX, wgGradY, 1);
-    }
 
     // ReSTIR outputs -> Q2RTX ASVGF channel format
     {

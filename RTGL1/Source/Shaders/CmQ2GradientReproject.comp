@@ -22,10 +22,15 @@
 // the RTGL1 framework. In every 3x3 stratum a single surface is matched to the
 // previous frame (via the motion vector and depth/normal similarity) and the
 // previous frame's HF/SPEC luminances are stored as the "gradient sample".
-// The Q2RTX G-buffer patching (re-trace with the previous RNG) is NOT needed
-// here because the lighting is ReSTIR (RTGL1), which does not consume gradient
-// samples; the gradients are used purely as the antilag signal in the temporal
-// pass.
+//
+// EXACTLY like Q2RTX: this shader runs BEFORE the lighting passes and patches
+// the current frame G-buffer at the gradient sample pixel with the PREVIOUS
+// frame's RNG seed and surface parameters (normal, base color, metallic,
+// position, view direction). The lighting passes then re-trace that pixel with
+// the previous frame's random number sequence, so in a static scene the
+// re-traced lighting equals the previous frame's lighting -> the HF/SPEC
+// gradient (computed later in CmQ2GradientImg) is ~0 -> the temporal antilag
+// stays off and the history accumulates (clean dark areas).
 
 #version 460
 
@@ -55,6 +60,7 @@ void main()
 
     bool found = false;
     ivec2 found_offset = ivec2(0);
+    ivec2 found_pos_prev = ivec2(0);
     vec2 found_prev_lum = vec2(0);
 
     for (int offy = 0; offy < Q2_GRAD_DWN; offy++)
@@ -110,6 +116,7 @@ void main()
                 {
                     found_prev_lum = prev_lum;
                     found_offset = ivec2(offx, offy);
+                    found_pos_prev = pp;
                     found = true;
                 }
             }
@@ -131,4 +138,44 @@ void main()
 
     imageStore(framebufQ2GradSmplPos, pos_grad, uvec4(gradient_idx));
     imageStore(framebufQ2GradHFSpecPing, pos_grad, vec4(found_prev_lum, 0.0, 0.0));
+
+    // ------------------------------------------------------------------ //
+    // Patch the G-buffer at the gradient sample (Q2RTX asvgf_gradient_    //
+    // reproject.comp). The lighting passes (initial reservoirs, direct,   //
+    // indirect) run after this shader and read the patched values, so at  //
+    // the gradient sample they re-trace with the PREVIOUS frame's random  //
+    // number sequence and the previous frame's surface parameters. In a   //
+    // static scene the re-traced lighting equals the previous frame's     //
+    // lighting -> the HF/SPEC gradient is ~0 -> antilag off -> clean.     //
+    // ------------------------------------------------------------------ //
+
+    const ivec2 ipos = pos_grad * Q2_GRAD_DWN + found_offset;
+
+    // RNG seed: identical random numbers to the previous frame at this
+    // surface (same light selection, same light sample, same bounce
+    // direction, same shadow rays -> the noise cancels in the comparison).
+    imageStore(framebufQ2RngSeed, ipos,
+               texelFetch(framebufQ2RngSeed_Prev_Sampler, found_pos_prev, 0));
+
+    // Surface parameters from the previous frame (normal, metallic/roughness,
+    // exact surface position + instance index, view direction).
+    imageStore(framebufNormal, ipos,
+               texelFetch(framebufNormal_Prev_Sampler, found_pos_prev, 0));
+    imageStore(framebufMetallicRoughness, ipos,
+               texelFetch(framebufMetallicRoughness_Prev_Sampler, found_pos_prev, 0));
+    imageStore(framebufSurfacePosition, ipos,
+               texelFetch(framebufSurfacePosition_Prev_Sampler, found_pos_prev, 0));
+    imageStore(framebufViewDirection, ipos,
+               texelFetch(framebufViewDirection_Prev_Sampler, found_pos_prev, 0));
+
+    // Keep the Q2 G-buffer consistent with the patched values.
+    imageStore(framebufQ2BaseColor, ipos,
+               texelFetch(framebufQ2BaseColor_Prev_Sampler, found_pos_prev, 0));
+    imageStore(framebufQ2Metallic, ipos,
+               texelFetch(framebufQ2Metallic_Prev_Sampler, found_pos_prev, 0));
+
+    // Albedo is stored in the regular (non-checkerboarded) layout.
+    imageStore(framebufAlbedo, getRegularPixFromCheckerboardPix(ipos),
+               texelFetch(framebufAlbedo_Prev_Sampler,
+                          getRegularPixFromCheckerboardPix(found_pos_prev), 0));
 }
