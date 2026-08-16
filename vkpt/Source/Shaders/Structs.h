@@ -64,6 +64,8 @@ struct ShHitInfo
     uint    instCustomIndex;
     uint    geometryInstanceFlags;
     uint    portalIndex;
+    // BSP cluster of the hit triangle (Q2RTX per-cluster light lists).
+    uint    cluster;
 };
 
 #endif // STRUCTS_H_

@@ -134,6 +134,7 @@ enum FramebufferImageIndex
     FB_IMAGE_INDEX_Q2_TAA_HISTORY_PREV = 120,
     FB_IMAGE_INDEX_Q2_RNG_SEED = 121,
     FB_IMAGE_INDEX_Q2_RNG_SEED_PREV = 122,
+    FB_IMAGE_INDEX_Q2_CLUSTER = 123,
 };
 
 enum FramebufferImageFlagBits

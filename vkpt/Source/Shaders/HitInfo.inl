@@ -410,6 +410,9 @@ ShHitInfo getHitInfoBounce(
     h.geometryInstanceFlags = tr.geometryInstanceFlags;
     h.portalIndex = tr.portalIndex;
 
+    // BSP cluster for the Q2RTX per-cluster light lists.
+    h.cluster = tr.cluster;
+
     return h;
 }
 

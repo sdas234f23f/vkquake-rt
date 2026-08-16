@@ -92,7 +92,8 @@ void storeQ2GBuffer(
     float depth,
     float halfConeAngle, float distToLight,
     const vec3 transparentColor, float transparentAlpha,
-    const vec4 fogAccum)
+    const vec4 fogAccum,
+    const uint cluster)
 {
     if (globalUniform.coreQ2RTX == 0)
     {
@@ -107,6 +108,8 @@ void storeQ2GBuffer(
     imageStore(framebufQ2GodRaysThroughputDist, pix, vec4(1.0, 1.0, 1.0, distToLight));
     imageStore(framebufQ2RngSeed,            pix, uvec4(getRandomSeed(pix, globalUniform.frameId)));
     imageStore(framebufQ2FogAccum,           pix, fogAccum);
+    // BSP cluster of the hit surface (Q2RTX IMG_PT_CLUSTER_A). ~0u for sky.
+    imageStore(framebufQ2Cluster,            pix, uvec4(cluster));
 }
 
 void storeSky(
@@ -136,7 +139,7 @@ void storeSky(
         imageStore(framebufAlbedo, getRegularPixFromCheckerboardPix(pix), vec4(albedo, 0.0));
 
         // Q2RTX-style G-buffer (sky = empty surface, env color in transparent)
-        storeQ2GBuffer(pix, albedo, 0.0, 0.0, 1.0, MAX_RAY_LENGTH * 2.0, 0.0, MAX_RAY_LENGTH * 2.0, albedo, 1.0, fogAccum);
+        storeQ2GBuffer(pix, albedo, 0.0, 0.0, 1.0, MAX_RAY_LENGTH * 2.0, 0.0, MAX_RAY_LENGTH * 2.0, albedo, 1.0, fogAccum, ~0u);
     }
 
     vec2 m = getMotionForInfinitePoint(pix);
@@ -379,7 +382,7 @@ void main()
     const vec4 q2FogAccum = q2SegmentFog(q2Fog1, q2Fog2, firstHitDepthLinear);
     storeQ2GBuffer(pix, h.albedo, mix(0.04, 1.0, h.metallic), h.metallic, h.roughness,
                    firstHitDepthLinear, 0.5 * length(cameraRayDir - cameraRayDirAX), firstHitDepthLinear,
-                   vec3(0.0), 0.0, q2FogAccum);
+                   vec3(0.0), 0.0, q2FogAccum, h.cluster);
 }
 #endif
 
@@ -659,7 +662,7 @@ void main()
     const float q2HalfConeAngle = texelFetch(framebufQ2BounceThroughput_Sampler, pix, 0).w;
     storeQ2GBuffer(pix, h.albedo, mix(0.04, 1.0, h.metallic), h.metallic, h.roughness,
                    -fullPathLength, q2HalfConeAngle, q2LastSegmentLen,
-                   vec3(0.0), 0.0, q2FogAccum);
+                   vec3(0.0), 0.0, q2FogAccum, h.cluster);
 }
 #endif
 
@@ -949,7 +952,7 @@ void main()
             // override the Q2RTX-style G-buffer: empty surface, negative depth,
             // environment blended into transparent (Q2RTX reflect_refract sky).
             storeQ2GBuffer(pix, vec3(0.0), 0.0, 0.0, 1.0, -MAX_RAY_LENGTH * 2.0, q2HalfConeAngle, MAX_RAY_LENGTH * 2.0,
-                           q2Transparent.rgb, q2Transparent.a, q2FogAccum);
+                           q2Transparent.rgb, q2Transparent.a, q2FogAccum, ~0u);
             return;
         }
 
@@ -1005,6 +1008,6 @@ void main()
     // across reflection/refraction boundaries.
     storeQ2GBuffer(pix, h.albedo, mix(0.04, 1.0, h.metallic), h.metallic, h.roughness,
                    -fullPathLength, q2HalfConeAngle, q2LastSegmentLen,
-                   q2Transparent.rgb, q2Transparent.a, q2FogAccum);
+                   q2Transparent.rgb, q2Transparent.a, q2FogAccum, h.cluster);
 }
 #endif
