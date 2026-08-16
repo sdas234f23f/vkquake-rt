@@ -28,7 +28,6 @@
 #include "CubemapManager.h"
 #include "RenderCubemap.h"
 #include "PortalList.h"
-#include "RestirBuffers.h"
 #include "Volumetric.h"
 
 namespace RTGL1
@@ -45,7 +44,6 @@ public:
                         const GlobalUniform*               uniform,
                         const TextureManager*              textureManager,
                         const Framebuffers*                framebuffers,
-                        const RestirBuffers*               restirBuffers,
                         const BlueNoise*                   blueNoise,
                         const CubemapManager*              cubemapManager,
                         const RenderCubemap*               renderCubemap,

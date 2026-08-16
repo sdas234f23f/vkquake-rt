@@ -43,16 +43,6 @@ namespace RTGL1
         LightGrid &operator=(const LightGrid &other) = delete;
         LightGrid &operator=(LightGrid &&other) noexcept = delete;
 
-        void Build(
-            VkCommandBuffer cmd, uint32_t frameIndex, 
-            const std::shared_ptr<GlobalUniform> &uniform,
-            const std::shared_ptr<BlueNoise> &blueNoise,
-            const std::shared_ptr<LightManager> &lightManager);
-
-        // Q2RTX-style per-cell light lists (CmQ2LightListBuild.comp): collects
-        // the lights overlapping each 16^3 grid cell into fixed-size lists
-        // (q2CellLightCount / q2CellLightList). Feeds the Q2RTX light-selection
-        // CDF + adaptive shadow statistics.
         void Q2Build(
             VkCommandBuffer cmd, uint32_t frameIndex,
             const std::shared_ptr<GlobalUniform> &uniform,
@@ -69,7 +59,6 @@ namespace RTGL1
         VkDevice device;
 
         VkPipelineLayout pipelineLayout;
-        VkPipeline gridBuildPipeline;
         VkPipeline q2ListBuildPipeline;
 
     };

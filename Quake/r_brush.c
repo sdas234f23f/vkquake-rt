@@ -345,6 +345,13 @@ called during rendering
 */
 void R_RenderDynamicLightmaps (msurface_t *fa)
 {
+	// In the RT renderer the classic lightmaps are not uploaded/used (the RT
+	// handles all lighting) - skip the dlight baking entirely.
+	if (!CVAR_TO_BOOL (rt_classic_render))
+	{
+		return;
+	}
+
 	byte     *base;
 	int       maps;
 	glRect_t *theRect;

@@ -52,9 +52,12 @@ static int world_texend[NUM_WORLD_CBX];
 extern RgVertex *rtallbrushvertices;
 
 // Phase 1.5: world light surfaces can be uploaded as TRIANGLE (area) lights,
-// like Q2RTX generates light polygons from emissive faces. TEMPORARILY DISABLED
-// (rt_arealights 0): the sphere conversion below is the proven pre-1.5 path.
-// Re-enable with rt_arealights 1 (triangles for POLY_LIGHT + emissive materials).
+// Q2RTX-style: light-textured surfaces (*light*, torch flames, signs) become
+// sphere lights. They carry their emission normal and only illuminate surfaces
+// IN FRONT of it (one-sided, Q2RTX spotlight factor) - so a torch does NOT
+// light the mounting wall behind it through the geometry (no "light cylinder"
+// parallelogram), and the patches are round point-light falloffs (no
+// quadrilateral area-light shapes on the floor/wall grid).
 #define RT_USE_SPHERE_INSTEAD_OF_POLY 1
 
 #define MAX_WORLDLIGHTS_COUNT 2048
@@ -869,6 +872,17 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 	gltexture_t *diffuse_tex = r_lightmap_cheatsafe ? NULL : s->diffuse_tex;
 	gltexture_t *lightmap_tex = r_fullbright_cheatsafe ? NULL : s->lightmap_tex;
 
+	// The classic lightmap (static baked light + dynamic dlight patches) is
+	// applied as a SHADE layer on top of the RT albedo. In the RT renderer the
+	// ray tracer produces ALL the lighting (Q2RTX model), so the classic
+	// lightmap must not be part of the RT material - otherwise the old dlight
+	// patches (torch / muzzle flash / explosions) show up as quadrilateral
+	// blobs tied to the surface lightmap grid. (Classic mode keeps it.)
+	if (!CVAR_TO_BOOL (rt_classic_render))
+	{
+		lightmap_tex = NULL;
+	}
+
 	// Curated poly light textures (@POLY_LIGHT, e.g. *light*) become light
 	// sources; with RT_USE_SPHERE_INSTEAD_OF_POLY they are converted to sphere
 	// lights. (The 1.5 emissive-material area-light generation was removed.)
@@ -1283,14 +1297,25 @@ static void AddSphericalLight (qboolean upload, const RgPolygonalLightUploadInfo
 
 	float radius = METRIC_TO_QUAKEUNIT (CVAR_TO_FLOAT (rt_plight_radius));
 
-	VectorNormalize (accum_normal);
-	VectorMA (accum_center, radius, accum_normal, accum_center);
+	// The emission normal of the light surface. Degenerate (e.g. a box-like
+	// flame where opposite faces cancel) -> zero normal = full sphere.
+	RgFloat3D normal = { { 0, 0, 0 } };
+	if (VectorLength (accum_normal) > 0.001f)
+	{
+		VectorNormalize (accum_normal);
+		normal.data[0] = accum_normal[0];
+		normal.data[1] = accum_normal[1];
+		normal.data[2] = accum_normal[2];
+
+		VectorMA (accum_center, radius, accum_normal, accum_center);
+	}
 
 	RgSphericalLightUploadInfo light_info = {
 		.uniqueID = src->uniqueID,
 		.color = src->color,
 		.position = RT_VEC3 (accum_center),
 		.radius = radius,
+		.normal = normal,
 	};
 
 	if (upload)

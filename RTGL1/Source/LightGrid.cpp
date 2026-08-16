@@ -33,7 +33,6 @@ RTGL1::LightGrid::LightGrid(
 )
     : device(_device)
     , pipelineLayout(VK_NULL_HANDLE)
-    , gridBuildPipeline(VK_NULL_HANDLE)
     , q2ListBuildPipeline(VK_NULL_HANDLE)
 {
     VkDescriptorSetLayout setLayouts[] =
@@ -61,37 +60,6 @@ RTGL1::LightGrid::~LightGrid()
 {
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
     DestroyPipelines();
-}
-
-void RTGL1::LightGrid::Build(
-    VkCommandBuffer cmd, uint32_t frameIndex, 
-    const std::shared_ptr<GlobalUniform> &uniform,
-    const std::shared_ptr<BlueNoise> &blueNoise,
-    const std::shared_ptr<LightManager> &lightManager)
-{
-    CmdLabel label(cmd, "Light grid build");
-
-
-    // no barriers here, as lightManager has a AutoBuffer kludge
-
-
-    VkDescriptorSet sets[] =
-    {
-        uniform->GetDescSet(frameIndex),
-        blueNoise->GetDescSet(),
-        lightManager->GetDescSet(frameIndex),
-    };
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        pipelineLayout,
-        0, std::size(sets), sets,
-        0, nullptr);
-
-
-    uint32_t lightSamplesCount = LIGHT_GRID_CELL_SIZE * LIGHT_GRID_SIZE_X * LIGHT_GRID_SIZE_Y * LIGHT_GRID_SIZE_Z;
-    uint32_t wgCountX = Utils::GetWorkGroupCount(lightSamplesCount, COMPUTE_LIGHT_GRID_GROUP_SIZE_X);
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, gridBuildPipeline);
-    vkCmdDispatch(cmd, wgCountX, 1, 1);
 }
 
 void RTGL1::LightGrid::Q2Build(
@@ -130,19 +98,9 @@ void RTGL1::LightGrid::CreatePipelines(const ShaderManager* shaderManager)
     VkComputePipelineCreateInfo plInfo = {};
     plInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     plInfo.layout = pipelineLayout;
-    plInfo.stage = shaderManager->GetStageInfo("CLightGridBuild");
-
-    VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &plInfo, nullptr, &gridBuildPipeline);
-    VK_CHECKERROR(r);
-
-    SET_DEBUG_NAME(device, gridBuildPipeline, VK_OBJECT_TYPE_PIPELINE, "Light grid build pipeline");
-
-    plInfo = {};
-    plInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    plInfo.layout = pipelineLayout;
     plInfo.stage = shaderManager->GetStageInfo("CQ2LightListBuild");
 
-    r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &plInfo, nullptr, &q2ListBuildPipeline);
+    VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &plInfo, nullptr, &q2ListBuildPipeline);
     VK_CHECKERROR(r);
 
     SET_DEBUG_NAME(device, q2ListBuildPipeline, VK_OBJECT_TYPE_PIPELINE, "Q2 light list build pipeline");
@@ -150,9 +108,6 @@ void RTGL1::LightGrid::CreatePipelines(const ShaderManager* shaderManager)
 
 void RTGL1::LightGrid::DestroyPipelines()
 {
-    vkDestroyPipeline(device, gridBuildPipeline, nullptr);
-    gridBuildPipeline = VK_NULL_HANDLE;
-
     vkDestroyPipeline(device, q2ListBuildPipeline, nullptr);
     q2ListBuildPipeline = VK_NULL_HANDLE;
 }

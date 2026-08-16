@@ -295,10 +295,6 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
         {
             gu->debugShowFlags |= DEBUG_SHOW_FLAG_GRADIENTS;
         }
-        if( fs & RG_DEBUG_DRAW_LIGHT_GRID_BIT )
-        {
-            gu->debugShowFlags |= DEBUG_SHOW_FLAG_LIGHT_GRID;
-        }
         if( fs & RG_DEBUG_DRAW_GOD_RAYS_BIT )
         {
             gu->debugShowFlags |= DEBUG_SHOW_FLAG_GOD_RAYS;
@@ -769,8 +765,6 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
 
 
     {
-        lightGrid->Build(cmd, frameIndex, uniform, blueNoise, scene->GetLightManager());
-
         // Q2RTX-style per-cell light lists + adaptive shadow statistics.
         // Runs alongside the ReSTIR light grid (which is still used by the
         // ReSTIR passes until the NEE port replaces them).
@@ -792,7 +786,6 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
                                               uniform.get(),
                                               textureManager.get(),
                                               framebuffers,
-                                              restirBuffers,
                                               blueNoise.get(),
                                               cubemapManager.get(),
                                               rasterizer->GetRenderCubemap().get(),
@@ -899,14 +892,8 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
         // (noise cancels in the gradient comparison, clean dark areas).
         q2Denoiser->GradientReproject(cmd, frameIndex, uniform);
 
-        scene->GetLightManager()->BarrierLightGrid(cmd, frameIndex);
-        pathTracer->CalculateInitialReservoirs(params);
         pathTracer->TraceDirectllumination(params);
         pathTracer->TraceQ2Indirectllumination(params);
-
-        // The legacy screen-space volumetric was removed (4.7: only the Q2RTX
-        // renderer); fog is handled by the traced fog volumes + god rays.
-        pathTracer->CalculateGradientsSamples(params);
 
         // Q2RTX-style ASVGF denoiser (the legacy SVGF path was removed).
         q2Denoiser->Denoise(cmd, frameIndex, uniform);

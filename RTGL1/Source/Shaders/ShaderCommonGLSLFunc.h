@@ -38,7 +38,6 @@
 //                                 define TONEMAPPING_BUFFER_WRITEABLE for writing
 // * DESC_SET_LENS_FLARES
 // * DESC_SET_DECALS
-// * DESC_SET_RESTIR_INDIRECT
 // * DESC_SET_VOLUMETRIC
 
 
@@ -186,20 +185,6 @@ layout(set = DESC_SET_LIGHT_SOURCES, binding = BINDING_LIGHT_SOURCES_INDEX_CUR_T
     uint lightSources_Index_CurToPrev[];
 };
 
-layout(set = DESC_SET_LIGHT_SOURCES, binding = BINDING_INITIAL_LIGHTS_GRID) 
-#ifndef LIGHT_GRID_WRITE
-readonly
-#endif
-buffer InitialLightsGrid_BT
-{
-    ShLightInCell initialLightsGrid[];
-};
-
-layout(set = DESC_SET_LIGHT_SOURCES, binding = BINDING_INITIAL_LIGHTS_GRID_PREV) readonly buffer InitialLightsGridPrev_BT
-{
-    ShLightInCell initialLightsGrid_Prev[];
-};
-
 // Q2RTX-style per-cell light lists + adaptive shadow statistics.
 // q2LightStats / q2LightCountsHistory are ring buffers: the current frame's
 // slot is [frameId % Q2_LIGHT_LIST_STATS_BUFFERS].
@@ -221,25 +206,6 @@ layout(set = DESC_SET_LIGHT_SOURCES, binding = BINDING_LIGHT_SOURCES_Q2_LIGHT_ST
 layout(set = DESC_SET_LIGHT_SOURCES, binding = BINDING_LIGHT_SOURCES_Q2_LIGHT_COUNTS_HISTORY) buffer Q2LightCountsHistory_BT
 {
     uint q2LightCountsHistory[];
-};
-#endif
-
-
-
-#ifdef DESC_SET_RESTIR_INDIRECT
-layout(set = DESC_SET_RESTIR_INDIRECT, binding = BINDING_RESTIR_INDIRECT_INITIAL_SAMPLES) buffer RestirIndirectInitialSamples_BT
-{
-    uint g_restirIndirectInitialSamples[];
-};
-
-layout(set = DESC_SET_RESTIR_INDIRECT, binding = BINDING_RESTIR_INDIRECT_RESERVOIRS) buffer RestirIndirectReservoirs_BT
-{
-    uint g_restirIndirectReservoirs[];
-};
-
-layout(set = DESC_SET_RESTIR_INDIRECT, binding = BINDING_RESTIR_INDIRECT_RESERVOIRS_PREV) buffer RestirIndirectReservoirs_Prev_BT
-{
-    uint g_restirIndirectReservoirs_Prev[];
 };
 #endif
 

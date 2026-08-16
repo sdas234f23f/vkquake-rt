@@ -41,6 +41,14 @@
 #define Q2_RNG_LIGHT_POINT 208   // per sample: 208+2*s, 208+2*s+1
 #define Q2_RNG_SUN_DISK 212      // the sun keeps a single ray
 
+// Q2RTX caps the solid angle of sphere lights to kill fireflies from small
+// lights near surfaces. Without it, the light-textured surfaces (signs, torch
+// flames) that are converted to tiny spheres sit IN their own surface, get a
+// solid angle of ~2*pi and overexpose into a flat white square (which makes
+// the scene look untextured). Only surfaces within a few units of the light
+// are affected; distant lighting is unchanged.
+#define Q2_DIRECT_MAX_SPHERE_SOLID_ANGLE 0.02
+
 void main()
 {
     const ivec2 pix = ivec2(gl_LaunchIDEXT.xy);
@@ -56,7 +64,6 @@ void main()
     {
         imageStore(framebufUnfilteredDirect, pix, uvec4(0));
         imageStore(framebufUnfilteredSpecular, pix, uvec4(0));
-        imageStore(framebufGradientInputs, pix, vec4(0.0));
         return;
     }
 
@@ -98,7 +105,15 @@ void main()
         if (lightIndex != LIGHT_INDEX_NONE && lightPdf > 0.0)
         {
             const vec2 pointRnd = rnd16_2(seed, uint(Q2_RNG_LIGHT_POINT) + uint(s) * 2u) * 0.99;
-            const LightSample light = sampleLight(lightSources[lightIndex], surf.position, pointRnd);
+            LightSample light = sampleLight(lightSources[lightIndex], surf.position, pointRnd);
+
+            // Cap the solid angle of sphere/spot lights (Q2RTX firefly clamp).
+            // Keeps light-textured surfaces from overexposing their own face.
+            if (lightSources[lightIndex].lightType == LIGHT_TYPE_SPHERE ||
+                lightSources[lightIndex].lightType == LIGHT_TYPE_SPOT)
+            {
+                light.dw = min(light.dw, Q2_DIRECT_MAX_SPHERE_SOLID_ANGLE);
+            }
 
             if (getLuminance(light.color) > 0.0)
             {
@@ -138,5 +153,4 @@ void main()
     imageStoreUnfilteredDirect(pix, directDiffuse);
     imageStoreUnfilteredSpecular(pix, demodulateSpecular(directSpecular, surf.specularColor));
     imageStore(framebufViewDirection, pix, vec4(-surf.toViewerDir, MAX_RAY_LENGTH));
-    imageStore(framebufGradientInputs, pix, vec4(getLuminance(directDiffuse), getLuminance(directSpecular), 0, 0));
 }

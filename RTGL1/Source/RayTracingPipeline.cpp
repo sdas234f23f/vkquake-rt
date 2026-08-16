@@ -35,7 +35,6 @@ RayTracingPipeline::RayTracingPipeline( VkDevice                           _devi
                                         const GlobalUniform*               _uniform,
                                         const TextureManager*              _textureManager,
                                         const Framebuffers*                _framebuffers,
-                                        const RestirBuffers*               _restirBuffers,
                                         const BlueNoise*                   _blueNoise,
                                         const CubemapManager*              _cubemapManager,
                                         const RenderCubemap*               _renderCubemap,
@@ -80,8 +79,6 @@ RayTracingPipeline::RayTracingPipeline( VkDevice                           _devi
         _renderCubemap->GetDescSetLayout(),
         // portals
         _portalList->GetDescSetLayout(),
-        // device local buffers for restir
-        _restirBuffers->GetDescSetLayout(),
         // device local buffers for volumetrics
         _volumetric->GetDescSetLayout(),
     };
@@ -98,12 +95,7 @@ RayTracingPipeline::RayTracingPipeline( VkDevice                           _devi
         { "RGenReflRefr",           &primaryRaysMaxAlbedoLayers },
         { "RGenQ2ReflRefr",         &primaryRaysMaxAlbedoLayers },
         { "RGenDirect",             nullptr },
-        { "RGenIndirectInit",       &indirectIlluminationMaxAlbedoLayers },
-        { "RGenIndirectFinal",      &indirectIlluminationMaxAlbedoLayers },
         { "RGenQ2Indirect",         &indirectIlluminationMaxAlbedoLayers },
-        { "RGenGradients",          nullptr },
-        { "RInitialReservoirs",     nullptr },
-        { "RVolumetric",            nullptr },
         { "RMiss",                  nullptr },
         { "RMissShadow",            nullptr },
         { "RClsOpaque",             nullptr },
@@ -133,11 +125,6 @@ RayTracingPipeline::RayTracingPipeline( VkDevice                           _devi
     AddRayGenGroup(toIndex("RGenPrimary"));                         assert(raygenShaderCount - 1 == SBT_INDEX_RAYGEN_PRIMARY);
     AddRayGenGroup(toIndex("RGenReflRefr"));                        assert(raygenShaderCount - 1 == SBT_INDEX_RAYGEN_REFL_REFR);
     AddRayGenGroup(toIndex("RGenDirect"));                          assert(raygenShaderCount - 1 == SBT_INDEX_RAYGEN_DIRECT);
-    AddRayGenGroup(toIndex("RGenIndirectInit"));                    assert(raygenShaderCount - 1 == SBT_INDEX_RAYGEN_INDIRECT_INIT);
-    AddRayGenGroup(toIndex("RGenIndirectFinal"));                   assert(raygenShaderCount - 1 == SBT_INDEX_RAYGEN_INDIRECT_FINAL);
-    AddRayGenGroup(toIndex("RGenGradients"));                       assert(raygenShaderCount - 1 == SBT_INDEX_RAYGEN_GRADIENTS);
-    AddRayGenGroup(toIndex("RInitialReservoirs"));                  assert(raygenShaderCount - 1 == SBT_INDEX_RAYGEN_INITIAL_RESERVOIRS);
-    AddRayGenGroup(toIndex("RVolumetric"));                         assert(raygenShaderCount - 1 == SBT_INDEX_RAYGEN_VOLUMETRIC);
     AddRayGenGroup(toIndex("RGenQ2ReflRefr"));                      assert(raygenShaderCount - 1 == SBT_INDEX_RAYGEN_Q2_REFL_REFR);
     AddRayGenGroup(toIndex("RGenQ2Indirect"));                      assert(raygenShaderCount - 1 == SBT_INDEX_RAYGEN_Q2_INDIRECT);
 
@@ -288,11 +275,6 @@ void RayTracingPipeline::GetEntries(
     assert( sbtRayGenIndex == SBT_INDEX_RAYGEN_PRIMARY ||
             sbtRayGenIndex == SBT_INDEX_RAYGEN_REFL_REFR ||
             sbtRayGenIndex == SBT_INDEX_RAYGEN_DIRECT ||
-            sbtRayGenIndex == SBT_INDEX_RAYGEN_INDIRECT_INIT ||
-            sbtRayGenIndex == SBT_INDEX_RAYGEN_INDIRECT_FINAL ||
-            sbtRayGenIndex == SBT_INDEX_RAYGEN_GRADIENTS ||
-            sbtRayGenIndex == SBT_INDEX_RAYGEN_INITIAL_RESERVOIRS ||
-            sbtRayGenIndex == SBT_INDEX_RAYGEN_VOLUMETRIC ||
             sbtRayGenIndex == SBT_INDEX_RAYGEN_Q2_REFL_REFR ||
             sbtRayGenIndex == SBT_INDEX_RAYGEN_Q2_INDIRECT );
 

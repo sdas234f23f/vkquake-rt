@@ -642,6 +642,10 @@ typedef struct RgSphericalLightUploadInfo
     RgFloat3D       position;
     // Sphere radius.
     float           radius;
+    // Optional emission normal (light-textured surfaces). When non-zero the
+    // light only illuminates surfaces in front of this normal (Q2RTX
+    // spotlight factor); zero = light emits in all directions (point light).
+    RgFloat3D       normal;
 } RgSphericalLightUploadInfo;
 
 typedef struct RgPolygonalLightUploadInfo

@@ -219,7 +219,9 @@ CONST_TO_EVALUATE = "CONST VALUE MUST BE EVALUATED"
 # User defined constants
 # --------------------------------------------------------------------------------------------- #
 
-GRADIENT_ESTIMATION_ENABLED = True
+# Legacy DIS gradient estimation (SVGF era) was removed with the ReSTIR passes;
+# the Q2RTX ASVGF gradients come from the Q2Grad* framebuffers instead.
+GRADIENT_ESTIMATION_ENABLED = False
 FRAMEBUF_IGNORE_ATTACHMENTS_DEFINE = "FRAMEBUF_IGNORE_ATTACHMENTS" # define this, to not specify framebufs that are used as attachments
 
 # Q2RTX-style fog volumes (matches RG_MAX_FOG_VOLUMES in RTGL1.h)
@@ -258,21 +260,16 @@ CONST = {
     "BINDING_LIGHT_SOURCES_PREV"                : 1,
     "BINDING_LIGHT_SOURCES_INDEX_PREV_TO_CUR"   : 2,
     "BINDING_LIGHT_SOURCES_INDEX_CUR_TO_PREV"   : 3,
-    "BINDING_INITIAL_LIGHTS_GRID"               : 4,
-    "BINDING_INITIAL_LIGHTS_GRID_PREV"          : 5,
-    "BINDING_LIGHT_SOURCES_Q2_CELL_COUNT"       : 6,
-    "BINDING_LIGHT_SOURCES_Q2_CELL_LIST"        : 7,
-    "BINDING_LIGHT_SOURCES_Q2_LIGHT_STATS"      : 8,
-    "BINDING_LIGHT_SOURCES_Q2_LIGHT_COUNTS_HISTORY" : 9,
+    "BINDING_LIGHT_SOURCES_Q2_CELL_COUNT"       : 4,
+    "BINDING_LIGHT_SOURCES_Q2_CELL_LIST"        : 5,
+    "BINDING_LIGHT_SOURCES_Q2_LIGHT_STATS"      : 6,
+    "BINDING_LIGHT_SOURCES_Q2_LIGHT_COUNTS_HISTORY" : 7,
     "BINDING_LENS_FLARES_CULLING_INPUT"         : 0,
     "BINDING_LENS_FLARES_DRAW_CMDS"             : 1,
     "BINDING_DRAW_LENS_FLARES_INSTANCES"        : 0,
     "BINDING_DECAL_INSTANCES"                   : 0,
     "BINDING_PORTAL_INSTANCES"                  : 0,
     "BINDING_LPM_PARAMS"                        : 0,
-    "BINDING_RESTIR_INDIRECT_INITIAL_SAMPLES"   : 0,
-    "BINDING_RESTIR_INDIRECT_RESERVOIRS"        : 1,
-    "BINDING_RESTIR_INDIRECT_RESERVOIRS_PREV"   : 2,
     "BINDING_VOLUMETRIC_STORAGE"                : 0,
     "BINDING_VOLUMETRIC_SAMPLER"                : 1,
     "BINDING_VOLUMETRIC_SAMPLER_PREV"           : 2,
@@ -299,13 +296,8 @@ CONST = {
     "SBT_INDEX_RAYGEN_PRIMARY"              : 0,
     "SBT_INDEX_RAYGEN_REFL_REFR"            : 1,
     "SBT_INDEX_RAYGEN_DIRECT"               : 2,
-    "SBT_INDEX_RAYGEN_INDIRECT_INIT"        : 3,
-    "SBT_INDEX_RAYGEN_INDIRECT_FINAL"       : 4,
-    "SBT_INDEX_RAYGEN_GRADIENTS"            : 5,
-    "SBT_INDEX_RAYGEN_INITIAL_RESERVOIRS"   : 6,
-    "SBT_INDEX_RAYGEN_VOLUMETRIC"           : 7,
-    "SBT_INDEX_RAYGEN_Q2_REFL_REFR"         : 8,
-    "SBT_INDEX_RAYGEN_Q2_INDIRECT"          : 9,
+    "SBT_INDEX_RAYGEN_Q2_REFL_REFR"         : 3,
+    "SBT_INDEX_RAYGEN_Q2_INDIRECT"          : 4,
     "SBT_INDEX_MISS_DEFAULT"                : 0,
     "SBT_INDEX_MISS_SHADOW"                 : 1,
     "SBT_INDEX_HITGROUP_FULLY_OPAQUE"       : 0,
@@ -401,9 +393,8 @@ CONST = {
     "DEBUG_SHOW_FLAG_ONLY_DIRECT_DIFFUSE"   : "1 << 5",
     "DEBUG_SHOW_FLAG_ONLY_SPECULAR"         : "1 << 6",
     "DEBUG_SHOW_FLAG_ONLY_INDIRECT_DIFFUSE" : "1 << 7",
-    "DEBUG_SHOW_FLAG_LIGHT_GRID"            : "1 << 8",
-    "DEBUG_SHOW_FLAG_ALBEDO_WHITE"          : "1 << 9",
-    "DEBUG_SHOW_FLAG_GOD_RAYS"              : "1 << 10",
+    "DEBUG_SHOW_FLAG_ALBEDO_WHITE"          : "1 << 8",
+    "DEBUG_SHOW_FLAG_GOD_RAYS"              : "1 << 9",
     
     "MAX_RAY_LENGTH"                        : "10000.0",
 
@@ -426,19 +417,15 @@ CONST = {
 
     "LIGHT_INDEX_NONE"                      : ((1 << 15) - 1),
 
-    "LIGHT_GRID_SIZE_X"                     : 16,
-    "LIGHT_GRID_SIZE_Y"                     : 16,
-    "LIGHT_GRID_SIZE_Z"                     : 16,
-    "LIGHT_GRID_CELL_SIZE"                  : 128,
-    "COMPUTE_LIGHT_GRID_GROUP_SIZE_X"       : 256,
-
     # Q2RTX-style per-cell light lists (cells act as clusters). The cell grid
-    # is the same 16^3 camera-centered grid as the light grid.
+    # is the same 16^3 camera-centered grid as the (removed) ReSTIR light grid.
     "Q2_LIGHT_LIST_SIZE_X"                  : 16,
     "Q2_LIGHT_LIST_SIZE_Y"                  : 16,
     "Q2_LIGHT_LIST_SIZE_Z"                  : 16,
     "Q2_LIGHT_LIST_CELL_COUNT"              : "16 * 16 * 16",
-    "Q2_LIGHT_LIST_MAX_PER_CELL"            : 32,
+    # Every cell now receives ALL lights (Q2RTX has no distance cutoff in the
+    # light lists - the CDF does the importance culling). Keep a generous cap.
+    "Q2_LIGHT_LIST_MAX_PER_CELL"            : 64,
     "Q2_LIGHT_LIST_STATS_SIDES"             : 6,
     "Q2_LIGHT_LIST_STATS_BUFFERS"           : 3,
     "COMPUTE_Q2_LIGHT_LIST_GROUP_SIZE_X"    : 64,
@@ -682,13 +669,6 @@ LIGHT_ENCODED_STRUCT = [
     (TYPE_FLOAT32,      4,      "data_2",               1),
 ]
 
-# TODO: light index / target pdf - 16 bits
-LIGHT_IN_CELL = [
-    (TYPE_UINT32,       1,      "selected_lightIndex",  1),
-    (TYPE_FLOAT32,      1,      "selected_targetPdf",   1),
-    (TYPE_FLOAT32,      1,      "weightSum",            1),
-]
-
 # Q2RTX-style noise-aware tone mapper (Eilertsen, Mantiuk, Unger + NVIDIA mods).
 # std430, padding is automatic. Host-written params first, then GPU state.
 TONEMAPPING_STRUCT = [
@@ -770,7 +750,6 @@ STRUCTS = {
     "ShGeometryInstance":       (GEOM_INSTANCE_STRUCT,          False,  STRUCT_ALIGNMENT_STD430,    0),
     "ShTonemapping":            (TONEMAPPING_STRUCT,            False,  0,                          0),
     "ShLightEncoded":           (LIGHT_ENCODED_STRUCT,          False,  STRUCT_ALIGNMENT_STD430,    0),
-    "ShLightInCell":            (LIGHT_IN_CELL,                 False,  STRUCT_ALIGNMENT_STD430,    0),
     "ShVertPreprocessing":      (VERT_PREPROC_PUSH_STRUCT,      False,  0,                          0),
     "ShIndirectDrawCommand":    (INDIRECT_DRAW_CMD_STRUCT,      False,  STRUCT_ALIGNMENT_STD430,    0),
     # TODO: should be STRUCT_ALIGNMENT_STD430, but current generator is not great as it just adds pads at the end, so it's 0
@@ -901,9 +880,6 @@ FRAMEBUFFERS = {
     "Bloom_Result"                      : (TYPE_PACK_11,    COMPONENT_RGB,  FRAMEBUF_FLAGS_BILINEAR_SAMPLER),
     
     "WipeEffectSource"                  : (TYPE_PACK_11,    COMPONENT_RGB,  FRAMEBUF_FLAGS_UPSCALED_SIZE | FRAMEBUF_FLAGS_USAGE_TRANSFER), # dst to copy in
-    
-    "Reservoirs"                        : (TYPE_UINT32,     COMPONENT_RGBA, FRAMEBUF_FLAGS_STORE_PREV),
-    "ReservoirsInitial"                 : (TYPE_UINT32,     COMPONENT_RGBA, 0),
 }
 
 if GRADIENT_ESTIMATION_ENABLED:

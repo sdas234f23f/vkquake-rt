@@ -102,14 +102,6 @@ void main()
         return;
     }
 
-    const ivec3 cellIndex = ivec3(
-        cellIndexLinear % Q2_LIGHT_LIST_SIZE_X,
-        (cellIndexLinear / Q2_LIGHT_LIST_SIZE_X) % Q2_LIGHT_LIST_SIZE_Y,
-        cellIndexLinear / (Q2_LIGHT_LIST_SIZE_X * Q2_LIGHT_LIST_SIZE_Y));
-
-    const vec3 cellCenter = q2llCellWorldCenter(cellIndex);
-    const float cellRadius = q2llCellRadius();
-
     const uint maxPerCell = uint(Q2_LIGHT_LIST_MAX_PER_CELL);
     const uint listBase = uint(cellIndexLinear) * maxPerCell;
 
@@ -119,23 +111,19 @@ void main()
     for (uint i = 0; i < lightCount && count < maxPerCell; i++)
     {
         const uint li = uint(LIGHT_ARRAY_REGULAR_LIGHTS_OFFSET) + i;
-        const ShLightEncoded l = lightSources[li];
 
-        vec3 lightPos;
-        float lightRadius;
-        q2llLightSphere(l, lightPos, lightRadius);
-
-        if (lightRadius <= 0.0)
-        {
-            continue;
-        }
-
-        // Light affects this cell if its bounding sphere overlaps the cell sphere.
-        if (length(lightPos - cellCenter) <= lightRadius + cellRadius)
-        {
-            q2CellLightList[listBase + count] = li;
-            count++;
-        }
+        // Q2RTX has NO distance cutoff for the light lists: a light is added
+        // to every cluster it is visible from (PVS-based), and the inverse-
+        // square falloff in the shading handles the rest. The old RTGL1 cell
+        // grid used a distance cutoff (lightRadius + cellRadius), which cut
+        // bright lights (torches, muzzle flashes, explosions) off at the cell
+        // boundary -> square/parallelogram light patches on walls.
+        //
+        // Add every light to every cell; the light-selection CDF (mass =
+        // solid angle x luminance x adaptive shadow stats) does the importance
+        // culling, exactly like the Q2RTX cluster lists.
+        q2CellLightList[listBase + count] = li;
+        count++;
     }
 
     q2CellLightCount[cellIndexLinear] = count;

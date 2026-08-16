@@ -113,6 +113,7 @@ extern cvar_t rt_dlight_radius;
 extern cvar_t rt_flashlight;
 extern cvar_t rt_sun;
 extern cvar_t rt_sun_pitch;
+extern cvar_t rt_classic_render;
 extern cvar_t rt_sun_yaw;
 
 /*
@@ -364,11 +365,15 @@ static void RT_UploadAllDlights ()
 			continue;
 		}
 
-		float falloff_mult = QUAKEUNIT_TO_METRIC (l->radius);
-
+		// The muzzle-flash / explosion dlights use a small sphere (point-light
+		// model). The intensity must NOT be scaled by the dlight radius (the old
+		// falloff_mult = radius*0.025 multiplied a radius-300 shotgun flash by
+		// ~7.5 on top of the 1600-area fix, blowing it out: it lit half a wall,
+		// rendered as a square blob and left temporal imprints after firing).
+		// Q2RTX scales dyn-light color only by intensity (light_lists.h),
+		// independent of the radius - the radius only limits the falloff.
 		vec3_t color = {l->color[0], l->color[1], l->color[2]};
 		VectorScale (color, CVAR_TO_FLOAT (rt_dlight_intensity), color);
-		VectorScale (color, falloff_mult, color);
 		RT_FIXUP_LIGHT_INTENSITY (color, true);
 
 		RgSphericalLightUploadInfo info = {
@@ -441,8 +446,13 @@ R_SetupViewBeforeMark
 */
 void R_SetupViewBeforeMark (void *unused)
 {
-	// Need to do those early because we now update dynamic light maps during R_MarkSurfaces
-	if (!r_gpulightmapupdate.value)
+	// Need to do those early because we now update dynamic light maps during R_MarkSurfaces.
+	// In the RT renderer the classic dlight lightmap patches are NOT used (the RT
+	// handles the dynamic lighting via the uploaded sphere lights) - pushing them
+	// here would bake the old square "sprite" light patches into the lightmaps and
+	// they'd show on top of the RT lighting (torch / muzzle flash / explosions
+	// looking like quadrilateral blobs tied to the surface grid).
+	if (CVAR_TO_BOOL (rt_classic_render) && !r_gpulightmapupdate.value)
 		R_PushDlights ();
 	R_AnimateLight ();
 

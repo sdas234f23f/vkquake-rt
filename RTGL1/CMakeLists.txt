@@ -77,7 +77,6 @@ set(RTGL1_SOURCES
     Source/ImageLoaderDev.cpp
     Source/PortalList.cpp
     Source/TextureObserver.cpp
-    Source/RestirBuffers.cpp
     Source/Volumetric.cpp
     Source/ShadowMap.cpp
     Source/GodRays.cpp

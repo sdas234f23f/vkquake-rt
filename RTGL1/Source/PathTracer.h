@@ -26,7 +26,6 @@
 #include "Framebuffers.h"
 #include "RenderCubemap.h"
 #include "PortalList.h"
-#include "RestirBuffers.h"
 #include "Volumetric.h"
 
 namespace RTGL1
@@ -45,7 +44,6 @@ public:
         uint32_t                         width      = 0;
         uint32_t                         height     = 0;
         std::shared_ptr< Framebuffers >  framebuffers;
-        std::shared_ptr< RestirBuffers > restirBuffers;
     };
 
 public:
@@ -65,7 +63,6 @@ public:
                       const GlobalUniform*             uniform,
                       const TextureManager*            textureManager,
                       std::shared_ptr< Framebuffers >  framebuffers,
-                      std::shared_ptr< RestirBuffers > restirBuffers,
                       const BlueNoise*                 blueNoise,
                       const CubemapManager*            cubemapManager,
                       const RenderCubemap*             renderCubemap,
@@ -76,13 +73,10 @@ public:
     // Q2RTX-style reflection/refraction pass (separate raygen), used on the
     // Q2 core path (phase 4.4.3).
     void TraceQ2ReflectionRefractionRays(const TraceParams &params);
-    void CalculateInitialReservoirs(const TraceParams &params);
     void TraceDirectllumination(const TraceParams &params);
     // Q2RTX-style single-pass indirect illumination (NEE at the bounce hit,
     // no ReSTIR) - replaces the Init+Final ReSTIR indirect passes.
     void TraceQ2Indirectllumination(const TraceParams &params);
-    void CalculateGradientsSamples(const TraceParams &params);
-    void TraceIndirectllumination(const TraceParams &params);
 
 private:
     void TraceRays(

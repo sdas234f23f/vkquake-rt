@@ -57,7 +57,6 @@
 #include "FrameState.h"
 #include "LibraryConfig.h"
 #include "PortalList.h"
-#include "RestirBuffers.h"
 #include "Volumetric.h"
 #include "ShadowMap.h"
 #include "GodRays.h"
@@ -163,7 +162,6 @@ private:
     std::shared_ptr<CommandBufferManager>   cmdManager;
 
     std::shared_ptr<Framebuffers>           framebuffers;
-    std::shared_ptr<RestirBuffers>          restirBuffers;
     std::shared_ptr<Volumetric>             volumetric;
 
     std::shared_ptr<GlobalUniform>          uniform;

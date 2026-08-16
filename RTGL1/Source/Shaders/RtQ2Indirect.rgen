@@ -32,6 +32,14 @@ layout (constant_id = 0) const uint maxAlbedoLayerCount = 0;
 #define Q2_RNG_INDIR_LIGHT_POINT 223   // 223, 224
 #define Q2_RNG_INDIR_SUN_DISK    225
 
+// Q2RTX kills indirect fireflies from sphere lights by limiting their solid
+// angle at bounces (path_tracer_rgen.h get_direct_illumination:
+// max_solid_angle = 0.02 for bounce >= 1). Without it, the tiny torch /
+// muzzle-flash spheres (0.8 units radius, often very close to walls) produce
+// huge indirect estimates that the 1/3-res LF channel renders as blocky
+// square glows that look like they light half a wall.
+#define Q2_INDIR_MAX_SPHERE_SOLID_ANGLE 0.02
+
 // v -- direction to viewer
 // n -- surface normal
 vec3 getSpecularBounce(const uint seed, uint bounceIndex,
@@ -155,8 +163,16 @@ void main()
             if ( lightIndex != LIGHT_INDEX_NONE && lightPdf > 0.0 )
             {
                 const vec2 pointRnd = rnd16_2( seed, Q2_RNG_INDIR_LIGHT_POINT ) * 0.99;
-                const LightSample light =
+                LightSample light =
                     sampleLight( lightSources[ lightIndex ], hitSurf.position, pointRnd );
+
+                // Q2RTX firefly clamp: cap the solid angle of sphere/spot lights
+                // at the bounce hit (see Q2_INDIR_MAX_SPHERE_SOLID_ANGLE).
+                if ( lightSources[ lightIndex ].lightType == LIGHT_TYPE_SPHERE ||
+                     lightSources[ lightIndex ].lightType == LIGHT_TYPE_SPOT )
+                {
+                    light.dw = min( light.dw, Q2_INDIR_MAX_SPHERE_SOLID_ANGLE );
+                }
 
                 if ( getLuminance( light.color ) > 0.0 )
                 {

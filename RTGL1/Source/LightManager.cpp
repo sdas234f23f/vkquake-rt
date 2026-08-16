@@ -37,13 +37,10 @@ constexpr float MIN_SPHERE_RADIUS = 0.005f;
 
 constexpr uint32_t LIGHT_ARRAY_MAX_SIZE = 4096;
 
-constexpr VkDeviceSize GRID_LIGHTS_COUNT =
-    LIGHT_GRID_CELL_SIZE * (LIGHT_GRID_SIZE_X * LIGHT_GRID_SIZE_Y * LIGHT_GRID_SIZE_Z);
-
 }
 
 RTGL1::LightManager::LightManager(
-    VkDevice _device, 
+    VkDevice _device,
     std::shared_ptr<MemoryAllocator> &_allocator)
 :
     device(_device),
@@ -60,11 +57,6 @@ RTGL1::LightManager::LightManager(
     lightsBuffer->Create(sizeof(ShLightEncoded) * LIGHT_ARRAY_MAX_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "Lights buffer");
 
     lightsBuffer_Prev.Init(_allocator, sizeof(ShLightEncoded) * LIGHT_ARRAY_MAX_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "Lights buffer - prev");
-
-    for (auto &buf : initialLightsGrid)
-    {
-        buf.Init(_allocator, sizeof(ShLightInCell) * GRID_LIGHTS_COUNT, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "Lights grid");
-    }
 
     // Q2RTX-style per-cell light lists + adaptive shadow statistics
     cellLightCount.Init(_allocator,
@@ -145,6 +137,12 @@ static RTGL1::ShLightEncoded EncodeAsSphereLight(const RgSphericalLightUploadInf
     lt.data_0[2] = info.position.data[2];
 
     lt.data_0[3] = radius;
+
+    // One-sided emission normal (light-textured surfaces converted to spheres).
+    // Zero for plain point lights (dlights, light entities) = full sphere.
+    lt.data_1[0] = info.normal.data[0];
+    lt.data_1[1] = info.normal.data[1];
+    lt.data_1[2] = info.normal.data[2];
 
     return lt;
 }
@@ -434,33 +432,6 @@ void RTGL1::LightManager::CopyFromStaging(VkCommandBuffer cmd, uint32_t frameInd
     }
 }
 
-void RTGL1::LightManager::BarrierLightGrid(VkCommandBuffer cmd, uint32_t frameIndex)
-{
-    VkBufferMemoryBarrier2 barrier =
-    {
-        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-        .pNext = nullptr,
-        .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
-        .srcQueueFamilyIndex = 0,
-        .dstQueueFamilyIndex = 0,
-        .buffer = initialLightsGrid[frameIndex].GetBuffer(),
-        .offset = 0,
-        .size = VK_WHOLE_SIZE
-    };
-
-    VkDependencyInfo dependency =
-    {
-        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .bufferMemoryBarrierCount = 1,
-        .pBufferMemoryBarriers = &barrier
-    };
-
-    svkCmdPipelineBarrier2KHR(cmd, &dependency);
-}
-
 void RTGL1::LightManager::ResetLightStats(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t frameId)
 {
     // Ring slot for the current (monotonic) frame id. frameId keeps increasing,
@@ -551,8 +522,6 @@ constexpr uint32_t BINDINGS[] =
     BINDING_LIGHT_SOURCES_PREV,
     BINDING_LIGHT_SOURCES_INDEX_PREV_TO_CUR,
     BINDING_LIGHT_SOURCES_INDEX_CUR_TO_PREV,
-    BINDING_INITIAL_LIGHTS_GRID,
-    BINDING_INITIAL_LIGHTS_GRID_PREV,
     BINDING_LIGHT_SOURCES_Q2_CELL_COUNT,
     BINDING_LIGHT_SOURCES_Q2_CELL_LIST,
     BINDING_LIGHT_SOURCES_Q2_LIGHT_STATS,
@@ -630,8 +599,6 @@ void RTGL1::LightManager::UpdateDescriptors(uint32_t frameIndex)
         lightsBuffer_Prev.GetBuffer(),
         prevToCurIndex->GetDeviceLocal(),
         curToPrevIndex->GetDeviceLocal(),
-        initialLightsGrid[frameIndex].GetBuffer(),
-        initialLightsGrid[Utils::GetPreviousByModulo(frameIndex, MAX_FRAMES_IN_FLIGHT)].GetBuffer(),
         cellLightCount.GetBuffer(),
         cellLightList.GetBuffer(),
         lightStats.GetBuffer(),

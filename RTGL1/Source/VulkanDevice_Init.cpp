@@ -93,10 +93,6 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
         cmdManager, 
         *info );
 
-    restirBuffers       = std::make_shared<RestirBuffers>(
-        device,
-        memAllocator);
-
     blueNoise           = std::make_shared<BlueNoise>(
         device,
         info->pBlueNoiseFilePath,
@@ -207,7 +203,6 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
         uniform.get(),
         textureManager.get(),
         framebuffers.get(),
-        restirBuffers.get(),
         blueNoise.get(),
         cubemapManager.get(),
         rasterizer->GetRenderCubemap().get(),
@@ -307,7 +302,6 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
     framebuffers->Subscribe(rasterizer);
     framebuffers->Subscribe(decalManager);
     framebuffers->Subscribe(amdFsr);
-    framebuffers->Subscribe(restirBuffers);
 }
 
 VulkanDevice::~VulkanDevice()
@@ -319,7 +313,6 @@ VulkanDevice::~VulkanDevice()
     swapchain.reset();
     cmdManager.reset();
     framebuffers.reset();
-    restirBuffers.reset();
     volumetric.reset();
     tonemapping.reset();
     imageComposition.reset();

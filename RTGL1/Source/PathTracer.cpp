@@ -36,7 +36,6 @@ PathTracer::TraceParams PathTracer::Bind( VkCommandBuffer                  cmd,
                                           const GlobalUniform*             uniform,
                                           const TextureManager*            textureManager,
                                           std::shared_ptr< Framebuffers >  framebuffers,
-                                          std::shared_ptr< RestirBuffers > restirBuffers,
                                           const BlueNoise*                 blueNoise,
                                           const CubemapManager*            cubemapManager,
                                           const RenderCubemap*             renderCubemap,
@@ -66,8 +65,6 @@ PathTracer::TraceParams PathTracer::Bind( VkCommandBuffer                  cmd,
         renderCubemap->GetDescSet(),
         // portals
         portalList->GetDescSet(frameIndex),
-        // device local buffers for restir
-        restirBuffers->GetDescSet(frameIndex),
         // device local buffers for volumetrics
         volumetric->GetDescSet(frameIndex),
     };
@@ -87,7 +84,6 @@ PathTracer::TraceParams PathTracer::Bind( VkCommandBuffer                  cmd,
     p.width = width;
     p.height = height;
     p.framebuffers = std::move( framebuffers );
-    p.restirBuffers = std::move( restirBuffers );
 
     return p;
 }
@@ -155,30 +151,6 @@ void PathTracer::TraceQ2ReflectionRefractionRays(const TraceParams &params)
     TraceRays(params.cmd, SBT_INDEX_RAYGEN_Q2_REFL_REFR, params.width, params.height);
 }
 
-void PathTracer::CalculateInitialReservoirs(const TraceParams& params)
-{
-    CmdLabel label(params.cmd, "Initial reservoirs");
-
-
-    typedef FramebufferImageIndex FI;
-    FI fs[] =
-    {
-        FI::FB_IMAGE_INDEX_ALBEDO,
-        FI::FB_IMAGE_INDEX_SURFACE_POSITION,
-        FI::FB_IMAGE_INDEX_METALLIC_ROUGHNESS,
-        FI::FB_IMAGE_INDEX_NORMAL,
-        FI::FB_IMAGE_INDEX_NORMAL_GEOMETRY,
-        FI::FB_IMAGE_INDEX_VIEW_DIRECTION,
-        // the gradient reproject (before lighting) patched the RNG seed at
-        // gradient sample pixels - the initial reservoirs must read it
-        FI::FB_IMAGE_INDEX_Q2_RNG_SEED,
-    };
-    params.framebuffers->BarrierMultiple(params.cmd, params.frameIndex, fs);
-
-
-    TraceRays(params.cmd, SBT_INDEX_RAYGEN_INITIAL_RESERVOIRS, params.width, params.height);
-}
-
 void PathTracer::TraceDirectllumination(const TraceParams &params)
 {
     CmdLabel label(params.cmd, "Direct illumination");
@@ -187,7 +159,6 @@ void PathTracer::TraceDirectllumination(const TraceParams &params)
     typedef FramebufferImageIndex FI;
     FI fs[] =
     {
-        FI::FB_IMAGE_INDEX_RESERVOIRS_INITIAL,
         FI::FB_IMAGE_INDEX_ALBEDO,
         FI::FB_IMAGE_INDEX_NORMAL,
         FI::FB_IMAGE_INDEX_NORMAL_GEOMETRY,
@@ -196,6 +167,9 @@ void PathTracer::TraceDirectllumination(const TraceParams &params)
         FI::FB_IMAGE_INDEX_DEPTH_GRAD,
         FI::FB_IMAGE_INDEX_SURFACE_POSITION,
         FI::FB_IMAGE_INDEX_VIEW_DIRECTION,
+        // the gradient reproject (before lighting) patched the RNG seed at
+        // gradient sample pixels - the direct pass must read it
+        FI::FB_IMAGE_INDEX_Q2_RNG_SEED,
     };
     params.framebuffers->BarrierMultiple(params.cmd, params.frameIndex, fs);
 
@@ -230,55 +204,4 @@ void PathTracer::TraceQ2Indirectllumination(const TraceParams &params)
 
 
     TraceRays(params.cmd, SBT_INDEX_RAYGEN_Q2_INDIRECT, params.width, params.height);
-}
-
-void PathTracer::CalculateGradientsSamples(const TraceParams &params)
-{
-    CmdLabel label(params.cmd, "Gradient samples");
-
-
-    typedef FramebufferImageIndex FI;
-    FI fs[] =
-    {
-        FI::FB_IMAGE_INDEX_ALBEDO,
-        FI::FB_IMAGE_INDEX_GRADIENT_INPUTS,
-        FI::FB_IMAGE_INDEX_VIEW_DIRECTION,
-        FI::FB_IMAGE_INDEX_RESERVOIRS,
-        FI::FB_IMAGE_INDEX_VISIBILITY_BUFFER,
-    };
-    params.framebuffers->BarrierMultiple(params.cmd, params.frameIndex, fs);
-
-
-    uint32_t gradWidth  = (params.width  + COMPUTE_ASVGF_STRATA_SIZE - 1) / COMPUTE_ASVGF_STRATA_SIZE;
-    uint32_t gradHeight = (params.height + COMPUTE_ASVGF_STRATA_SIZE - 1) / COMPUTE_ASVGF_STRATA_SIZE;
-
-
-    TraceRays(params.cmd, SBT_INDEX_RAYGEN_GRADIENTS, gradWidth, gradHeight);
-}
-
-void PathTracer::TraceIndirectllumination(const TraceParams &params)
-{
-    using FI = FramebufferImageIndex;
-
-    {
-        CmdLabel label(params.cmd, "Indirect illumination - Init");
-
-        FI fs[] = 
-        {
-            FI::FB_IMAGE_INDEX_UNFILTERED_SPECULAR,
-        };
-        params.framebuffers->BarrierMultiple( params.cmd, params.frameIndex, fs );
-
-
-        TraceRays( params.cmd, SBT_INDEX_RAYGEN_INDIRECT_INIT, params.width, params.height );
-    }
-
-    {
-        CmdLabel label( params.cmd, "Indirect illumination - Final" );
-
-        params.restirBuffers->BarrierInitial( params.cmd );
-
-
-        TraceRays( params.cmd, SBT_INDEX_RAYGEN_INDIRECT_FINAL, params.width, params.height );
-    }
 }

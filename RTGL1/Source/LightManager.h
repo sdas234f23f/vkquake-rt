@@ -61,7 +61,6 @@ public:
     void AddSpotlight(uint32_t frameIndex, const RgSpotLightUploadInfo &info);
 
     void CopyFromStaging(VkCommandBuffer cmd, uint32_t frameIndex);
-    void BarrierLightGrid(VkCommandBuffer cmd, uint32_t frameIndex);
 
     // Q2RTX-style per-cell light lists + adaptive shadow statistics.
     // cellLightCount / cellLightList are built by CmQ2LightListBuild.comp;
@@ -87,7 +86,6 @@ private:
 
     std::shared_ptr<AutoBuffer> lightsBuffer;
     Buffer lightsBuffer_Prev;
-    Buffer initialLightsGrid[MAX_FRAMES_IN_FLIGHT];
 
     // Q2RTX-style per-cell light lists + adaptive shadow statistics (see
     // Q2_LIGHT_LIST_* constants). Single storage buffer each, indexed with
