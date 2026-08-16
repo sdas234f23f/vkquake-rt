@@ -1,7 +1,7 @@
 // Q2RTX-style .mat material definitions (phase 4.5).
 // Ported from Q2RTX material.c and adapted to the vkquake host: materials are
 // loaded from materials/*.mat files (global + <map>.mat) found either on disk
-// or inside a mounted .pkz archive, and are used to synthesize the RTGL1
+// or inside a mounted .pkz archive, and are used to synthesize the vkpt
 // RGBA8 material textures (albedo-alpha, roughness-metallic-emissive, normal).
 
 #ifndef RT_MATERIAL_H

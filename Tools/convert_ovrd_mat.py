@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Convert RTGL1 override materials (ovrd/mat/*.ktx2) into a Q2RTX-style
+"""Convert vkpt override materials (ovrd/mat/*.ktx2) into a Q2RTX-style
 .pkz: textures/<name>.png + materials/ovrd.mat.
 
-The ovrd/mat layout follows the RTGL1 override convention (rtname + postfix):
+The ovrd/mat layout follows the vkpt override convention (rtname + postfix):
     maps/<name>.ktx2      - albedo (postfix "")
     maps/<name>_n.ktx2    - normal map (postfix "_n")
     maps/<name>_rme.ktx2  - roughness(R)/metallic(G)/emission(B) (postfix "_rme")

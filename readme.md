@@ -34,11 +34,11 @@ Steps:
 
 2. Build [RayTracedGL1](https://github.com/sultim-t/RayTracedGL1) (the `quake-fsr31-support` branch) with CMake.
 
-3. Set the `RTGL1_SDK_PATH` environment variable to the RayTracedGL1 repository root
-   (it must contain `Include/RTGL1/RTGL1.h` and `Build/RayTracedGL1.lib`):
+3. Set the `vkpt_SDK_PATH` environment variable to the RayTracedGL1 repository root
+   (it must contain `Include/vkpt/vkpt.h` and `Build/RayTracedGL1.lib`):
 
    ```
-   setx RTGL1_SDK_PATH "C:\path\to\RayTracedGL1"
+   setx vkpt_SDK_PATH "C:\path\to\RayTracedGL1"
    ```
 
 4. Configure and build (open a new terminal after `setx`):

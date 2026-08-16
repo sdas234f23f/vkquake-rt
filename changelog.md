@@ -3,11 +3,11 @@
 ## v3.3.0
 
 ### Added
-- **Decoupled from RayTracedGL1.dll (4.7)** — the Q2RTX-style ray-traced renderer is now vendored into the repository (`RTGL1/` folder: source + shaders + KTX/FidelityFX) and built as a static library linked into `vkquake.exe`.
+- **Decoupled from RayTracedGL1.dll (4.7)** — the Q2RTX-style ray-traced renderer is now vendored into the repository (`vkpt/` folder: source + shaders + KTX/FidelityFX) and built as a static library linked into `vkquake.exe`.
 - **The game no longer depends on the RayTracedGL1 library** — `RayTracedGL1.dll` is not required at runtime anymore; the renderer is compiled straight into `vkquake.exe`. The public `RG_*` API is kept as an internal interface (`RG_STATIC`); the `.spv` shaders and blue noise are still loaded from the game data (`ovrd/shaders/`, `ovrd/BlueNoise_LDR_RGBA_128.ktx2`). The renderer's own changelog is preserved at the bottom of this file.
 
 ### Changed
-- **The legacy RTGL1 renderer was removed** — the Q2RTX-style core is now the only renderer (`rt_core_q2rtx` cvar removed; `coreQ2RTX` is always on). The legacy SVGF denoiser path, legacy screen-space volumetric (`rt_volume_type` no longer renders) and the legacy reflection/refraction pass are gone. Kept: the ASVGF denoiser, the TAAU upscaler (default), **FSR 2/FSR 3.1/DLSS upscalers still available** (they run on the Q2RTX final image when selected in the video menu), god rays, fog volumes, procedural sky, ReSTIR lighting, and the classic (non-RT) renderer fallback.
+- **The legacy (pre-Q2RTX) renderer was removed** — the Q2RTX-style core is now the only renderer (`rt_core_q2rtx` cvar removed; `coreQ2RTX` is always on). The legacy SVGF denoiser path, legacy screen-space volumetric (`rt_volume_type` no longer renders) and the legacy reflection/refraction pass are gone. Kept: the ASVGF denoiser, the TAAU upscaler (default), **FSR 2/FSR 3.1/DLSS upscalers still available** (they run on the Q2RTX final image when selected in the video menu), god rays, fog volumes, procedural sky, ReSTIR lighting, and the classic (non-RT) renderer fallback.
 - Fixed an intermittent AMD overlay flicker (gone together with the legacy render path).
 
 ## v3.2.0
@@ -31,7 +31,7 @@
   - Automatic material detection from HD texture-pack suffixes: `_norm` (normal map), `_gloss` (gloss → roughness), `_luma`/`_glow` (emissive), `_bump`
   - JPG/PNG decoding (stb_image) in the engine image loader and in material textures
   - `rt_mat` console command (inspect materials) and `rt_materials` cvar (on/off)
-  - `Tools/convert_ovrd_mat.py` — converts RTGL1 override materials (`ovrd/mat/*.ktx2`, RGBA8/BC5/BC7) into a ready-to-use `.pkz` (textures + `.mat`)
+  - `Tools/convert_ovrd_mat.py` — converts vkpt override materials (`ovrd/mat/*.ktx2`, RGBA8/BC5/BC7) into a ready-to-use `.pkz` (textures + `.mat`)
   - `Tools/gen_materials.py` — generates `.mat` files from HD texture packs using the `_norm`/`_gloss`/`_luma`/`_glow` suffix convention
 - **Crash log** — on an unhandled exception a `crash.log` (exception code, faulting address, module-relative stack trace) is written next to the executable
 
@@ -46,10 +46,10 @@
 ## v3.0.0
 
 ### Added
-- **Q2RTX core path switch** — `rt_core_q2rtx` cvar enables the new Q2RTX-style rendering core in RTGL1 (ASVGF denoiser + checkerboard interleave + TAAU)
+- **Q2RTX core path switch** — `rt_core_q2rtx` cvar enables the new Q2RTX-style rendering core in vkpt (ASVGF denoiser + checkerboard interleave + TAAU)
 - **Fog volumes** — port of the Q2RTX `fog` console command: define up to 8 axis-aligned fog boxes with `fog -v <i> -a <x,y,z|here> -b ... -c <r,g,b> -d <dist> -f <face>`; print (`-p`), reset (`-r`) and clear-all (`-R`) supported
 - **Sun presets** — `rt_sun_preset` cvar (manual, warm, daylight, neutral, sunset, cold, Q1 purple, cold blue); sun color now lives in separate `rt_sky_light_r/g/b` cvars, decoupled from `rt_globallight_*`
-- **Physical sky support** — `rt_physical_sky` enables the procedural atmosphere in RTGL1; `rt_sky_tint` and cloud cvars control the look
+- **Physical sky support** — `rt_physical_sky` enables the procedural atmosphere in vkpt; `rt_sky_tint` and cloud cvars control the look
 - Volumetric menu: left/right arrows now cycle through off/simple/sky modes in both directions
 
 ## v2.2.0
@@ -74,11 +74,11 @@
 
 ---
 
-# RTGL1 renderer (vendored) — changelog
+# vkpt renderer (vendored) — changelog
 
-The RayTracedGL1 renderer is now part of this repository: it is built from source (`RTGL1/`) and linked into `vkquake.exe`, so **the game no longer depends on the external `RayTracedGL1.dll` library**. Its changelog is preserved below.
+The RayTracedGL1 renderer is now part of this repository: it is built from source (`vkpt/`) and linked into `vkquake.exe`, so **the game no longer depends on the external `RayTracedGL1.dll` library**. Its changelog is preserved below.
 
-## v3.0.0 (RTGL1 renderer)
+## v3.0.0 (vkpt renderer)
 
 ### Added
 - **Q2RTX-style core rendering path** — a full new pipeline alongside the legacy one, switched at runtime by the host flag `RG_DEBUG_DRAW_Q2RTX_CORE_BIT` (`rt_core_q2rtx` cvar in vkquake-rt):
@@ -96,23 +96,23 @@ The RayTracedGL1 renderer is now part of this repository: it is built from sourc
 ### Fixed
 - **std140 layout of scalar arrays in generated C headers** — GLSL std140 aligns every array element to 16 bytes, but the header generator emitted scalar arrays with a 4-byte stride (e.g. `uint[8]` became `uint32_t[8]` = 32 bytes instead of 128), shifting every field after the first scalar array by 96 bytes on the CPU side. The GPU then read garbage (fog volumes silently never rendered while host-side diagnostics looked correct). The generator now emits `count*4` scalars per std140 array element
 
-## v2.2.0 (RTGL1 renderer)
+## v2.2.0 (vkpt renderer)
 
 ### Fixed
 - **Denoised ghosting** — `CmSVGFTemporalAccumulation.comp` reworked to remove ghosting artifacts in the SVGF/ASVGF temporal accumulation
 
-## v2.1.0 (RTGL1 renderer)
+## v2.1.0 (vkpt renderer)
 
 ### Added
 - **AMD FSR 3.1 upscaler** via FidelityFX SDK 1.1.4 (`ffxCreateContext` / `ffxDispatch` / `ffxQuery` API)
 - `RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3` — new public enum value for FSR 3.1
 - `RG_RENDER_RESOLUTION_MODE_NATIVE_AA` — Native AA mode (render at 1.0x, FSR 3.1 anti-aliasing only)
 - AMD-signed prebuilt `amd_fidelityfx_vk.dll` required at runtime (driver overlay detection depends on Authenticode signature)
-- **Explicit FSR version selection** — RTGL1 tells the FidelityFX framework which FSR algorithm to use via `ffxOverrideVersion` instead of letting the framework pick the "best" provider by itself:
+- **Explicit FSR version selection** — vkpt tells the FidelityFX framework which FSR algorithm to use via `ffxOverrideVersion` instead of letting the framework pick the "best" provider by itself:
   - `RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2` → FSR 2.x
   - `RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3` → FSR 3.1
 - Switching between FSR 2 and FSR 3.1 works at runtime (the FidelityFX context is recreated on version change)
-- If the requested FSR version is not present in `amd_fidelityfx_vk.dll`, RTGL1 falls back to the other version and prints a message to the game console (`pfnPrint`)
+- If the requested FSR version is not present in `amd_fidelityfx_vk.dll`, vkpt falls back to the other version and prints a message to the game console (`pfnPrint`)
 - `rgIsRenderUpscaleTechniqueAvailable` now actually checks whether the requested FSR version exists in the DLL
 
 ### Changed

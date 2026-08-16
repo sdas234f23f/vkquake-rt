@@ -26,7 +26,7 @@ jobs:
 
     - name: Build vkQuake
       run: |
-        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.configuration }} -DRTGL1_SDK_PATH=${{ github.workspace }}/rtgl1
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.configuration }} -Dvkpt_SDK_PATH=${{ github.workspace }}/rtgl1
         cmake --build build
 
     - name: Upload vkQuake

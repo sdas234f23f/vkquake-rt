@@ -45,8 +45,8 @@ include(CheckCCompilerFlag)
 
 if(MSVC)
     # Match VS project: /W4, WX, no exceptions, multiprocessor.
-    # The strict flags are scoped to C only: the vendored RTGL1 renderer
-    # (C++) sets its own /W3 /EHsc flags in RTGL1/CMakeLists.txt.
+    # The strict flags are scoped to C only: the vendored vkpt renderer
+    # (C++) sets its own /W3 /EHsc flags in vkpt/CMakeLists.txt.
     add_compile_options("$<$<COMPILE_LANGUAGE:C>:/W4>" "$<$<COMPILE_LANGUAGE:C>:/WX>" "$<$<COMPILE_LANGUAGE:C>:/MP>")
     add_compile_options("$<$<COMPILE_LANGUAGE:C>:/wd4100>" "$<$<COMPILE_LANGUAGE:C>:/wd4127>" "$<$<COMPILE_LANGUAGE:C>:/wd4389>" "$<$<COMPILE_LANGUAGE:C>:/wd4702>" "$<$<COMPILE_LANGUAGE:C>:/wd4706>" "$<$<COMPILE_LANGUAGE:C>:/wd5286>")
 
@@ -211,14 +211,14 @@ if(VKQUAKE_PLATFORM_WINDOWS)
 endif()
 
 # ============================================================================
-# RTGL1 (RayTracedGL1) renderer — vendored (phase 4.7: no RTGL1.dll)
+# vkpt renderer — vendored (phase 4.7: decoupled from the external RTGL1.dll)
 # ============================================================================
-# The renderer source lives in the RTGL1/ subdirectory and is built as a
+# The renderer source lives in the vkpt/ subdirectory and is built as a
 # static library linked into vkquake. The public RG_* API remains an internal
-# interface (RG_STATIC is defined in RTGL1/CMakeLists.txt).
-add_subdirectory(RTGL1)
+# interface (RG_STATIC is defined in vkpt/CMakeLists.txt).
+add_subdirectory(vkpt)
 
-message(STATUS "RTGL1 renderer: vendored (static, built from RTGL1/)")
+message(STATUS "vkpt renderer: vendored (static, built from vkpt/)")
 
 # ============================================================================
 # Source files
@@ -413,7 +413,7 @@ endif()
 target_compile_definitions(vkquake PRIVATE
     $<$<CONFIG:Debug>:_DEBUG>
     $<$<CONFIG:Release>:NDEBUG>
-    # The vendored RTGL1 renderer is linked statically: RGAPI must be empty.
+    # The vendored vkpt renderer is linked statically: RGAPI must be empty.
     RG_STATIC
 )
 
@@ -432,7 +432,7 @@ endif()
 # Link libraries
 # ============================================================================
 target_link_libraries(vkquake PRIVATE Vulkan::Vulkan)
-target_link_libraries(vkquake PRIVATE RayTracedGL1)
+target_link_libraries(vkquake PRIVATE vkpt)
 
 if(VKQUAKE_PLATFORM_WINDOWS)
     target_link_libraries(vkquake PRIVATE SDL2::SDL2 SDL2::SDL2main)
@@ -560,10 +560,10 @@ if(VKQUAKE_PLATFORM_WINDOWS)
         COMMENT "Copying SDL2.dll..."
     )
 
-    # amd_fidelityfx_vk.dll (AMD-signed, FSR 2/3.1) — from the vendored RTGL1
+    # amd_fidelityfx_vk.dll (AMD-signed, FSR 2/3.1) — from the vendored vkpt
     add_custom_command(TARGET vkquake POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/RTGL1/Source/FidelityFX_SDK_1.1.4/src/PrebuiltSignedDLL/amd_fidelityfx_vk.dll"
+            "${CMAKE_SOURCE_DIR}/vkpt/Source/FidelityFX_SDK_1.1.4/src/PrebuiltSignedDLL/amd_fidelityfx_vk.dll"
             "$<TARGET_FILE_DIR:vkquake>"
         COMMENT "Copying amd_fidelityfx_vk.dll..."
     )

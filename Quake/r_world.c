@@ -2001,7 +2001,7 @@ void RT_ParseTeleports (void)
 		}
 	}
 
-	// RTGL1's limit
+	// vkpt's portal limit
 	if (rt_teleports_count > RG_MAX_PORTALS)
 	{
 		rt_teleports_count = RG_MAX_PORTALS;

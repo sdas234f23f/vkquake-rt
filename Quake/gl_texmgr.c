@@ -320,7 +320,7 @@ static void TexMgr_RT_SpecialFullbright (unsigned width, unsigned height, uint32
 	assert (rtspecial_target != NULL && rtspecial_info_albedoAlpha != NULL);
 	assert (rtspecial_info.size.width > 0 && rtspecial_info.size.height > 0);
 
-	// strange RTGL1 limitation
+	// strange vkpt limitation
 	if (rtspecial_info.size.width != width || rtspecial_info.size.height != height)
 	{
 		Con_DWarning ("Ignoring fullbright of \"%s\", as it has different size with albedo", rtspecial_info_pRelativePath);
@@ -1012,7 +1012,7 @@ static void TexMgr_LoadImage32 (gltexture_t *glt, unsigned *data)
 ================
 TexMgr_ApplyMaterialFromMat
 
-Builds the RTGL1 RGBA8 material textures from a Q2RTX-style .mat definition
+Builds the vkpt RGBA8 material textures from a Q2RTX-style .mat definition
 (phase 4.5) and replaces glt->rtmaterial with the result. Returns true if a
 material was applied.
 ================
@@ -1023,7 +1023,7 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	// The material key is the texture file path without extension, e.g.
 	// "textures/e1u1/foo" -- this matches the .mat entry names (Q2RTX
 	// convention) and the auto-detected suffix files (_norm/_gloss/_luma).
-	// Note: glt->rtname is the RTGL1 override path ("maps/...") and must NOT
+	// Note: glt->rtname is the vkpt override path ("maps/...") and must NOT
 	// be used here.
 	rt_material_t *mat = RT_MAT_Find (glt->name);
 	if (!mat)

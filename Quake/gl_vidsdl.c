@@ -1328,8 +1328,8 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	RgDrawFrameDebugParams debug_params = {
 		.drawFlags = CVAR_TO_UINT32 (rt_debugflags),
 	};
-	// 4.7: the Q2RTX-style core is the only renderer (the legacy RTGL1 path
-	// was removed), so the core flag is always set.
+	// 4.7: the Q2RTX-style core is the only renderer (the legacy pre-Q2RTX
+	// render path was removed), so the core flag is always set.
 	debug_params.drawFlags |= RG_DEBUG_DRAW_Q2RTX_CORE_BIT;
 
 	float cameranear = GL_GetCameraNear (DEG2RAD (r_fovx), DEG2RAD (r_fovy));

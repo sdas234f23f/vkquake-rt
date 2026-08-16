@@ -1,0 +1,129 @@
+// Copyright (c) 2020-2021 Sultim Tsyrendashiev
+// 
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+// 
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+// 
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
+// Ported from Q2RTX (GPL v2) shader/asvgf_gradient_atrous.comp, adapted to the
+// vkpt framework. A-trous wavelet filter for the lighting gradients. 7
+// iterations: LF is blurred in all 7 (normalized in the last one), HF/SPEC are
+// blurred in the first 3. Ping/pong over the Q2Grad* buffers.
+
+#version 460
+
+#define DESC_SET_FRAMEBUFFERS 0
+#define DESC_SET_GLOBAL_UNIFORM 1
+#include "ShaderCommonGLSLFunc.h"
+#include "Q2Asvgf.h"
+
+layout(push_constant, std140) uniform IterationInfo
+{
+    uint iteration;
+} push;
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+vec2 q2FilterGradientImage(sampler2D img)
+{
+    ivec2 ipos = ivec2(gl_GlobalInvocationID);
+    ivec2 grad_size = ivec2(int(globalUniform.renderWidth), int(globalUniform.renderHeight)) / Q2_GRAD_DWN;
+
+    vec2 sum_color = vec2(0);
+    float sum_w = 0;
+
+    const int step_size = int(1u << push.iteration);
+
+    const int r = 1;
+    for (int yy = -r; yy <= r; yy++)
+    {
+        for (int xx = -r; xx <= r; xx++)
+        {
+            ivec2 p = ipos + ivec2(xx, yy) * step_size;
+
+            vec2 c = texelFetch(img, p, 0).xy;
+
+            if (any(greaterThanEqual(p, grad_size)))
+            {
+                c = vec2(0);
+            }
+
+            float w = Q2_WAVELET_KERNEL[abs(xx)][abs(yy)];
+
+            sum_color += c * w;
+            sum_w += w;
+        }
+    }
+
+    return sum_color / sum_w;
+}
+
+void main()
+{
+    ivec2 ipos = ivec2(gl_GlobalInvocationID);
+    ivec2 grad_size = ivec2(int(globalUniform.renderWidth), int(globalUniform.renderHeight)) / Q2_GRAD_DWN;
+    if (any(greaterThanEqual(ipos, grad_size)))
+    {
+        return;
+    }
+
+    vec2 filtered_lf = vec2(0);
+    vec2 filtered_hf_spec = vec2(0);
+    switch (push.iteration)
+    {
+        case 0:
+            filtered_lf = q2FilterGradientImage(framebufQ2GradLFPing_Sampler);
+            filtered_hf_spec = q2FilterGradientImage(framebufQ2GradHFSpecPing_Sampler);
+            break;
+        case 1:
+            filtered_lf = q2FilterGradientImage(framebufQ2GradLFPong_Sampler);
+            filtered_hf_spec = q2FilterGradientImage(framebufQ2GradHFSpecPong_Sampler);
+            break;
+        case 2:
+            filtered_lf = q2FilterGradientImage(framebufQ2GradLFPing_Sampler);
+            filtered_hf_spec = q2FilterGradientImage(framebufQ2GradHFSpecPing_Sampler);
+            break;
+        case 3: filtered_lf = q2FilterGradientImage(framebufQ2GradLFPong_Sampler); break;
+        case 4: filtered_lf = q2FilterGradientImage(framebufQ2GradLFPing_Sampler); break;
+        case 5: filtered_lf = q2FilterGradientImage(framebufQ2GradLFPong_Sampler); break;
+        case 6:
+            filtered_lf = q2FilterGradientImage(framebufQ2GradLFPing_Sampler);
+            // LF gradients are not normalized in the img shader - do it now
+            filtered_lf.x = q2GetGradient(filtered_lf.x, filtered_lf.y);
+            filtered_lf.y = 0;
+            break;
+    }
+
+    switch (push.iteration)
+    {
+        case 0:
+            imageStore(framebufQ2GradLFPong, ipos, vec4(filtered_lf, 0, 0));
+            imageStore(framebufQ2GradHFSpecPong, ipos, vec4(filtered_hf_spec, 0, 0));
+            break;
+        case 1:
+            imageStore(framebufQ2GradLFPing, ipos, vec4(filtered_lf, 0, 0));
+            imageStore(framebufQ2GradHFSpecPing, ipos, vec4(filtered_hf_spec, 0, 0));
+            break;
+        case 2:
+            imageStore(framebufQ2GradLFPong, ipos, vec4(filtered_lf, 0, 0));
+            imageStore(framebufQ2GradHFSpecPong, ipos, vec4(filtered_hf_spec, 0, 0));
+            break;
+        case 3: imageStore(framebufQ2GradLFPing, ipos, vec4(filtered_lf, 0, 0)); break;
+        case 4: imageStore(framebufQ2GradLFPong, ipos, vec4(filtered_lf, 0, 0)); break;
+        case 5: imageStore(framebufQ2GradLFPing, ipos, vec4(filtered_lf, 0, 0)); break;
+        case 6: imageStore(framebufQ2GradLFPong, ipos, vec4(filtered_lf, 0, 0)); break;
+    }
+}
