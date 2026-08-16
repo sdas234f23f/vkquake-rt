@@ -385,6 +385,9 @@ static void RT_UploadAllDlights ()
 
 		RgResult r = rgUploadSphericalLight (vulkan_globals.instance, &info);
 		RG_CHECK (r);
+
+		// register for the per-cluster light lists
+		RT_ClusterLightAdd (info.uniqueID, l->origin);
 	}
 
 	if (CVAR_TO_FLOAT (rt_flashlight) > 0.1f)
@@ -526,6 +529,9 @@ void R_SetupViewBeforeMark (void *unused)
 		r_lightmap_cheatsafe = false;
 	}
 	// johnfitz
+
+	// rebuild the Q2RTX per-cluster light lists from scratch this frame
+	RT_ClusterLightListsReset ();
 
 	RT_UploadAllDlights ();
 }
@@ -921,6 +927,10 @@ static void R_DrawViewModelTask (void *unused)
 	RT_UploadAllElights ();                                                      // RT
 	RT_UploadAllWorldModelLights ();                                             // RT
 	RT_UploadAllTeleports ();                                                    // RT
+
+	// all RT lights are uploaded and registered - build + upload the
+	// per-cluster light lists for this frame
+	RT_ClusterLightListsUpload ();                                               // RT
 }
 
 /*

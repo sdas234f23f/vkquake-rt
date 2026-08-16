@@ -37,6 +37,8 @@ struct Surface
     vec3    specularColor;
     float   emission;
     vec3    toViewerDir;
+    // BSP cluster of the surface (Q2RTX per-cluster light lists).
+    uint    cluster;
 };
 
 
@@ -70,6 +72,7 @@ Surface fetchGbufferSurface(const ivec2 pix)
     s.normalGeom                = texelFetchNormalGeometry(pix);
     s.normal                    = texelFetchNormal(pix);
     s.toViewerDir               = -texelFetch(framebufViewDirection_Sampler, pix, 0).xyz;
+    s.cluster                   = texelFetch(framebufQ2Cluster_Sampler, pix, 0).r;
     return s;
 }
 
@@ -112,6 +115,7 @@ Surface hitInfoToSurface_Indirect(const ShHitInfo h, const vec3 rayDirection)
     s.specularColor = getSpecularColor(h.albedo, h.metallic);
     s.emission = h.emission;
     s.toViewerDir = -rayDirection;
+    s.cluster = h.cluster;
     return s;
 }
        

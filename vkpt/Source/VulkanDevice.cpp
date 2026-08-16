@@ -765,14 +765,14 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
 
 
     {
-        // Q2RTX-style per-cell light lists + adaptive shadow statistics.
-        // Runs alongside the ReSTIR light grid (which is still used by the
-        // ReSTIR passes until the NEE port replaces them).
+        // Q2RTX-style per-BSP-cluster light lists + adaptive shadow statistics.
+        // The lists themselves are uploaded by the game each frame (via
+        // rgUploadClusterLightLists) and copied to the device in
+        // Scene::SubmitForFrame -> LightManager::CopyFromStaging.
         {
             auto lightManager = scene->GetLightManager();
-            lightGrid->Q2Build(cmd, frameIndex, uniform, blueNoise, lightManager);
             lightManager->ResetLightStats(cmd, frameIndex, uniform->GetData()->frameId);
-            lightManager->BarrierQ2CellLists(cmd, frameIndex);
+            lightManager->BarrierQ2ClusterLists(cmd, frameIndex);
         }
 
         decalManager->SubmitForFrame(cmd, frameIndex);
@@ -1385,6 +1385,21 @@ void vkpt::VulkanDevice::UploadPolygonalLight(const RgPolygonalLightUploadInfo *
     }
 
     scene->UploadLight(currentFrameState.GetFrameIndex(), *pLightInfo);
+}
+
+void VulkanDevice::UploadClusterLightLists(const RgClusterLightListsUploadInfo *pInfo)
+{
+    if (pInfo == nullptr || pInfo->pOffsets == nullptr || pInfo->pLightUniqueIds == nullptr)
+    {
+        throw RgException(RG_WRONG_ARGUMENT, "Argument is null");
+    }
+
+    scene->GetLightManager()->SetClusterLightLists(
+        currentFrameState.GetFrameIndex(),
+        pInfo->numClusters,
+        pInfo->pOffsets,
+        pInfo->pLightUniqueIds,
+        pInfo->totalLightCount);
 }
 
 void VulkanDevice::SetFogVolumes(uint32_t count, const RgFogVolume *pVolumes)

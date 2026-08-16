@@ -52,7 +52,6 @@
 #include "DecalManager.h"
 #include "EffectWipe.h"
 #include "EffectSimple_Instances.h"
-#include "LightGrid.h"
 #include "FSR.h"
 #include "FrameState.h"
 #include "LibraryConfig.h"
@@ -94,6 +93,9 @@ public:
     void UploadSphericalLight(const RgSphericalLightUploadInfo *pLightInfo);
     void UploadSpotlight(const RgSpotLightUploadInfo *pLightInfo);
     void UploadPolygonalLight(const RgPolygonalLightUploadInfo *pLightInfo);
+
+    // Q2RTX per-BSP-cluster light lists (uploaded by the game each frame).
+    void UploadClusterLightLists(const RgClusterLightListsUploadInfo *pInfo);
 
     // Q2RTX-style fog volumes (used by the new Q2RTX core path)
     void SetFogVolumes(uint32_t count, const RgFogVolume *pVolumes);
@@ -173,7 +175,6 @@ private:
     std::shared_ptr<Rasterizer>             rasterizer;
     std::shared_ptr<DecalManager>           decalManager;
     std::shared_ptr<PortalList>             portalList;
-    std::shared_ptr<LightGrid>              lightGrid;
     std::shared_ptr<Q2Denoiser>             q2Denoiser;
     std::shared_ptr<Tonemapping>            tonemapping;
     std::shared_ptr<ImageComposition>       imageComposition;

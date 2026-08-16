@@ -68,7 +68,9 @@ void main()
     }
 
     const bool isGradient = q2GetIsGradient(pix);
-    const int cell = q2CellToLinear(q2WorldToCell(surf.position));
+    // BSP cluster of the primary hit (written by the primary pass from
+    // triangle.cluster, Q2RTX IMG_PT_CLUSTER_A). Sky = ~0u (empty list).
+    const uint cluster = texelFetch(framebufQ2Cluster_Sampler, pix, 0).r;
 
     // Phong params for the CDF mass (Q2RTX get_direct_illumination)
     const float alpha = square(surf.roughness);
@@ -81,7 +83,7 @@ void main()
     vec3 directDiffuse = vec3(0.0);
     vec3 directSpecular = vec3(0.0);
 
-    // 1) NEE from the per-cell light list (Q2RTX light-selection CDF).
+    // 1) NEE from the per-cluster light list (Q2RTX light-selection CDF).
     //    2 independent light samples per pixel (2x non-sun rays): each sample
     //    is a complete unbiased NEE estimate, so the two are averaged -> half
     //    the variance of a single light ray.
@@ -98,9 +100,9 @@ void main()
         uint lightIndex = LIGHT_INDEX_NONE;
         uint lightSlot = 0u;
         float lightPdf = 0.0;
-        q2SampleCellLights(cell, surf.position, surf.normal, surf.toViewerDir,
-                           phongExp, phongScale, phongWeight, isGradient, rng,
-                           lightIndex, lightSlot, lightPdf);
+        q2SampleClusterLights(cluster, surf.position, surf.normal, surf.toViewerDir,
+                              phongExp, phongScale, phongWeight, isGradient, rng,
+                              lightIndex, lightSlot, lightPdf);
 
         if (lightIndex != LIGHT_INDEX_NONE && lightPdf > 0.0)
         {
@@ -121,7 +123,7 @@ void main()
 
                 // Adaptive shadow statistics for the next frames' CDF (occluded
                 // lights get a smaller mass -> sampled less -> stable choice).
-                q2AccumulateLightStats(cell, lightSlot, surf.normal, vis);
+                q2AccumulateLightStats(cluster, lightSlot, surf.normal, vis);
 
                 vec3 d, s;
                 shade(surf, light, 1.0 / lightPdf, d, s);

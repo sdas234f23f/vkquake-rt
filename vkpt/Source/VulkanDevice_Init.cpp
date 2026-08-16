@@ -173,13 +173,6 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
         device,
         memAllocator);
 
-    lightGrid           = std::make_shared<LightGrid>(
-        device,
-        shaderManager,
-        uniform,
-        blueNoise,
-        scene->GetLightManager());
-
     shadowMap           = std::make_shared<ShadowMap>(
         device,
         memAllocator,
@@ -281,7 +274,6 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
     shaderManager->Subscribe(volumetric);
     shaderManager->Subscribe(decalManager);
     shaderManager->Subscribe(rtPipeline);
-    shaderManager->Subscribe(lightGrid);
     shaderManager->Subscribe(tonemapping);
     shaderManager->Subscribe(scene->GetVertexPreprocessing());
     shaderManager->Subscribe(bloom);
@@ -338,7 +330,6 @@ VulkanDevice::~VulkanDevice()
     rasterizer.reset();
     decalManager.reset();
     portalList.reset();
-    lightGrid.reset();
     shadowMap.reset();
     godRays.reset();
     worldSamplerManager.reset();

@@ -72,7 +72,6 @@ set(vkpt_SOURCES
     Source/LensFlares.cpp
     Source/DecalManager.cpp
     Source/EffectBase.cpp
-    Source/LightGrid.cpp
     Source/Stb/stb_image.cpp
     Source/ImageLoaderDev.cpp
     Source/PortalList.cpp

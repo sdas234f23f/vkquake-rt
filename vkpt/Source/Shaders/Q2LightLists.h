@@ -19,10 +19,10 @@
 // SOFTWARE.
 //
 // Ported from Q2RTX (GPL v2) shader/light_lists.h, adapted to the vkpt
-// framework: the Q2RTX per-BSP-cluster light lists are replaced with the
-// per-cell light lists of the 16^3 camera-centered grid (q2CellLightCount /
-// q2CellLightList, built by CmQ2LightListBuild.comp), and the Q2RTX polygon
-// light sampling is replaced by vkpt's ShLightEncoded (sphere/spot/triangle).
+// framework: the per-BSP-cluster light lists (q2LightListOffsets /
+// q2LightListLights, built on the CPU from the PVS and uploaded each frame)
+// are used verbatim like Q2RTX, and the Q2RTX polygon light sampling is
+// replaced by vkpt's ShLightEncoded (sphere/spot/triangle).
 //
 // The light-selection CDF is the heart of the Q2RTX stability: the mass of
 // each light = solid angle x luminance x ADAPTIVE SHADOW STATISTICS factor
@@ -36,46 +36,17 @@
 #define Q2_MAX_BRUTEFORCE_SAMPLING 8
 
 // ------------------------------------------------------------------------- //
-// Cell math (same 16^3 camera-centered grid as CmQ2LightListBuild)          //
+// Per-cluster light list access (Q2RTX light_buffer)                         //
 // ------------------------------------------------------------------------- //
 
-vec3 q2CellDelta()
+uint q2GetClusterLightCount(const uint cluster)
 {
-    return vec3(globalUniform.cellWorldSize);
+    return q2LightListOffsets[cluster + 1] - q2LightListOffsets[cluster];
 }
 
-vec3 q2CellWholeSize()
+uint q2GetClusterLight(const uint cluster, const uint slot)
 {
-    return q2CellDelta() * vec3(Q2_LIGHT_LIST_SIZE_X, Q2_LIGHT_LIST_SIZE_Y, Q2_LIGHT_LIST_SIZE_Z);
-}
-
-float q2CellRadius()
-{
-    return length(q2CellDelta()) * 0.5;
-}
-
-vec3 q2CellGridCenter()
-{
-    // offset a bit, so camera is in the center of the cell
-    return globalUniform.cameraPosition.xyz + q2CellDelta() * 0.5;
-}
-
-vec3 q2CellMinExtent()
-{
-    return q2CellGridCenter() - q2CellWholeSize() * 0.5;
-}
-
-ivec3 q2WorldToCell(const vec3 worldPos)
-{
-    return clamp(
-        ivec3((worldPos - q2CellMinExtent()) / q2CellDelta()),
-        ivec3(0),
-        ivec3(Q2_LIGHT_LIST_SIZE_X - 1, Q2_LIGHT_LIST_SIZE_Y - 1, Q2_LIGHT_LIST_SIZE_Z - 1));
-}
-
-int q2CellToLinear(const ivec3 c)
-{
-    return c.x + c.y * Q2_LIGHT_LIST_SIZE_X + c.z * Q2_LIGHT_LIST_SIZE_X * Q2_LIGHT_LIST_SIZE_Y;
+    return q2LightListLights[q2LightListOffsets[cluster] + slot];
 }
 
 // ------------------------------------------------------------------------- //
@@ -107,20 +78,6 @@ float q2RoughnessSquareToSpecPower(const float alpha)
 // Adaptive shadow statistics (Q2RTX light_stats_bufers)                     //
 // ------------------------------------------------------------------------- //
 
-int q2GetCellLightCount(const int cell)
-{
-    return int(q2CellLightCount[cell]);
-}
-
-uint q2GetCellLight(const int cell, const int slot)
-{
-    return q2CellLightList[cell * Q2_LIGHT_LIST_MAX_PER_CELL + slot];
-}
-
-// ------------------------------------------------------------------------- //
-// Adaptive shadow statistics (Q2RTX light_stats_bufers)                     //
-// ------------------------------------------------------------------------- //
-
 // Dominant axis of the shading normal -> side 0..5. Same convention as
 // Q2RTX get_primary_direction.
 uint q2GetPrimaryDirectionSide(const vec3 n)
@@ -131,11 +88,11 @@ uint q2GetPrimaryDirectionSide(const vec3 n)
     return                             n.z >= 0.0 ? 4u : 5u;
 }
 
-// Address of the (cell, slot, side) hit/miss counters inside the current
+// Address of the (cluster, slot, side) hit/miss counters inside the current
 // frame's ring slot (the slot base is added by the caller).
-uint q2GetLightStatsAddr(const uint cell, const uint slot, const uint side)
+uint q2GetLightStatsAddr(const uint cluster, const uint slot, const uint side)
 {
-    uint addr = cell;
+    uint addr = cluster;
     addr = addr * uint(Q2_LIGHT_LIST_MAX_PER_CELL) + slot;
     addr = addr * uint(Q2_LIGHT_LIST_STATS_SIDES) + side;
     addr = addr * 2u;
@@ -143,17 +100,17 @@ uint q2GetLightStatsAddr(const uint cell, const uint slot, const uint side)
 }
 
 // Accumulate the shadow-ray result of the direct pass into the CURRENT frame's
-// stats slot (hits/misses per cell, slot, side). The CDF of the NEXT frames
+// stats slot (hits/misses per cluster, slot, side). The CDF of the NEXT frames
 // reads these to make the light choice visibility-aware (occluded lights get a
 // smaller mass -> sampled less -> stable per-frame selection).
-void q2AccumulateLightStats(const int cell, const uint slot, const vec3 n, const float vis)
+void q2AccumulateLightStats(const uint cluster, const uint slot, const vec3 n, const float vis)
 {
     const uint frameSlot = globalUniform.frameId % uint(Q2_LIGHT_LIST_STATS_BUFFERS);
     const uint statsFrameBase = frameSlot
-        * uint(Q2_LIGHT_LIST_CELL_COUNT) * uint(Q2_LIGHT_LIST_MAX_PER_CELL)
+        * uint(Q2_MAX_CLUSTERS) * uint(Q2_LIGHT_LIST_MAX_PER_CELL)
         * uint(Q2_LIGHT_LIST_STATS_SIDES) * 2u;
     const uint side = q2GetPrimaryDirectionSide(n);
-    const uint addr = statsFrameBase + q2GetLightStatsAddr(uint(cell), slot, side);
+    const uint addr = statsFrameBase + q2GetLightStatsAddr(cluster, slot, side);
     atomicAdd(q2LightStats[addr + (vis > 0.5 ? 0u : 1u)], 1u);
 }
 
@@ -225,19 +182,19 @@ float q2LightSelectionMass(const ShLightEncoded encoded, const vec3 p, const vec
 }
 
 // ------------------------------------------------------------------------- //
-// Light selection from the per-cell list (Q2RTX sample_polygonal_lights)    //
+// Light selection from the per-cluster list (Q2RTX sample_polygonal_lights) //
 // ------------------------------------------------------------------------- //
 //
-// Inverse-CDF over the cell's light list, partitioned into blocks of
+// Inverse-CDF over the cluster's light list, partitioned into blocks of
 // Q2_MAX_BRUTEFORCE_SAMPLING. The mass of each light is multiplied by the
 // absolute luminance and the adaptive shadow-statistics factor. For gradient
 // pixels the CDF uses the statistics from two frames ago (frame-2 slot) so it
 // matches the previous frame's CDF (the re-trace reproduces the same light).
 //
-// Returns the selected light index, its slot in the cell list (for the stats
-// addressing) and its selection pdf (for the NEE weight).
-void q2SampleCellLights(
-    const int cell, const vec3 p, const vec3 n, const vec3 V,
+// Returns the selected light index, its slot in the cluster list (for the
+// stats addressing) and its selection pdf (for the NEE weight).
+void q2SampleClusterLights(
+    const uint cluster, const vec3 p, const vec3 n, const vec3 V,
     const float phongExp, const float phongScale, const float phongWeight,
     const bool isGradient, const vec3 rng,
     out uint outLightIndex, out uint outSlot, out float outPdf)
@@ -246,13 +203,13 @@ void q2SampleCellLights(
     outSlot = 0u;
     outPdf = 0.0;
 
-    const int lightCount = q2GetCellLightCount(cell);
+    const int lightCount = int(q2GetClusterLightCount(cluster));
     if (lightCount <= 0)
     {
         return;
     }
 
-    const int listBase = cell * Q2_LIGHT_LIST_MAX_PER_CELL;
+    const int listBase = int(q2LightListOffsets[cluster]);
 
     const float partitions = ceil(float(lightCount) / float(Q2_MAX_BRUTEFORCE_SAMPLING));
     float r0 = rng.x * partitions;
@@ -269,7 +226,7 @@ void q2SampleCellLights(
         ? (frameSlot + uint(Q2_LIGHT_LIST_STATS_BUFFERS) - 2u) % uint(Q2_LIGHT_LIST_STATS_BUFFERS)
         : (frameSlot + uint(Q2_LIGHT_LIST_STATS_BUFFERS) - 1u) % uint(Q2_LIGHT_LIST_STATS_BUFFERS);
     const uint statsFrameBase = statsSlot
-        * uint(Q2_LIGHT_LIST_CELL_COUNT) * uint(Q2_LIGHT_LIST_MAX_PER_CELL)
+        * uint(Q2_MAX_CLUSTERS) * uint(Q2_LIGHT_LIST_MAX_PER_CELL)
         * uint(Q2_LIGHT_LIST_STATS_SIDES) * 2u;
     const uint side = q2GetPrimaryDirectionSide(n);
 
@@ -285,7 +242,7 @@ void q2SampleCellLights(
         }
 
         const int slot = nIdx - listBase;
-        const uint li = q2GetCellLight(cell, slot);
+        const uint li = q2GetClusterLight(cluster, uint(slot));
 
         // Guard against invalid/overflow slots.
         if (li < uint(LIGHT_ARRAY_REGULAR_LIGHTS_OFFSET) ||
@@ -303,7 +260,7 @@ void q2SampleCellLights(
         // Adaptive shadow statistics: occluded lights get a smaller CDF mass.
         if (m > 0.0)
         {
-            const uint statsAddr = statsFrameBase + q2GetLightStatsAddr(uint(cell), uint(slot), side);
+            const uint statsAddr = statsFrameBase + q2GetLightStatsAddr(cluster, uint(slot), side);
             const uint numHits = q2LightStats[statsAddr];
             const uint numMisses = q2LightStats[statsAddr + 1];
             const uint numTotal = numHits + numMisses;
@@ -350,7 +307,7 @@ void q2SampleCellLights(
         return;
     }
 
-    outLightIndex = q2GetCellLight(cell, selectedSlot);
+    outLightIndex = q2GetClusterLight(cluster, uint(selectedSlot));
     outSlot = uint(selectedSlot);
     outPdf = pdf / totalMassScaled;
 }

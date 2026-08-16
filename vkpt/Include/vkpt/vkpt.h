@@ -692,6 +692,28 @@ RGAPI RgResult RGCONV rgUploadPolygonalLight(
     const RgPolygonalLightUploadInfo    *pUploadInfo);
 
 
+// Q2RTX per-BSP-cluster light lists, uploaded by the game every frame.
+// pLightUniqueIds holds the same unique IDs used by the light uploads above
+// (the renderer resolves them to its internal light-array indices). The lists
+// are concatenated: cluster i's lights are pLightUniqueIds[pOffsets[i] ..
+// pOffsets[i+1]). pOffsets has numClusters+1 entries.
+typedef struct RgClusterLightListsUploadInfo
+{
+    // Number of BSP leaves ("clusters") of the world model.
+    uint32_t        numClusters;
+    // Prefix-sum offsets (numClusters+1 entries) into pLightUniqueIds.
+    const uint32_t *pOffsets;
+    // Concatenated light unique IDs for all clusters.
+    const uint64_t *pLightUniqueIds;
+    // Total number of entries in pLightUniqueIds (= pOffsets[numClusters]).
+    uint32_t        totalLightCount;
+} RgClusterLightListsUploadInfo;
+
+RGAPI RgResult RGCONV rgUploadClusterLightLists(
+    RgInstance                          rgInstance,
+    const RgClusterLightListsUploadInfo *pUploadInfo);
+
+
 
 typedef enum RgSamplerAddressMode
 {

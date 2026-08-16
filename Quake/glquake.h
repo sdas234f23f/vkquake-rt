@@ -365,6 +365,11 @@ int R_LightPoint (vec3_t p, lightcache_t *cache, vec3_t *lightcolor);
 void RT_ParseElights (void);
 void RT_UploadAllElights (void);
 
+// Q2RTX per-BSP-cluster light lists (built from the PVS on the CPU).
+void RT_ClusterLightListsReset (void);
+void RT_ClusterLightAdd (uint64_t uniqueID, const vec3_t origin);
+void RT_ClusterLightListsUpload (void);
+
 void GL_SubdivideSurface (msurface_t *fa);
 void R_BuildLightMap (msurface_t *surf, byte *dest, int stride);
 void R_RenderDynamicLightmaps (msurface_t *fa);

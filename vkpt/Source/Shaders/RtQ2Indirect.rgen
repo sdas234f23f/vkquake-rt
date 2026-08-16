@@ -134,9 +134,10 @@ void main()
     else
     {
         // Direct illumination at the hit (Q2RTX direct-at-hit, bounce=1):
-        // NEE from the per-cell light list with adaptive shadow statistics.
+        // NEE from the per-cluster light list with adaptive shadow statistics.
+        // The bounce hit's BSP cluster comes from its triangle (Q2RTX).
         const bool isGradient = q2GetIsGradient( pix );
-        const int  cell       = q2CellToLinear( q2WorldToCell( hitSurf.position ) );
+        const uint cluster    = hitSurf.cluster;
 
         const float alpha       = square( hitSurf.roughness );
         const float phongExp    = q2RoughnessSquareToSpecPower( alpha );
@@ -156,9 +157,9 @@ void main()
             uint  lightIndex = LIGHT_INDEX_NONE;
             uint  lightSlot  = 0u;
             float lightPdf   = 0.0;
-            q2SampleCellLights( cell, hitSurf.position, hitSurf.normal, hitSurf.toViewerDir,
-                                phongExp, phongScale, phongWeight, isGradient, rng,
-                                lightIndex, lightSlot, lightPdf );
+            q2SampleClusterLights( cluster, hitSurf.position, hitSurf.normal, hitSurf.toViewerDir,
+                                   phongExp, phongScale, phongWeight, isGradient, rng,
+                                   lightIndex, lightSlot, lightPdf );
 
             if ( lightIndex != LIGHT_INDEX_NONE && lightPdf > 0.0 )
             {
@@ -179,7 +180,7 @@ void main()
                     const float vis = traceVisibility( hitSurf, light.position, lightIndex );
 
                     // Adaptive shadow statistics for the next frames' CDF.
-                    q2AccumulateLightStats( cell, lightSlot, hitSurf.normal, vis );
+                    q2AccumulateLightStats( cluster, lightSlot, hitSurf.normal, vis );
 
                     vec3 d, s;
                     shade( hitSurf, light, 1.0 / lightPdf, d, s );

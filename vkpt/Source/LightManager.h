@@ -62,11 +62,16 @@ public:
 
     void CopyFromStaging(VkCommandBuffer cmd, uint32_t frameIndex);
 
-    // Q2RTX-style per-cell light lists + adaptive shadow statistics.
-    // cellLightCount / cellLightList are built by CmQ2LightListBuild.comp;
-    // lightStats / lightCountsHistory are ring buffers (reset + copy per frame).
+    // Q2RTX-style per-BSP-cluster light lists + adaptive shadow statistics.
+    // The lists (prefix-sum offsets + concatenated light UNIQUE IDs) are
+    // uploaded from the CPU each frame; CopyFromStaging resolves the unique
+    // IDs to light-array indices and copies the lists to the device.
+    void SetClusterLightLists(uint32_t frameIndex, uint32_t numClusters,
+                              const uint32_t *pOffsets, const uint64_t *pLightUniqueIds,
+                              uint32_t totalLightCount);
+    // lightStats is a ring buffer (reset per frame).
     void ResetLightStats(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t frameId);
-    void BarrierQ2CellLists(VkCommandBuffer cmd, uint32_t frameIndex);
+    void BarrierQ2ClusterLists(VkCommandBuffer cmd, uint32_t frameIndex);
 
     VkDescriptorSetLayout GetDescSetLayout();
     VkDescriptorSet GetDescSet(uint32_t frameIndex);
@@ -87,15 +92,15 @@ private:
     std::shared_ptr<AutoBuffer> lightsBuffer;
     Buffer lightsBuffer_Prev;
 
-    // Q2RTX-style per-cell light lists + adaptive shadow statistics (see
-    // Q2_LIGHT_LIST_* constants). Single storage buffer each, indexed with
-    // a manual frame offset (no descriptor arrays needed):
-    //   lightStats         : [3][CELL_COUNT * MAX_PER_CELL * SIDES * 2] uint
-    //   lightCountsHistory : [3][CELL_COUNT] uint
-    Buffer cellLightCount;
-    Buffer cellLightList;
+    // Q2RTX-style per-BSP-cluster light lists + adaptive shadow statistics
+    // (see Q2_* constants). Single storage buffer each, indexed with a manual
+    // frame offset (no descriptor arrays needed):
+    //   lightListOffsets : [Q2_MAX_CLUSTERS + 1] uint (prefix sums)
+    //   lightListLights  : [Q2_MAX_CLUSTERS * MAX_PER_CELL] uint
+    //   lightStats       : [3][Q2_MAX_CLUSTERS * MAX_PER_CELL * SIDES * 2] uint
+    std::shared_ptr<AutoBuffer> lightListOffsets;
+    std::shared_ptr<AutoBuffer> lightListLights;
     Buffer lightStats;
-    Buffer lightCountsHistory;
 
     // Match light indices between current and previous frames
     std::shared_ptr<AutoBuffer> prevToCurIndex;

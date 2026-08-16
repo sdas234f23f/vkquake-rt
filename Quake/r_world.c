@@ -1678,6 +1678,8 @@ void RT_UploadAllWorldModelLights (void)
 	{
 		RgResult r = rgUploadSphericalLight(vulkan_globals.instance, &rt_wldlights_sph[i]);
 		RG_CHECK (r);
+
+		RT_ClusterLightAdd (rt_wldlights_sph[i].uniqueID, rt_wldlights_sph[i].position.data);
     }
 #else
 	for (int i = 0; i < rt_wldlights_tri_count; i++)
@@ -1709,6 +1711,8 @@ void RT_UploadAllWorldModelLights (void)
 
 		RgResult r = rgUploadSphericalLight (vulkan_globals.instance, &lt);
 		RG_CHECK (r);
+
+		RT_ClusterLightAdd (lt.uniqueID, lt.position.data);
 	}
 }
 

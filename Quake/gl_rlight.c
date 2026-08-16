@@ -850,6 +850,151 @@ void RT_UploadAllElights ()
 
 			RgResult r = rgUploadSphericalLight (vulkan_globals.instance, &info);
 			RG_CHECK (r);
+
+			RT_ClusterLightAdd (info.uniqueID, info.position.data);
 		}
 	}
+}
+
+// ============================================================================
+// Q2RTX per-BSP-cluster light lists
+//
+// The world model's BSP leaves are used as clusters (vkQuake's PVS is
+// leaf-indexed, exactly like the Q2RTX cluster visibility). Every frame the
+// light uploads register (uniqueID, origin) here; RT_ClusterLightListsUpload
+// then builds the per-cluster lists from the PVS and uploads them to the
+// renderer, which resolves the unique IDs to its light-array indices.
+// ============================================================================
+
+#define RT_CLUSTER_MAX_LIGHTS    1024
+#define RT_CLUSTER_MAX_PER_LIST  64    // must match Q2_LIGHT_LIST_MAX_PER_CELL
+#define RT_CLUSTER_MAX_CLUSTERS  8192  // must match Q2_MAX_CLUSTERS
+
+typedef struct rt_cluster_light_s
+{
+	uint64_t uniqueID;
+	vec3_t   origin;
+} rt_cluster_light_t;
+
+static rt_cluster_light_t rt_cluster_lights[RT_CLUSTER_MAX_LIGHTS];
+static int rt_cluster_light_count;
+
+void RT_ClusterLightListsReset (void)
+{
+	rt_cluster_light_count = 0;
+}
+
+void RT_ClusterLightAdd (uint64_t uniqueID, const vec3_t origin)
+{
+	if (rt_cluster_light_count >= RT_CLUSTER_MAX_LIGHTS)
+		return;
+
+	// deduplicate by unique ID (a light can be uploaded from several paths)
+	for (int i = 0; i < rt_cluster_light_count; i++)
+	{
+		if (rt_cluster_lights[i].uniqueID == uniqueID)
+			return;
+	}
+
+	rt_cluster_lights[rt_cluster_light_count].uniqueID = uniqueID;
+	VectorCopy (origin, rt_cluster_lights[rt_cluster_light_count].origin);
+	rt_cluster_light_count++;
+}
+
+void RT_ClusterLightListsUpload (void)
+{
+	qmodel_t *wm = cl.worldmodel;
+	if (!wm || wm->type != mod_brush || !wm->leafs || wm->numleafs < 2)
+		return;
+
+	const int numClusters = wm->numleafs;
+	if (numClusters > RT_CLUSTER_MAX_CLUSTERS)
+		return;
+
+	static uint32_t *offsets = NULL;
+	static uint64_t *lights = NULL;
+	static int *counts = NULL;
+	static int *fill = NULL;
+	static int allocClusters = 0;
+
+	if (numClusters > allocClusters)
+	{
+		offsets = (uint32_t *)Mem_Realloc (offsets, sizeof (uint32_t) * (numClusters + 1));
+		lights = (uint64_t *)Mem_Realloc (lights, sizeof (uint64_t) * numClusters * RT_CLUSTER_MAX_PER_LIST);
+		counts = (int *)Mem_Realloc (counts, sizeof (int) * numClusters);
+		fill = (int *)Mem_Realloc (fill, sizeof (int) * numClusters);
+		allocClusters = numClusters;
+	}
+
+	// Pass 1: count how many lights each cluster sees (via the PVS).
+	memset (counts, 0, sizeof (int) * numClusters);
+	for (int li = 0; li < rt_cluster_light_count; li++)
+	{
+		mleaf_t *leaf = Mod_PointInLeaf (rt_cluster_lights[li].origin, wm);
+		if (!leaf)
+			continue;
+
+		const byte *vis = Mod_LeafPVS (leaf, wm);
+		for (int j = 0; j < (numClusters + 7) / 8; j++)
+		{
+			if (!vis[j])
+				continue;
+			for (int k = 0; k < 8; k++)
+			{
+				if (!(vis[j] & (1u << k)))
+					continue;
+				// PVS bit (j*8+k) -> leaf index (j*8+k)+1 (1-based, leaf 0
+				// is the all-seeing solid leaf).
+				const int c = (j << 3) + k + 1;
+				if (c >= numClusters)
+					continue;
+				if (counts[c] < RT_CLUSTER_MAX_PER_LIST)
+					counts[c]++;
+			}
+		}
+	}
+
+	// Prefix sums -> offsets.
+	uint32_t total = 0;
+	for (int c = 0; c < numClusters; c++)
+	{
+		offsets[c] = total;
+		total += (uint32_t)counts[c];
+	}
+	offsets[numClusters] = total;
+
+	// Pass 2: fill the tightly-packed light unique ID arrays.
+	memset (fill, 0, sizeof (int) * numClusters);
+	for (int li = 0; li < rt_cluster_light_count; li++)
+	{
+		mleaf_t *leaf = Mod_PointInLeaf (rt_cluster_lights[li].origin, wm);
+		if (!leaf)
+			continue;
+
+		const byte *vis = Mod_LeafPVS (leaf, wm);
+		for (int j = 0; j < (numClusters + 7) / 8; j++)
+		{
+			if (!vis[j])
+				continue;
+			for (int k = 0; k < 8; k++)
+			{
+				if (!(vis[j] & (1u << k)))
+					continue;
+				const int c = (j << 3) + k + 1;
+				if (c >= numClusters)
+					continue;
+				if (fill[c] < counts[c])
+					lights[offsets[c] + (uint32_t)fill[c]++] = rt_cluster_lights[li].uniqueID;
+			}
+		}
+	}
+
+	RgClusterLightListsUploadInfo info = {
+		.numClusters = (uint32_t)numClusters,
+		.pOffsets = offsets,
+		.pLightUniqueIds = lights,
+		.totalLightCount = total,
+	};
+	RgResult r = rgUploadClusterLightLists (vulkan_globals.instance, &info);
+	RG_CHECK (r);
 }

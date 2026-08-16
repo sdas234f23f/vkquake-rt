@@ -47,7 +47,7 @@ static ShaderModuleDefinition G_SHADERS[] =
     {"RMissShadow",             "RtMissShadowCheck.rmiss.spv"          },
     {"RClsOpaque",              "RtClsOpaque.rchit.spv"                },
     {"RAlphaTest",              "RtAlphaTest.rahit.spv"                },
-    {"CQ2LightListBuild",       "CmQ2LightListBuild.comp.spv"          },
+
     {"CPrepareFinal",           "CmPrepareFinal.comp.spv"              },
     {"CLuminanceHistogram",     "CmLuminanceHistogram.comp.spv"        },
     {"CLuminanceAvg",           "CmLuminanceAvg.comp.spv"              },

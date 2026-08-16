@@ -260,10 +260,11 @@ CONST = {
     "BINDING_LIGHT_SOURCES_PREV"                : 1,
     "BINDING_LIGHT_SOURCES_INDEX_PREV_TO_CUR"   : 2,
     "BINDING_LIGHT_SOURCES_INDEX_CUR_TO_PREV"   : 3,
-    "BINDING_LIGHT_SOURCES_Q2_CELL_COUNT"       : 4,
-    "BINDING_LIGHT_SOURCES_Q2_CELL_LIST"        : 5,
-    "BINDING_LIGHT_SOURCES_Q2_LIGHT_STATS"      : 6,
-    "BINDING_LIGHT_SOURCES_Q2_LIGHT_COUNTS_HISTORY" : 7,
+    # Q2RTX per-cluster light lists (offsets + concatenated light indices),
+    # uploaded from the CPU each frame; plus the adaptive shadow stats.
+    "BINDING_LIGHT_SOURCES_Q2_LIGHT_LIST_OFFSETS" : 4,
+    "BINDING_LIGHT_SOURCES_Q2_LIGHT_LIST_LIGHTS"  : 5,
+    "BINDING_LIGHT_SOURCES_Q2_LIGHT_STATS"        : 6,
     "BINDING_LENS_FLARES_CULLING_INPUT"         : 0,
     "BINDING_LENS_FLARES_DRAW_CMDS"             : 1,
     "BINDING_DRAW_LENS_FLARES_INSTANCES"        : 0,
@@ -417,14 +418,13 @@ CONST = {
 
     "LIGHT_INDEX_NONE"                      : ((1 << 15) - 1),
 
-    # Q2RTX-style per-cell light lists (cells act as clusters). The cell grid
-    # is the same 16^3 camera-centered grid as the (removed) ReSTIR light grid.
-    "Q2_LIGHT_LIST_SIZE_X"                  : 16,
-    "Q2_LIGHT_LIST_SIZE_Y"                  : 16,
-    "Q2_LIGHT_LIST_SIZE_Z"                  : 16,
-    "Q2_LIGHT_LIST_CELL_COUNT"              : "16 * 16 * 16",
-    # Every cell now receives ALL lights (Q2RTX has no distance cutoff in the
-    # light lists - the CDF does the importance culling). Keep a generous cap.
+    # Q2RTX-style per-BSP-cluster light lists. The world model's BSP leaves are
+    # used as clusters (vkQuake's PVS is leaf-indexed). The lists are built on
+    # the CPU (Quake side) from the PVS and uploaded per frame as
+    # q2LightListOffsets / q2LightListLights. Q2_MAX_CLUSTERS must cover the
+    # leaf count of any map (Quake BSP allows up to 32767 leaves; real maps
+    # stay well under 8192).
+    "Q2_MAX_CLUSTERS"                       : 8192,
     "Q2_LIGHT_LIST_MAX_PER_CELL"            : 64,
     "Q2_LIGHT_LIST_STATS_SIDES"             : 6,
     "Q2_LIGHT_LIST_STATS_BUFFERS"           : 3,

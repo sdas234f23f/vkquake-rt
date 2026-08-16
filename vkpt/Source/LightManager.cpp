@@ -58,26 +58,24 @@ vkpt::LightManager::LightManager(
 
     lightsBuffer_Prev.Init(_allocator, sizeof(ShLightEncoded) * LIGHT_ARRAY_MAX_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "Lights buffer - prev");
 
-    // Q2RTX-style per-cell light lists + adaptive shadow statistics
-    cellLightCount.Init(_allocator,
-        sizeof(uint32_t) * Q2_LIGHT_LIST_CELL_COUNT,
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "Q2 cell light count");
+    // Q2RTX-style per-BSP-cluster light lists + adaptive shadow statistics.
+    // The lists (prefix-sum offsets + concatenated light unique IDs) are
+    // uploaded from the CPU each frame and copied to the device in
+    // CopyFromStaging (unique IDs resolved to light-array indices there).
+    lightListOffsets = std::make_shared<AutoBuffer>(device, _allocator);
+    lightListOffsets->Create(sizeof(uint32_t) * (Q2_MAX_CLUSTERS + 1),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        "Q2 light list offsets");
 
-    cellLightList.Init(_allocator,
-        sizeof(uint32_t) * Q2_LIGHT_LIST_CELL_COUNT * Q2_LIGHT_LIST_MAX_PER_CELL,
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "Q2 cell light list");
+    lightListLights = std::make_shared<AutoBuffer>(device, _allocator);
+    lightListLights->Create(sizeof(uint32_t) * Q2_MAX_CLUSTERS * Q2_LIGHT_LIST_MAX_PER_CELL,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        "Q2 light list lights");
 
     lightStats.Init(_allocator,
-        sizeof(uint32_t) * Q2_LIGHT_LIST_CELL_COUNT * Q2_LIGHT_LIST_MAX_PER_CELL * Q2_LIGHT_LIST_STATS_SIDES * 2 * Q2_LIGHT_LIST_STATS_BUFFERS,
+        sizeof(uint32_t) * Q2_MAX_CLUSTERS * Q2_LIGHT_LIST_MAX_PER_CELL * Q2_LIGHT_LIST_STATS_SIDES * 2 * Q2_LIGHT_LIST_STATS_BUFFERS,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "Q2 light stats");
-
-    lightCountsHistory.Init(_allocator,
-        sizeof(uint32_t) * Q2_LIGHT_LIST_CELL_COUNT * Q2_LIGHT_LIST_STATS_BUFFERS,
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "Q2 light counts history");
 
     prevToCurIndex = std::make_shared<AutoBuffer>(device, _allocator);
     prevToCurIndex->Create(sizeof(uint32_t) * LIGHT_ARRAY_MAX_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Lights buffer - prev to cur");
@@ -421,6 +419,10 @@ void vkpt::LightManager::CopyFromStaging(VkCommandBuffer cmd, uint32_t frameInde
 
     lightsBuffer->CopyFromStaging(cmd, frameIndex, sizeof(ShLightEncoded) * GetLightArrayEnd(regLightCount, dirLightCount));
 
+    // Q2RTX per-cluster light lists (offsets + light indices).
+    lightListOffsets->CopyFromStaging(cmd, frameIndex, sizeof(uint32_t) * (Q2_MAX_CLUSTERS + 1));
+    lightListLights->CopyFromStaging(cmd, frameIndex, sizeof(uint32_t) * Q2_MAX_CLUSTERS * Q2_LIGHT_LIST_MAX_PER_CELL);
+
     prevToCurIndex->CopyFromStaging(cmd, frameIndex, sizeof(uint32_t) * GetLightArrayEnd(regLightCount_Prev, dirLightCount_Prev));
     curToPrevIndex->CopyFromStaging(cmd, frameIndex, sizeof(uint32_t) * GetLightArrayEnd(regLightCount, dirLightCount));
 
@@ -429,6 +431,45 @@ void vkpt::LightManager::CopyFromStaging(VkCommandBuffer cmd, uint32_t frameInde
     {
         UpdateDescriptors(frameIndex);
         needDescSetUpdate[frameIndex] = false;
+    }
+}
+
+void vkpt::LightManager::SetClusterLightLists(uint32_t frameIndex, uint32_t numClusters,
+                                              const uint32_t *pOffsets, const uint64_t *pLightUniqueIds,
+                                              uint32_t totalLightCount)
+{
+    if (numClusters > Q2_MAX_CLUSTERS)
+    {
+        numClusters = Q2_MAX_CLUSTERS;
+    }
+
+    // Prefix-sum offsets (numClusters+1 entries; zero the rest).
+    uint32_t *dstOffsets = static_cast<uint32_t *>(lightListOffsets->GetMapped(frameIndex));
+    for (uint32_t i = 0; i <= Q2_MAX_CLUSTERS; i++)
+    {
+        dstOffsets[i] = 0;
+    }
+    for (uint32_t i = 0; i <= numClusters && i <= Q2_MAX_CLUSTERS; i++)
+    {
+        dstOffsets[i] = pOffsets[i];
+    }
+
+    // Resolve the light unique IDs to light-array indices right away (all
+    // lights are uploaded before the lists, so uniqueIDToArrayIndex is ready).
+    const uint32_t lightsWords = Q2_MAX_CLUSTERS * Q2_LIGHT_LIST_MAX_PER_CELL;
+    uint32_t *dstLights = static_cast<uint32_t *>(lightListLights->GetMapped(frameIndex));
+    for (uint32_t i = 0; i < lightsWords; i++)
+    {
+        dstLights[i] = 0;
+    }
+
+    const uint32_t count = std::min(totalLightCount, lightsWords);
+    for (uint32_t i = 0; i < count; i++)
+    {
+        const auto it = uniqueIDToArrayIndex[frameIndex].find(pLightUniqueIds[i]);
+        // Not found (e.g. a light culled this frame) -> 0, which the shader
+        // treats as an invalid index (LIGHT_ARRAY_REGULAR_LIGHTS_OFFSET is 1).
+        dstLights[i] = (it != uniqueIDToArrayIndex[frameIndex].end()) ? it->second.GetArrayIndex() : 0u;
     }
 }
 
@@ -442,25 +483,18 @@ void vkpt::LightManager::ResetLightStats(VkCommandBuffer cmd, uint32_t frameInde
     // Zero the stats slot for this frame (the direct pass will accumulate into
     // it this frame; the CDF reads the previous frames' slots).
     const VkDeviceSize statsSlotSize =
-        sizeof(uint32_t) * Q2_LIGHT_LIST_CELL_COUNT * Q2_LIGHT_LIST_MAX_PER_CELL *
+        sizeof(uint32_t) * Q2_MAX_CLUSTERS * Q2_LIGHT_LIST_MAX_PER_CELL *
         Q2_LIGHT_LIST_STATS_SIDES * 2;
     vkCmdFillBuffer(cmd, lightStats.GetBuffer(), statsSlotSize * slot, statsSlotSize, 0);
-
-    // Store the freshly built per-cell counts into the history ring slot.
-    VkBufferCopy bc = {};
-    bc.size = sizeof(uint32_t) * Q2_LIGHT_LIST_CELL_COUNT;
-    bc.dstOffset = sizeof(uint32_t) * Q2_LIGHT_LIST_CELL_COUNT * slot;
-    vkCmdCopyBuffer(cmd, cellLightCount.GetBuffer(), lightCountsHistory.GetBuffer(), 1, &bc);
 }
 
-void vkpt::LightManager::BarrierQ2CellLists(VkCommandBuffer cmd, uint32_t frameIndex)
+void vkpt::LightManager::BarrierQ2ClusterLists(VkCommandBuffer cmd, uint32_t frameIndex)
 {
     VkBuffer buffers[] =
     {
-        cellLightCount.GetBuffer(),
-        cellLightList.GetBuffer(),
+        lightListOffsets->GetDeviceLocal(),
+        lightListLights->GetDeviceLocal(),
         lightStats.GetBuffer(),
-        lightCountsHistory.GetBuffer(),
     };
 
     VkBufferMemoryBarrier2 barriers[std::size(buffers)] = {};
@@ -522,10 +556,9 @@ constexpr uint32_t BINDINGS[] =
     BINDING_LIGHT_SOURCES_PREV,
     BINDING_LIGHT_SOURCES_INDEX_PREV_TO_CUR,
     BINDING_LIGHT_SOURCES_INDEX_CUR_TO_PREV,
-    BINDING_LIGHT_SOURCES_Q2_CELL_COUNT,
-    BINDING_LIGHT_SOURCES_Q2_CELL_LIST,
+    BINDING_LIGHT_SOURCES_Q2_LIGHT_LIST_OFFSETS,
+    BINDING_LIGHT_SOURCES_Q2_LIGHT_LIST_LIGHTS,
     BINDING_LIGHT_SOURCES_Q2_LIGHT_STATS,
-    BINDING_LIGHT_SOURCES_Q2_LIGHT_COUNTS_HISTORY,
 };
 
 void vkpt::LightManager::CreateDescriptors()
@@ -599,10 +632,9 @@ void vkpt::LightManager::UpdateDescriptors(uint32_t frameIndex)
         lightsBuffer_Prev.GetBuffer(),
         prevToCurIndex->GetDeviceLocal(),
         curToPrevIndex->GetDeviceLocal(),
-        cellLightCount.GetBuffer(),
-        cellLightList.GetBuffer(),
+        lightListOffsets->GetDeviceLocal(),
+        lightListLights->GetDeviceLocal(),
         lightStats.GetBuffer(),
-        lightCountsHistory.GetBuffer(),
     };
     static_assert(std::size(BINDINGS) == std::size(buffers));
 
