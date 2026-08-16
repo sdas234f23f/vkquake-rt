@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.4.0
+
+### Added
+- **Q2RTX per-BSP-cluster light lists** — the camera-centered 16³ cell grid was replaced with the real Q2RTX mechanism: the world model's BSP leaves are used as clusters and the PVS is used for cluster visibility. Each light is added to every PVS-visible cluster from its own leaf (no distance-based cutoffs), and occluded lights are excluded per cluster. The direct/indirect passes look up the light list by the BSP cluster of the hit (per-pixel cluster texture for primary hits, per-triangle cluster for bounces). The GPU light-list build (`CmQ2LightListBuild.comp`, `LightGrid`) is gone.
+- **Square light patches fixed** — torch / muzzle flash / explosion lights no longer cut off at cell-grid boundaries (the light lists had a distance cutoff that bright lights exceeded, producing quadrilateral patches on walls). The classic lightmap is no longer applied as a shading layer on top of the ray-traced albedo either.
+- **Classic lighting fully disabled in the RT renderer** — `R_PushDlights`, `R_RenderDynamicLightmaps` and the lightmap SHADE layer in the RT world material are all skipped unless `rt_classic_render 1`. The ray tracer produces all the lighting (Q2RTX model).
+- **Cluster data in the world geometry** — every world vertex carries the BSP leaf ("cluster") of its surface (`rt_surfcluster[]` in the game; `RgVertex.cluster` in the renderer).
+
+### Changed
+- **RTGL1 renamed to vkpt** — the vendored renderer folder, public headers (`vkpt.h`/`vkptA.h`), the C++ namespace and the CMake target are now named `vkpt` (Q2RTX-style name). No functional changes.
+
 ## v3.3.0
 
 ### Added
