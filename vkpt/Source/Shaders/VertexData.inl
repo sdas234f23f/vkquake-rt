@@ -249,6 +249,10 @@ ShTriangle makeTriangle(const ShVertex a, const ShVertex b, const ShVertex c)
         tr.vertexColors[2] = c.packedColor;
     }
 
+    // BSP cluster for the Q2RTX per-cluster light lists (all three vertices
+    // of a world triangle share the same cluster).
+    tr.cluster = a.cluster;
+
     // get very coarse normal for triangle to determine bitangent's handedness
     tr.tangent = getTangent(tr.positions, safeNormalize(tr.normals[0] + tr.normals[1] + tr.normals[2]), tr.layerTexCoord[0]);
 

@@ -190,7 +190,7 @@ struct ShVertex
     vec2 texCoordLayer1;
     vec2 texCoordLayer2;
     uint packedColor;
-    uint __pad0;
+    uint cluster;
 };
 
 struct ShGlobalUniform

@@ -55,6 +55,91 @@ extern cvar_t rt_classic_render;
 
 RgVertex *rtallbrushvertices;
 
+// Surface -> BSP leaf ("cluster") map for the world model, used by the
+// Q2RTX per-cluster light lists. The vertex's cluster is written into
+// RgVertex.cluster; the direct/indirect passes look up the cluster's light
+// list by it (like Q2RTX reads triangle.cluster).
+static int *rt_surfcluster;
+
+/*
+=================
+RT_GetSurfaceCluster
+
+Returns the BSP leaf index (used as the Q2RTX "cluster") for a brush surface.
+World surfaces use the exact leaf from rt_surfcluster; other brush models
+(doors, plats, ...) get the leaf containing their surface centroid.
+=================
+*/
+static int RT_GetSurfaceCluster (const qmodel_t *m, const msurface_t *s)
+{
+	if (m == cl.worldmodel && rt_surfcluster)
+	{
+		const int si = (int)(s - m->surfaces);
+		if (si >= 0 && si < m->numsurfaces)
+			return rt_surfcluster[si];
+	}
+
+	vec3_t centroid = { 0, 0, 0 };
+	for (int v = 0; v < s->numedges; v++)
+	{
+		const float *svptr = s->polys->verts[v];
+		centroid[0] += svptr[0];
+		centroid[1] += svptr[1];
+		centroid[2] += svptr[2];
+	}
+	if (s->numedges > 0)
+	{
+		centroid[0] /= s->numedges;
+		centroid[1] /= s->numedges;
+		centroid[2] /= s->numedges;
+	}
+
+	mleaf_t *leaf = Mod_PointInLeaf (centroid, cl.worldmodel);
+	if (leaf)
+		return (int)(leaf - cl.worldmodel->leafs);
+	return 0;
+}
+
+/*
+=================
+RT_BuildSurfaceClusterMap
+
+Builds rt_surfcluster: for every world surface, the index of the BSP leaf
+it belongs to. Exact assignment comes from each leaf's marksurfaces; the
+surface-centroid lookup is only a fallback.
+=================
+*/
+static void RT_BuildSurfaceClusterMap (void)
+{
+	qmodel_t *wm = cl.worldmodel;
+	if (!wm)
+		return;
+
+	if (rt_surfcluster)
+	{
+		Mem_Free (rt_surfcluster);
+		rt_surfcluster = NULL;
+	}
+
+	rt_surfcluster = (int *)Mem_Alloc (sizeof (int) * wm->numsurfaces);
+	if (!rt_surfcluster)
+		return;
+
+	for (int i = 0; i < wm->numsurfaces; i++)
+		rt_surfcluster[i] = RT_GetSurfaceCluster (wm, &wm->surfaces[i]);
+
+	// Exact assignment: every leaf marks its own surfaces.
+	for (int l = 0; l < wm->numleafs; l++)
+	{
+		const mleaf_t *leaf = &wm->leafs[l];
+		for (int j = 0; j < leaf->nummarksurfaces; j++)
+		{
+			const int si = leaf->firstmarksurface[j];
+			if (si >= 0 && si < wm->numsurfaces)
+				rt_surfcluster[si] = l;
+		}
+	}
+}
 
 /*
 ===============
@@ -726,6 +811,8 @@ void GL_DeleteBModelVertexBuffer (void)
 	GL_WaitForDeviceIdle ();
 
 	Mem_Free (rtallbrushvertices);
+	Mem_Free (rt_surfcluster);
+	rt_surfcluster = NULL;
 }
 
 /*
@@ -738,6 +825,8 @@ surfaces from world + all brush models
 */
 void GL_BuildBModelVertexBuffer (void)
 {
+	RT_BuildSurfaceClusterMap ();
+
     // count all verts in all models
 	int numverts = 0;
 	for (int j = 1; j < MAX_MODELS; j++)
@@ -790,6 +879,9 @@ void GL_BuildBModelVertexBuffer (void)
 				dst[v].texCoordLayer1[1] = srcv[6];
 
 				dst[v].packedColor = RT_PACKED_COLOR_WHITE;
+
+				// Q2RTX per-cluster light lists: BSP leaf index of the surface.
+				dst[v].cluster = (uint32_t)RT_GetSurfaceCluster (m, s);
 			}
 
 			varray_index += s->numedges;

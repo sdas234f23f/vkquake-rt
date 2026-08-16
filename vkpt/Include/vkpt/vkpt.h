@@ -355,7 +355,10 @@ typedef struct RgVertex
     float       texCoordLayer1[2];
     float       texCoordLayer2[2];
     // RGBA packed into 32-bit uint. R component is at the little end, i.e. (a<<24 | b<<16 | g<<8 | r)
-    uint32_t    packedColor;        uint32_t _padding2;
+    uint32_t    packedColor;
+    // BSP cluster index of the world geometry this vertex belongs to
+    // (Q2RTX per-cluster light lists). 0 for non-world / dynamic geometry.
+    uint32_t    cluster;
 } RgVertex;
 
 typedef enum RgGeometryUploadFlagBits

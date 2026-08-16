@@ -494,6 +494,9 @@ VERTEX_STRUCT = [
     (TYPE_FLOAT32,      2,     "texCoordLayer1",        1),
     (TYPE_FLOAT32,      2,     "texCoordLayer2",        1),
     (TYPE_UINT32,       1,     "packedColor",           1),
+    # BSP cluster (world geometry) - Q2RTX per-cluster light lists. 0 for
+    # non-world / dynamic geometry. Replaces the old __pad0 trailing field.
+    (TYPE_UINT32,       1,     "cluster",               1),
 ]
 
 # Must be careful with std140 offsets! They are set manually.

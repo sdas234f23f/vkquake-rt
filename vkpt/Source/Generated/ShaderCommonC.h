@@ -195,7 +195,7 @@ struct ShVertex
     float texCoordLayer1[2];
     float texCoordLayer2[2];
     uint32_t packedColor;
-    uint32_t __pad0;
+    uint32_t cluster;
 };
 
 struct ShGlobalUniform
