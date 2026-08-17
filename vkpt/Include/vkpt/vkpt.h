@@ -180,7 +180,7 @@ typedef struct RgInstanceCreateInfo
     // "VulkanValidation"   - validate each Vulkan API call and print using pfnPrint
     // "Developer"          - load PNG texture files instead of KTX2; reload a texture if its PNG file was changed
     // "FPSMonitor"         - show FPS at the window name
-    // Default: "RayTracedGL1.txt"
+    // Default: "vkpt.txt"
     const char                  *pConfigPath;
     
     // Optional function to print messages from the library.

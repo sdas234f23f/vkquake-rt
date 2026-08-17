@@ -60,7 +60,7 @@ namespace vkpt::LibraryConfig
     {
         if (pPath == nullptr || pPath[0] == '\0')
         {
-            pPath = "RayTracedGL1.txt";
+            pPath = "vkpt.txt";
         }
 
         auto path = std::filesystem::path(pPath);

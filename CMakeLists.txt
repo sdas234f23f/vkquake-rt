@@ -211,7 +211,7 @@ if(VKQUAKE_PLATFORM_WINDOWS)
 endif()
 
 # ============================================================================
-# vkpt renderer — vendored (phase 4.7: decoupled from the external RTGL1.dll)
+# vkpt renderer — vendored
 # ============================================================================
 # The renderer source lives in the vkpt/ subdirectory and is built as a
 # static library linked into vkquake. The public RG_* API remains an internal

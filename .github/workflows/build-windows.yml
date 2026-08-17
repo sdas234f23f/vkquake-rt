@@ -16,17 +16,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Checkout RayTracedGL1
-      run: git clone --branch quake-fsr31-support https://github.com/sdas234f23f/RayTracedGL1.git rtgl1
-
-    - name: Build RayTracedGL1
-      run: |
-        cmake -S rtgl1 -B rtgl1/Build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.configuration }}
-        cmake --build rtgl1/Build
-
     - name: Build vkQuake
       run: |
-        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.configuration }} -Dvkpt_SDK_PATH=${{ github.workspace }}/rtgl1
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.configuration }}
         cmake --build build
 
     - name: Upload vkQuake

@@ -1,13 +1,13 @@
 # ============================================================================
-# vkpt renderer, vendored into vkquake (phase 4.7: decoupled from the
-# external RTGL1.dll). Built as a STATIC library and linked into vkquake.
-# The public RG_* API stays an internal interface (plain function calls).
+# vkpt renderer, vendored into vkquake. Built as a STATIC library and
+# linked into vkquake. The public RG_* API stays an internal interface
+# (plain function calls).
 # ============================================================================
 cmake_minimum_required(VERSION 3.20)
 
 set(vkpt_CXX_STANDARD 20)
 
-# The vendored source is a copy of RayTracedGL1/Source + Include + Shaders.
+# The renderer source + public headers + shaders live in this folder.
 set(vkpt_PUBLIC_HEADERS
     Include/vkpt/vkpt.h
     Include/vkpt/vkptA.h)
