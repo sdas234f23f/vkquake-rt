@@ -62,6 +62,8 @@ Steps:
 
    (or with plain CMake: `cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release` + `cmake --build build`; for a debug build use `-DCMAKE_BUILD_TYPE=Debug`).
 
+   The build also deploys the override-material pack `id1/ovrd_mat.pkz` (checked in) into the build's game dir, so the ray-traced material overrides (emissive lava, ...) are always present.
+
 4. Run the game:
 
    ```
@@ -72,5 +74,5 @@ Steps:
 
 ## Game data
 
-Quake 1 game files (`id1/`) are required (registered or shareware). HD texture packs can be used through `.pkz` archives or `.mat` material definitions (see `Tools/` for converters).
+Quake 1 game files (`id1/`) are required (registered or shareware). HD texture packs can be used through `.pkz` archives or `.mat` material definitions (see `Tools/` for converters). The renderer's override-material pack `id1/ovrd_mat.pkz` is checked in and deployed into the build's game dir by `build_win.ps1`.
 

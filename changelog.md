@@ -1,5 +1,10 @@
 # Changelog
 
+## v3.5.0
+
+### Added
+- **Override-material pack committed to the repo** — `id1/ovrd_mat.pkz` (81 override materials + textures) is now source-controlled instead of living only in the build dir. `build_win.ps1` deploys it into the build's game dir on every build, so the material overrides (emissive lava, etc.) can no longer silently disappear with the build dir. The game runs on the `.pkz` pack alone (the renderer's `ovrd/mat` override folder is no longer deployed).
+
 ## v3.4.0
 
 ### Added

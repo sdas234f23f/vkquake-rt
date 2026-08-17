@@ -37,4 +37,15 @@ cmake @cmakeArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 cmake --build $BuildDir
-exit $LASTEXITCODE
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Deploy the override-material pack (id1/ovrd_mat.pkz, checked in) into the
+# build's game dir. The game loads its material overrides (emissive lava,
+# normal maps, ...) from this .pkz.
+$pkzSrc  = Join-Path $PSScriptRoot "id1\ovrd_mat.pkz"
+$gameDir = Join-Path $BuildDir "id1"
+if (Test-Path $pkzSrc) {
+    if (-not (Test-Path $gameDir)) { New-Item -ItemType Directory -Path $gameDir -Force | Out-Null }
+    Copy-Item $pkzSrc (Join-Path $gameDir "ovrd_mat.pkz") -Force
+}
+exit 0
