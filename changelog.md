@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.6.0
+
+### Removed
+- **Stale `RTGL1/` folder** — two leftover files from the vkpt rename (`GenerateShaderCommon.py`, `CmQ2LightListBuild.comp`) that nothing referenced were deleted; the vendored renderer now lives entirely in `vkpt/`.
+
+### Changed
+- **Dropped all remaining RayTracedGL1/RTGL1 references** — CI now builds only the vendored vkpt renderer (no RayTracedGL1 clone, no dead `vkpt_SDK_PATH` flag); comments in the root and `vkpt/` CMakeLists no longer mention `RTGL1.dll`; the renderer dev-config default file was renamed `RayTracedGL1.txt` → `vkpt.txt`.
+
 ## v3.5.0
 
 ### Added
