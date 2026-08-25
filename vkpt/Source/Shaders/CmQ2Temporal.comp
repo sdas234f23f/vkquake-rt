@@ -290,9 +290,12 @@ main()
 
     if(temporal_sample_valid_diff)
     {
-        // Compute the antilag factors based on the gradients
-        float antilag_alpha_lf = clamp(mix(1.0, Q2_FLT_ANTILAG_LF * grad_lf, Q2_FLT_TEMPORAL_LF), 0, 1);
-        float antilag_alpha_hf = clamp(mix(1.0, Q2_FLT_ANTILAG_HF * grad_hf_spec.x, Q2_FLT_TEMPORAL_HF), 0, 1);
+        // Compute the antilag factors based on the gradients and the motion
+        // length. The motion term (like the SPEC channel below) makes the
+        // temporal history converge quickly while the camera is moving, so
+        // bright emissive surfaces (buttons, lava) don't leave ghost trails.
+        float antilag_alpha_lf = clamp(mix(1.0, Q2_FLT_ANTILAG_LF * grad_lf + motion_length * Q2_FLT_ANTILAG_MOTION, Q2_FLT_TEMPORAL_LF), 0, 1);
+        float antilag_alpha_hf = clamp(mix(1.0, Q2_FLT_ANTILAG_HF * grad_hf_spec.x + motion_length * Q2_FLT_ANTILAG_MOTION, Q2_FLT_TEMPORAL_HF), 0, 1);
 
         // Adjust the history length, taking the antilag factors into account
         float hist_len_hf = min(temporal_moments_histlen_hf.b * pow(1.0 - antilag_alpha_hf, 10) + 1.0, 256.0);

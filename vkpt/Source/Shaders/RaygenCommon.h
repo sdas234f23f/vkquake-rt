@@ -350,6 +350,18 @@ vec3 boostChroma(const vec3 c)
     return max(mix(vec3(lum), c, LIGHT_CHROMA_BOOST), vec3(0.0));
 }
 
+// Stronger chroma boost for the emissive (glow) component of a bounce-hit
+// radiance. The emitted color comes from the surface albedo (lava = orange-red)
+// and is otherwise washed out by the whitish reflected direct light. Keeping
+// it separate from the reflection lets lava / fire tint nearby walls a vivid
+// orange-red instead of pale pink.
+#define EMISSION_CHROMA_BOOST 8.0
+vec3 boostEmissionChroma(const vec3 c)
+{
+    const float lum = getLuminance(c);
+    return max(mix(vec3(lum), c, EMISSION_CHROMA_BOOST), vec3(0.0));
+}
+
 void shade(const Surface surf, const LightSample light, float oneOverPdf, out vec3 diffuse, out vec3 specular)
 {
     vec3 l = safeNormalize(light.position - surf.position);

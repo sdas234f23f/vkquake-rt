@@ -180,7 +180,9 @@ vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 
         }
     }
 
-    return ( hitSurf.emission + directDiffuse ) * hitSurf.albedo * oneOverPdf;
+    const vec3 emitted   = boostEmissionChroma( hitSurf.emission * hitSurf.albedo );
+    const vec3 reflected = boostChroma( directDiffuse * hitSurf.albedo );
+    return ( emitted + reflected ) * oneOverPdf;
 }
 
 // Shade the primary surface with the radiance gathered at the bounce hit.
@@ -339,8 +341,9 @@ void main()
         // fireflies from bright emissive / light-grid samples.
         directDiffuse = clamp( directDiffuse, vec3( 0.0 ), vec3( 50.0 ) );
 
-        hitPos      = hitSurf.position;
-        hitRadiance = ( hitSurf.emission + directDiffuse ) * hitSurf.albedo;
+        hitPos = hitSurf.position;
+        hitRadiance = boostEmissionChroma( hitSurf.emission * hitSurf.albedo ) +
+                      boostChroma( directDiffuse * hitSurf.albedo );
     }
 
     // 3) Shade the primary surface with the gathered radiance.

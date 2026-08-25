@@ -56,6 +56,10 @@
 #define Q2_FLT_ANTILAG_LF 0.15
 #define Q2_FLT_ANTILAG_SPEC 0.5
 #define Q2_FLT_ANTILAG_SPEC_MOTION 0.004
+// Motion-driven antilag shared by the LF/HF channels: makes the temporal
+// history converge while the camera moves so bright emissive surfaces don't
+// leave ghost trails, while leaving static frames unchanged (motion == 0).
+#define Q2_FLT_ANTILAG_MOTION 0.004
 #define Q2_FLT_GRAD_WEAPON 0.25
 #define Q2_FLT_MIN_ALPHA_COLOR_HF 0.02
 #define Q2_FLT_MIN_ALPHA_COLOR_LF 0.01

@@ -13,6 +13,7 @@ Quake: Ray Traced is based on the [vkQuake](https://github.com/Novum/vkQuake) â€
 * ASVGF denoiser (Q2RTX), checkerboard rendering, TAAU upscaler by default; FSR 2/FSR 3.1/DLSS upscalers are also available in the video menu
 * Reflection/refraction, god rays (volumetric sunlight), fog volumes, procedural sky
 * Q2RTX-style materials: `.mat` definitions + `.pkz` archives mounted as native search paths, automatic detection from HD texture pack suffixes (`_norm`, `_gloss`, `_luma`, `_glow`)
+* Emissive surfaces: Q2RTX `.mat` emissives and classic fullbright textures (buttons, switches, light panels, runes, lava) emit light and tint nearby walls with their color
 * Dynamic lights (torches, muzzle flashes, explosions) and map `light` entities as RT light sources
 * `rt_debugflags` diagnostic views (raw unfiltered direct/indirect/specular, gradients, etc.)
 

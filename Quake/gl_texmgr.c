@@ -138,6 +138,8 @@ static THREAD_LOCAL RgMaterialCreateInfo rtspecial_info = {0};
 static THREAD_LOCAL void                *rtspecial_info_albedoAlpha = NULL; // to point to data from rtspecial_info
 static THREAD_LOCAL char                 rtspecial_info_pRelativePath[MAX_QPATH];
 
+static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoFallback, byte *fullbrightOverride);
+
 
 void TexMgr_RT_SpecialStart (float default_rough, float default_metallic)
 {
@@ -332,6 +334,18 @@ static void TexMgr_RT_SpecialFullbright (unsigned width, unsigned height, uint32
 
 	FullbrightToRME (width, height, (byte *)fullbright);
 
+	// If the base already has a Q2RTX-style .mat material (phase 4.5, applied
+	// when the base texture was loaded), rebuild it with the classic fullbright
+	// mask merged into the emissive channel. This keeps the .mat normals/
+	// gloss while letting fullbright pixels (buttons, light panels, runes)
+	// emit light -- without this, the .mat synthesis would overwrite the
+	// emissive material with emiss = 0 for these textures.
+	if (rtspecial_target->rtmaterial != RG_NULL_HANDLE)
+	{
+		if (TexMgr_ApplyMaterialFromMat (rtspecial_target, (unsigned *)rtspecial_info_albedoAlpha, (byte *)fullbright))
+			return;
+	}
+
 	rtspecial_info.textures.pDataAlbedoAlpha = rtspecial_info_albedoAlpha;
 	rtspecial_info.pRelativePath = rtspecial_info_pRelativePath;
 
@@ -348,7 +362,7 @@ void TexMgr_RT_SpecialEnd ()
 	assert (rtspecial_started);
 	assert (rtspecial_target != NULL && rtspecial_info_albedoAlpha != NULL);
 
-	if (!rtspecial_foundfullbright)
+	if (!rtspecial_foundfullbright && rtspecial_target->rtmaterial == RG_NULL_HANDLE)
 	{
 		rtspecial_info.textures.pDataAlbedoAlpha = rtspecial_info_albedoAlpha;
 		rtspecial_info.pRelativePath = rtspecial_info_pRelativePath;
@@ -910,8 +924,6 @@ static void TexMgr_PreMultiply32 (byte *in, size_t width, size_t height)
 TexMgr_LoadImage32 -- handles 32bit source data
 ================
 */
-static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoFallback);
-
 static void TexMgr_LoadImage32 (gltexture_t *glt, unsigned *data)
 {
 	GL_DeleteTexture (glt);
@@ -1003,7 +1015,7 @@ static void TexMgr_LoadImage32 (gltexture_t *glt, unsigned *data)
 	// definition, replace the RT material with the synthesized PBR one
 	// (albedo from texture_base, RME from base.alpha/roughness, normal.alpha
 	// metallic and emissive, normal from texture_normals).
-	TexMgr_ApplyMaterialFromMat (glt, data);
+	TexMgr_ApplyMaterialFromMat (glt, data, NULL);
 
 	SDL_UnlockMutex (texmgr_mutex);
 }
@@ -1017,7 +1029,7 @@ Builds the vkpt RGBA8 material textures from a Q2RTX-style .mat definition
 material was applied.
 ================
 */
-static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoFallback)
+static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoFallback, byte *fullbrightOverride)
 {
 	rt_material_t autoMat;
 	// The material key is the texture file path without extension, e.g.
@@ -1132,14 +1144,23 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		if (normBuf && normHasAlpha)
 			metal = (normBuf[i * 4 + 3] / 255.0f) * mat->metalness_factor;
 
-		// emissive: from the emissive texture, or synthesized from the base
+		// emissive: from the emissive texture, synthesized from the base, or
+		// merged from the classic fullbright mask (fullbrightOverride)
 		float emiss = 0.0f;
 		if (emisBuf)
 		{
 			emiss = (0.2126f * emisBuf[i * 4 + 0] + 0.7152f * emisBuf[i * 4 + 1] + 0.0722f * emisBuf[i * 4 + 2]) / 255.0f;
 			emiss *= mat->emissive_factor;
 		}
-		else if (mat->synth_emissive || mat->is_light)
+		if (fullbrightOverride)
+		{
+			// classic fullbright mask in RME layout (after FullbrightToRME):
+			// channel 2 carries the emission value
+			const float fb = fullbrightOverride[i * 4 + 2] / 255.0f;
+			if (fb > emiss)
+				emiss = fb;
+		}
+		else if (!emisBuf && (mat->synth_emissive || mat->is_light))
 		{
 			const float lum = (0.2126f * src[0] + 0.7152f * src[1] + 0.0722f * src[2]) / 255.0f;
 			if (mat->emissive_threshold <= 0 || lum > mat->emissive_threshold / 255.0f)

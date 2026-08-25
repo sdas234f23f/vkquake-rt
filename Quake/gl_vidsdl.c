@@ -172,8 +172,8 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
     \
 	CVAR_DEF_T (rt_normalmap_stren, "1") \
 	CVAR_DEF_T (rt_emis_mapboost, "30") \
-	CVAR_DEF_T (rt_emis_maxscrcolor, "32") \
-	CVAR_DEF_T (rt_emis_fullbright_dflt, "32") \
+	CVAR_DEF_T (rt_emis_maxscrcolor, "320") \
+	CVAR_DEF_T (rt_emis_fullbright_dflt, "255") \
     \
 	CVAR_DEF_T (rt_reflrefr_depth, "2") \
 	CVAR_DEF_T (rt_refr_glass, "1.52") \
