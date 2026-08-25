@@ -4,8 +4,14 @@
 
 ### Removed
 - **Stale `RTGL1/` folder** — two leftover files from the vkpt rename (`GenerateShaderCommon.py`, `CmQ2LightListBuild.comp`) that nothing referenced were deleted; the vendored renderer now lives entirely in `vkpt/`.
+- **Startup resolution dialog** — the "High-resolution" MessageBox that asked for a screen resolution before the game window opened was removed.
+
+### Fixed
+- **Dynamic objects are lit again** — doors, lifts, buttons, monster/weapon/pickup models no longer render unlit. Brush-entity (submodel) surfaces were assigned the cluster of the SOLID leaf inside the brush (empty light list); they now resolve the visible leaf by sampling their face centroid offset along the surface normal (Q2RTX approach). Alias models (monsters, ammo, keys) get the BSP cluster of their origin leaf instead of the default cluster 0, so they're lit by the same cluster light list as the surface they stand on.
+- **Base RT brightness lowered ~25%** — a uniform exposure reduction (`tmExposureBias` −2.6 in the tonemapping pass, ~1.6 stops under the stock default) darkens the whole image, and the auto-exposure is muted in dark scenes so the dimmer look isn't compensated back up: the adaptation target floor (`tmMinLuminance`) is raised from 0.0002 to 0.02, and the dark→bright adaptation speed (`tmExposureSpeedUp`) is halved so the image brightens more slowly after leaving a dark area. Bright scenes are unaffected — their target luminance sits above the floor.
 
 ### Changed
+- **Default sky and sun settings** — new defaults: `rt_physical_sky 1`, `rt_sun 1`, `rt_sky_brightness 1`, sky display color `32/0/64` (`rt_sky_color_r/g/b`), sky light color `32/0/64` (`rt_sky_light_r/g/b`), `rt_sky_clouds 1`, `rt_sky_cloud_speed 0.3`, `rt_sky_cloud_coverage 0.3`, `rt_sky_cloud_density 0.6`.
 - **Dropped all remaining RayTracedGL1/RTGL1 references** — CI now builds only the vendored vkpt renderer (no RayTracedGL1 clone, no dead `vkpt_SDK_PATH` flag); comments in the root and `vkpt/` CMakeLists no longer mention `RTGL1.dll`; the renderer dev-config default file was renamed `RayTracedGL1.txt` → `vkpt.txt`.
 
 ## v3.5.0

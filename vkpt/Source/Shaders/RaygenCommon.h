@@ -340,6 +340,16 @@ float traceVisibility(const Surface surf, const vec3 lightPosition, uint lightIn
 
 
 
+// Boost the chroma (colorfulness) of a light contribution while keeping its
+// luminance. White light (r==g==b) is unaffected; colored light tints surfaces
+// more strongly, fixing "pale" walls lit by lava / fire.
+#define LIGHT_CHROMA_BOOST 1.3
+vec3 boostChroma(const vec3 c)
+{
+    const float lum = getLuminance(c);
+    return max(mix(vec3(lum), c, LIGHT_CHROMA_BOOST), vec3(0.0));
+}
+
 void shade(const Surface surf, const LightSample light, float oneOverPdf, out vec3 diffuse, out vec3 specular)
 {
     vec3 l = safeNormalize(light.position - surf.position);
@@ -352,8 +362,9 @@ void shade(const Surface surf, const LightSample light, float oneOverPdf, out ve
         return;
     }
 
-    diffuse  = light.dw * nl * light.color * evalBRDFLambertian(1.0);
-    specular = light.dw * nl * light.color * evalBRDFSmithGGX(surf.normal, surf.toViewerDir, l, surf.roughness, surf.specularColor);
+    const vec3 color = boostChroma(light.color);
+    diffuse  = light.dw * nl * color * evalBRDFLambertian(1.0);
+    specular = light.dw * nl * color * evalBRDFSmithGGX(surf.normal, surf.toViewerDir, l, surf.roughness, surf.specularColor);
 
     diffuse  *= oneOverPdf;
     specular *= oneOverPdf;

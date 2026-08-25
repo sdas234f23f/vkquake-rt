@@ -8,7 +8,7 @@ Quake: Ray Traced is based on the [vkQuake](https://github.com/Novum/vkQuake) â€
 
 ## What is implemented
 
-* Q2RTX-style path traced lighting: NEE direct light (per-BSP-cluster light lists, light-selection CDF + adaptive shadow statistics) and one-bounce NEE indirect light
+* Q2RTX-style path traced lighting: NEE direct light (per-BSP-cluster light lists, light-selection CDF + adaptive shadow statistics) and NEE indirect light with a second diffuse bounce
 * Per-BSP-cluster light lists â€” the world model's BSP leaves are used as clusters and the PVS is used for cluster visibility, exactly like Q2RTX (no distance-based cutoffs, occluded lights excluded per cluster)
 * ASVGF denoiser (Q2RTX), checkerboard rendering, TAAU upscaler by default; FSR 2/FSR 3.1/DLSS upscalers are also available in the video menu
 * Reflection/refraction, god rays (volumetric sunlight), fog volumes, procedural sky

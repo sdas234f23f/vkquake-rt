@@ -108,7 +108,7 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_roughmin, "0.02") \
     \
 	CVAR_DEF_T (rt_dlight_intensity, "3.0") \
-	CVAR_DEF_T (rt_dlight_radius, "0.02") \
+	CVAR_DEF_T (rt_dlight_radius, "0.1") \
 	\
 	CVAR_DEF_T (rt_plight_intensity, "3.0") \
 	CVAR_DEF_T (rt_plight_radius, "0.02") \
@@ -133,7 +133,7 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_poi_armor, "1") \
 	CVAR_DEF_T (rt_poi_key, "1") \
 	\
-	CVAR_DEF_T (rt_sun, "0") \
+	CVAR_DEF_T (rt_sun, "1") \
 	CVAR_DEF_T (rt_sun_pitch, "60") \
 	CVAR_DEF_T (rt_sun_yaw, "-40") \
 	CVAR_DEF_T (rt_sun_preset, "0") \
@@ -145,25 +145,25 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	\
 	CVAR_DEF_T (rt_sky, "9") \
 	CVAR_DEF_T (rt_sky_tint, "1.0") \
-	CVAR_DEF_T (rt_physical_sky, "0") \
-	CVAR_DEF_T (rt_sky_light_r, "255") \
-	CVAR_DEF_T (rt_sky_light_g, "255") \
-	CVAR_DEF_T (rt_sky_light_b, "255") \
-	CVAR_DEF_T (rt_sky_color_r, "255") \
-	CVAR_DEF_T (rt_sky_color_g, "255") \
-	CVAR_DEF_T (rt_sky_color_b, "255") \
+	CVAR_DEF_T (rt_physical_sky, "1") \
+	CVAR_DEF_T (rt_sky_light_r, "32") \
+	CVAR_DEF_T (rt_sky_light_g, "0") \
+	CVAR_DEF_T (rt_sky_light_b, "64") \
+	CVAR_DEF_T (rt_sky_color_r, "32") \
+	CVAR_DEF_T (rt_sky_color_g, "0") \
+	CVAR_DEF_T (rt_sky_color_b, "64") \
 	CVAR_DEF_T (rt_sky_brightness, "1.0") \
 	CVAR_DEF_T (rt_brightness, "1.0") \
 	CVAR_DEF_T (rt_light_color_r, "255") \
 	CVAR_DEF_T (rt_light_color_g, "255") \
 	CVAR_DEF_T (rt_light_color_b, "255") \
-	CVAR_DEF_T (rt_sky_clouds, "0") \
+	CVAR_DEF_T (rt_sky_clouds, "1") \
 	CVAR_DEF_T (rt_sky_cloud_color_r, "255") \
 	CVAR_DEF_T (rt_sky_cloud_color_g, "255") \
 	CVAR_DEF_T (rt_sky_cloud_color_b, "255") \
-	CVAR_DEF_T (rt_sky_cloud_coverage, "0.4") \
-	CVAR_DEF_T (rt_sky_cloud_density, "0.7") \
-	CVAR_DEF_T (rt_sky_cloud_speed, "0.02") \
+	CVAR_DEF_T (rt_sky_cloud_coverage, "0.3") \
+	CVAR_DEF_T (rt_sky_cloud_density, "0.6") \
+	CVAR_DEF_T (rt_sky_cloud_speed, "0.3") \
 	\
 	CVAR_DEF_T (rt_brush_metal, "0.0") \
 	CVAR_DEF_T (rt_brush_rough, "1.0") \
@@ -1855,37 +1855,6 @@ void VID_Init (void)
 		refreshrate = display_refreshrate;
 		fullscreen = false;
 	}
-
-#if RT_RENDERER
-#if defined(_WIN32)
-	if (CVAR_TO_BOOL (_rt_firsttime))
-	{
-		if (!fullscreen)
-		{
-			const int maxheight = 1440;
-
-			if (display_height > maxheight)
-			{
-				int msgbox_id = MessageBoxA (
-					NULL, 
-					"Resolution of your display is quite high,\nwhich may cause low frame rates.\nRun at 1440p?", 
-					"High-resolution",
-					MB_ICONEXCLAMATION | MB_YESNO);
-
-				if (msgbox_id == IDYES)
-				{
-					float aspect = (float)display_width / (float)display_height;
-
-					width = (int)(aspect * (float)maxheight);
-					height = maxheight;
-					refreshrate = display_refreshrate;
-					fullscreen = true;
-				}
-			}
-		}
-	}
-#endif // defined(_WIN32)
-#endif // RT_RENDERER
 
 	vid_initialized = true;
 

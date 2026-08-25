@@ -31,6 +31,11 @@ layout (constant_id = 0) const uint maxAlbedoLayerCount = 0;
 #define Q2_RNG_INDIR_CELL_SELECT 220   // 220, 221, 222
 #define Q2_RNG_INDIR_LIGHT_POINT 223   // 223, 224
 #define Q2_RNG_INDIR_SUN_DISK    225
+// Second diffuse bounce uses its own salt range so its light choice is
+// independent from the first bounce's NEE.
+#define Q2_RNG_INDIR2_CELL_SELECT 230  // 230, 231, 232
+#define Q2_RNG_INDIR2_LIGHT_POINT 233  // 233, 234
+#define Q2_RNG_INDIR2_SUN_DISK    235
 
 // Q2RTX kills indirect fireflies from sphere lights by limiting their solid
 // angle at bounces (path_tracer_rgen.h get_direct_illumination:
@@ -51,7 +56,20 @@ vec3 getSpecularBounce(const uint seed, uint bounceIndex,
     return sampleSmithGGX( n, v, roughness, u[ 0 ], u[ 1 ], oneOverSourcePdf );
 }
 
+// Mirrors the original RtRaygenIndirectInit getDiffuseBounce: a Lambertian
+// bounce direction. The salt (RANDOM_SALT_DIFF_BOUNCE = 8 + bounceIndex) is
+// distinct from the specular-bounce salt (12 + bounceIndex).
+vec3 getDiffuseBounce(const uint seed, uint bounceIndex,
+                      const vec3 n, out float oneOverSourcePdf)
+{
+    const vec2 u = rndBlueNoise8( seed, RANDOM_SALT_DIFF_BOUNCE( bounceIndex ) ).xy;
+    return sampleLambertian( n, u[ 0 ], u[ 1 ], oneOverSourcePdf );
+}
+
 #define FIRST_BOUNCE_MIP_BIAS 0
+// The original traces the second (diffuse) bounce with a large MIP bias so the
+// far-away indirect lighting is sampled from a very blurred (stable) MIP.
+#define SECOND_BOUNCE_MIP_BIAS 32.0
 
 Surface traceBounce(const vec3 originPosition, float originRoughness, uint originInstCustomIndex,
                     const vec3 bounceDir, float bounceMipBias)
@@ -70,6 +88,101 @@ Surface traceBounce(const vec3 originPosition, float originRoughness, uint origi
         bounceDir );
 }
 
+// Mirrors the original RtRaygenIndirectInit processSecondDiffuseBounce: a
+// second diffuse bounce off the first bounce hit, gathering
+// (emission + directIllumination) * albedo at the second hit and weighting by
+// the diffuse-bounce pdf. This is what makes emissive surfaces (lava) spread
+// their color through the scene: a ray that misses the lava on the first
+// bounce gets a second chance to hit it.
+vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 bounceDir,
+                                float oneOverPdf)
+{
+    const Surface hitSurf = traceBounce(
+        surf.position + surf.normalGeom * 0.01,
+        surf.roughness, surf.instCustomIndex, bounceDir, SECOND_BOUNCE_MIP_BIAS );
+
+    if ( hitSurf.isSky )
+    {
+        return getSky( bounceDir ) * oneOverPdf;
+    }
+
+    // Direct illumination at the second hit (bounce = 2). Same cluster-light
+    // NEE as the first bounce but with the INDIR2 RNG salts.
+    const bool isGradient = q2GetIsGradient( ivec2( gl_LaunchIDEXT.xy ) );
+    const uint cluster    = hitSurf.cluster;
+
+    const float alpha       = square( hitSurf.roughness );
+    const float phongExp    = q2RoughnessSquareToSpecPower( alpha );
+    const float phongScale  = min( 100.0, 1.0 / ( M_PI * max( alpha * alpha, 1e-4 ) ) );
+    const float phongWeight = clamp(
+        getLuminance( hitSurf.specularColor ) /
+            ( getLuminance( hitSurf.specularColor ) + getLuminance( hitSurf.albedo ) ),
+        0.0, 0.9 );
+
+    vec3 directDiffuse = vec3( 0.0 );
+    {
+        const vec3 rng = vec3(
+            rnd16( seed, Q2_RNG_INDIR2_CELL_SELECT ),
+            rnd16( seed, Q2_RNG_INDIR2_CELL_SELECT + 1u ),
+            rnd16( seed, Q2_RNG_INDIR2_CELL_SELECT + 2u ) );
+
+        uint  lightIndex = LIGHT_INDEX_NONE;
+        uint  lightSlot  = 0u;
+        float lightPdf   = 0.0;
+        q2SampleClusterLights( cluster, hitSurf.position, hitSurf.normal, hitSurf.toViewerDir,
+                               phongExp, phongScale, phongWeight, isGradient, rng,
+                               lightIndex, lightSlot, lightPdf );
+
+        if ( lightIndex != LIGHT_INDEX_NONE && lightPdf > 0.0 )
+        {
+            const vec2 pointRnd = rnd16_2( seed, Q2_RNG_INDIR2_LIGHT_POINT ) * 0.99;
+            LightSample light =
+                sampleLight( lightSources[ lightIndex ], hitSurf.position, pointRnd );
+
+            // Q2RTX firefly clamp: cap the solid angle of sphere/spot lights
+            // at the bounce hit (see Q2_INDIR_MAX_SPHERE_SOLID_ANGLE).
+            if ( lightSources[ lightIndex ].lightType == LIGHT_TYPE_SPHERE ||
+                 lightSources[ lightIndex ].lightType == LIGHT_TYPE_SPOT )
+            {
+                light.dw = min( light.dw, Q2_INDIR_MAX_SPHERE_SOLID_ANGLE );
+            }
+
+            if ( getLuminance( light.color ) > 0.0 )
+            {
+                const float vis = traceVisibility( hitSurf, light.position, lightIndex );
+
+                // Adaptive shadow statistics for the next frames' CDF.
+                q2AccumulateLightStats( cluster, lightSlot, hitSurf.normal, vis );
+
+                vec3 d, s;
+                shade( hitSurf, light, 1.0 / lightPdf, d, s );
+                directDiffuse += d * vis;
+            }
+        }
+    }
+
+    // Sun at the second hit.
+    if ( globalUniform.directionalLightExists != 0 )
+    {
+        const DirectionalLight sun =
+            decodeAsDirectionalLight( lightSources[ LIGHT_ARRAY_DIRECTIONAL_LIGHT_OFFSET ] );
+        const vec2 sunRnd = rnd16_2( seed, Q2_RNG_INDIR2_SUN_DISK ) * 0.99;
+        const LightSample sunLight = sampleDirectionalLight( sun, hitSurf.position, sunRnd );
+
+        if ( getLuminance( sunLight.color ) > 0.0 )
+        {
+            const float sunVis =
+                traceVisibility( hitSurf, sunLight.position, LIGHT_ARRAY_DIRECTIONAL_LIGHT_OFFSET );
+
+            vec3 d, s;
+            shade( hitSurf, sunLight, 1.0, d, s ); // pdf = 1 (sun is always sampled)
+            directDiffuse += d * sunVis;
+        }
+    }
+
+    return ( hitSurf.emission + directDiffuse ) * hitSurf.albedo * oneOverPdf;
+}
+
 // Shade the primary surface with the radiance gathered at the bounce hit.
 // Mirrors the old Final pass' shade(): the "sample" is a point light at
 // (hitPos) with radiance (hitRadiance), weighted by the bounce pdf.
@@ -86,8 +199,10 @@ void q2ShadeIndirect(const Surface surf, const vec3 hitPos, const vec3 hitRadian
         return;
     }
 
-    diffuse  = nl * hitRadiance * evalBRDFLambertian( 1.0 );
-    specular = nl * hitRadiance *
+    const vec3 radiance = boostChroma( hitRadiance );
+
+    diffuse  = nl * radiance * evalBRDFLambertian( 1.0 );
+    specular = nl * radiance *
                evalBRDFSmithGGX( surf.normal, surf.toViewerDir, l, surf.roughness,
                                  surf.specularColor );
 
@@ -207,6 +322,22 @@ void main()
                 directDiffuse += d * sunVis;
             }
         }
+
+        // Second diffuse bounce (mirrors original processIndirect with
+        // indirSecondBounce enabled): gives emissive surfaces a second chance
+        // to be hit by a ray, spreading their color (lava) through the scene.
+        if ( globalUniform.indirSecondBounce != 0u )
+        {
+            float oneOverPdfSecond;
+            const vec3 bounceDirSecond =
+                getDiffuseBounce( seed, 2u, hitSurf.normalGeom, oneOverPdfSecond );
+            directDiffuse += processSecondDiffuseBounce(
+                seed, hitSurf, bounceDirSecond, oneOverPdfSecond );
+        }
+
+        // The original clamps the accumulated diffuse irradiance to avoid
+        // fireflies from bright emissive / light-grid samples.
+        directDiffuse = clamp( directDiffuse, vec3( 0.0 ), vec3( 50.0 ) );
 
         hitPos      = hitSurf.position;
         hitRadiance = ( hitSurf.emission + directDiffuse ) * hitSurf.albedo;

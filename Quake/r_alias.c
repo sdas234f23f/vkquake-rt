@@ -106,7 +106,7 @@ static void LerpPosition (float *dst, const float *src1, const float *src2, floa
 }
 
 static const RgVertex *
-GetPoseVertices (const qmodel_t *m, const aliashdr_t *hdr, int pose1, int pose2, float blend, /* const */ vec3_t shadevector, /* const */ vec3_t lightcolor)
+GetPoseVertices (const qmodel_t *m, const aliashdr_t *hdr, int pose1, int pose2, float blend, /* const */ vec3_t shadevector, /* const */ vec3_t lightcolor, int cluster)
 {
 	const RgVertex *v_pose1 = GetModelVerticesForPose (m, hdr, pose1);
 	const RgVertex *v_pose2 = GetModelVerticesForPose (m, hdr, pose2);
@@ -114,7 +114,7 @@ GetPoseVertices (const qmodel_t *m, const aliashdr_t *hdr, int pose1, int pose2,
 	// we don't care about per-vertex colors with RT
 	const qboolean need_vertex_lighting = CVAR_TO_BOOL (rt_classic_render);
 
-	if (blend < FLT_EPSILON && !need_vertex_lighting)
+	if (blend < FLT_EPSILON && !need_vertex_lighting && cluster <= 0)
 	{
 		return v_pose1;
 	}
@@ -138,6 +138,9 @@ GetPoseVertices (const qmodel_t *m, const aliashdr_t *hdr, int pose1, int pose2,
 		const RgVertex *src2 = &v_pose2[i];
 
 		LerpPosition (dst->position, src1->position, src2->position, blend);
+
+		if (cluster > 0)
+			dst->cluster = (uint32_t)cluster;
 
 		if (need_vertex_lighting)
 		{
@@ -221,12 +224,30 @@ static void GL_DrawAliasFrame (
 
 		RgResult r = rgUploadSphericalLight (vulkan_globals.instance, &light_info);
 		RG_CHECK (r);
+
+		// Register for the per-cluster light lists so the sphere light is
+		// actually sampled by surfaces around the entity (lava balls etc.).
+		vec3_t lightorigin;
+		VectorCopy (lerpdata.origin, lightorigin);
+		lightorigin[2] += tx->rtupoffset;
+		RT_ClusterLightAdd (light_info.uniqueID, lightorigin);
 	}
 
 	assert (
 		(!isviewer && !isfirstperson) || 
 		(isviewer && !isfirstperson) || 
 		(!isviewer && isfirstperson));
+
+	// Q2RTX per-cluster light lists: dynamic alias geometry (monsters, pickups)
+	// is uploaded with cluster 0 in its base vertices, which points at the SOLID
+	// leaf (empty light list -> unlit). Resolve the entity origin's leaf so the
+	// model is lit by the same cluster light list as the surface it stands on.
+	int cluster = 0;
+	{
+		mleaf_t *leaf = Mod_PointInLeaf (lerpdata.origin, cl.worldmodel);
+		if (leaf && leaf->contents != CONTENTS_SOLID)
+			cluster = (int)(leaf - cl.worldmodel->leafs);
+	}
 
 	if (rasterize)
 	{
@@ -238,7 +259,7 @@ static void GL_DrawAliasFrame (
 		RgRasterizedGeometryUploadInfo info = {
 			.renderType = RG_RASTERIZED_GEOMETRY_RENDER_TYPE_DEFAULT,
 			.vertexCount = paliashdr->numverts_vbo,
-			.pVertices = GetPoseVertices (e->model, paliashdr, lerpdata.pose1, lerpdata.pose2, blend, shadevector, lightcolor),
+			.pVertices = GetPoseVertices (e->model, paliashdr, lerpdata.pose1, lerpdata.pose2, blend, shadevector, lightcolor, cluster),
 			.indexCount = paliashdr->numindexes,
 			.pIndices = e->model->rtindices,
 			.transform = RT_GetAliasModelTransform (paliashdr, &lerpdata, isfirstperson),
@@ -276,7 +297,7 @@ static void GL_DrawAliasFrame (
 		        isviewer ? RG_GEOMETRY_VISIBILITY_TYPE_FIRST_PERSON_VIEWER :
 		        RG_GEOMETRY_VISIBILITY_TYPE_WORLD_0,
 			.vertexCount = paliashdr->numverts_vbo,
-			.pVertices = GetPoseVertices (e->model, paliashdr, lerpdata.pose1, lerpdata.pose2, blend, shadevector, lightcolor),
+			.pVertices = GetPoseVertices (e->model, paliashdr, lerpdata.pose1, lerpdata.pose2, blend, shadevector, lightcolor, cluster),
 			.indexCount = paliashdr->numindexes,
 			.pIndices = e->model->rtindices,
 			.layerColors = {RT_COLOR_WHITE},

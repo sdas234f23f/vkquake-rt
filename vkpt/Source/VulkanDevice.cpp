@@ -853,7 +853,7 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
 
                     memcpy(gr.shadowMapVP, shadowMapVP, 16 * sizeof(float));
                     gr.shadowMapDepthScale = shadowMapDepthScale;
-                    gr.godRaysIntensity = 2.0f; // Q2RTX default (god_rays_intensity)
+                    gr.godRaysIntensity = 8.0f; // +300% over the Q2RTX default (god_rays_intensity) so shafts are visible with rt_sun 1
                     gr.godRaysEccentricity = 0.75f;
                     gr.godRaysEnabled = 1u;
 

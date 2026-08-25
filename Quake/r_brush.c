@@ -75,9 +75,31 @@ static int RT_GetSurfaceCluster (const qmodel_t *m, const msurface_t *s)
 	if (m == cl.worldmodel && rt_surfcluster)
 	{
 		const int si = (int)(s - m->surfaces);
-		if (si >= 0 && si < m->numsurfaces)
+
+		// Submodel (brush-entity) surfaces live in the world surface array but
+		// are drawn as dynamic entities. Their exact-leaf cluster (from the
+		// marksurface pass below) usually resolves to the SOLID leaf inside the
+		// brush, whose light list is empty -> unlit doors/lifts. Fall through to
+		// the visible-leaf lookup for them.
+		const int submodel_first =
+			(cl.worldmodel->numsubmodels > 1) ? cl.worldmodel->submodels[1].firstface : cl.worldmodel->numsurfaces;
+		if (si >= 0 && si < m->numsurfaces && si < submodel_first)
 			return rt_surfcluster[si];
 	}
+
+	// Submodel (brush-entity) surfaces are stored in world space, but their
+	// centroid lies ON the face plane and Mod_PointInLeaf() on it returns the
+	// leaf INSIDE the solid brush (empty light list -> unlit doors/buttons).
+	// Q2RTX offsets the point along the triangle normal so it lands in the
+	// visible leaf; do the same here, with a larger retry offset.
+	vec3_t normal;
+	if (s->flags & SURF_PLANEBACK)
+	{
+		VectorCopy (s->plane->normal, normal);
+		VectorInverse (normal);
+	}
+	else
+		VectorCopy (s->plane->normal, normal);
 
 	vec3_t centroid = { 0, 0, 0 };
 	for (int v = 0; v < s->numedges; v++)
@@ -94,9 +116,18 @@ static int RT_GetSurfaceCluster (const qmodel_t *m, const msurface_t *s)
 		centroid[2] /= s->numedges;
 	}
 
-	mleaf_t *leaf = Mod_PointInLeaf (centroid, cl.worldmodel);
-	if (leaf)
-		return (int)(leaf - cl.worldmodel->leafs);
+	for (int attempt = 0; attempt < 2; attempt++)
+	{
+		const float off = (attempt == 0) ? 0.01f : 1.0f;
+
+		vec3_t point;
+		VectorMA (centroid, off, normal, point);
+
+		mleaf_t *leaf = Mod_PointInLeaf (point, cl.worldmodel);
+		if (leaf && leaf->contents != CONTENTS_SOLID)
+			return (int)(leaf - cl.worldmodel->leafs);
+	}
+
 	return 0;
 }
 
@@ -128,15 +159,20 @@ static void RT_BuildSurfaceClusterMap (void)
 	for (int i = 0; i < wm->numsurfaces; i++)
 		rt_surfcluster[i] = RT_GetSurfaceCluster (wm, &wm->surfaces[i]);
 
-	// Exact assignment: every leaf marks its own surfaces.
+	// Exact assignment: every leaf marks its own surfaces. Submodel surfaces
+	// (>= submodels[1].firstface) keep the visible-leaf value computed above,
+	// because the exact assignment for them is the SOLID leaf (empty light list).
+	const int submodel_first =
+		(wm->numsubmodels > 1) ? wm->submodels[1].firstface : wm->numsurfaces;
 	for (int l = 0; l < wm->numleafs; l++)
 	{
 		const mleaf_t *leaf = &wm->leafs[l];
 		for (int j = 0; j < leaf->nummarksurfaces; j++)
 		{
 			const int si = leaf->firstmarksurface[j];
-			if (si >= 0 && si < wm->numsurfaces)
-				rt_surfcluster[si] = l;
+			if (si >= submodel_first || si < 0 || si >= wm->numsurfaces)
+				continue;
+			rt_surfcluster[si] = l;
 		}
 	}
 }

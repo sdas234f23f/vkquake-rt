@@ -213,6 +213,10 @@ void R_DrawSpriteModel (cb_context_t *cbx, entity_t *e, int entuniqueid)
 
 		RgResult r = rgUploadSphericalLight (vulkan_globals.instance, &light_info);
 		RG_CHECK (r);
+
+		// Register for the per-cluster light lists so the sprite's sphere
+		// light is actually sampled by surfaces around the entity.
+		RT_ClusterLightAdd (light_info.uniqueID, e->origin);
 	}
 
 	if (is_rasterized)

@@ -878,6 +878,8 @@ typedef struct rt_cluster_light_s
 
 static rt_cluster_light_t rt_cluster_lights[RT_CLUSTER_MAX_LIGHTS];
 static int rt_cluster_light_count;
+static qboolean rt_cluster_dropped_warned;
+static qboolean rt_cluster_perlist_warned;
 
 void RT_ClusterLightListsReset (void)
 {
@@ -887,7 +889,16 @@ void RT_ClusterLightListsReset (void)
 void RT_ClusterLightAdd (uint64_t uniqueID, const vec3_t origin)
 {
 	if (rt_cluster_light_count >= RT_CLUSTER_MAX_LIGHTS)
+	{
+		if (!rt_cluster_dropped_warned)
+		{
+			Con_DWarning ("RT: light count exceeded RT_CLUSTER_MAX_LIGHTS (%i), "
+				"some lights will not be sampled by the RT renderer.\n",
+				RT_CLUSTER_MAX_LIGHTS);
+			rt_cluster_dropped_warned = true;
+		}
 		return;
+	}
 
 	// deduplicate by unique ID (a light can be uploaded from several paths)
 	for (int i = 0; i < rt_cluster_light_count; i++)
@@ -949,7 +960,19 @@ void RT_ClusterLightListsUpload (void)
 				if (c >= numClusters)
 					continue;
 				if (counts[c] < RT_CLUSTER_MAX_PER_LIST)
+				{
 					counts[c]++;
+				}
+				else
+				{
+					if (!rt_cluster_perlist_warned)
+					{
+						Con_DWarning ("RT: a cluster sees more than RT_CLUSTER_MAX_PER_LIST (%i) "
+							"lights, the per-cluster light list is truncated.\n",
+							RT_CLUSTER_MAX_PER_LIST);
+						rt_cluster_perlist_warned = true;
+					}
+				}
 			}
 		}
 	}
