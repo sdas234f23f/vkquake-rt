@@ -41,13 +41,14 @@
 #define Q2_RNG_LIGHT_POINT 208   // per sample: 208+2*s, 208+2*s+1
 #define Q2_RNG_SUN_DISK 212      // the sun keeps a single ray
 
-// Q2RTX caps the solid angle of sphere lights to kill fireflies from small
-// lights near surfaces. Without it, the light-textured surfaces (signs, torch
-// flames) that are converted to tiny spheres sit IN their own surface, get a
-// solid angle of ~2*pi and overexpose into a flat white square (which makes
-// the scene look untextured). Only surfaces within a few units of the light
-// are affected; distant lighting is unchanged.
-#define Q2_DIRECT_MAX_SPHERE_SOLID_ANGLE 0.02
+// Q2RTX get_direct_illumination caps the solid angle of sphere/spot lights as
+//   max_solid_angle = (bounce == 0) ? 2*M_PI : 0.02;
+// The direct pass (this file, bounce 0) is therefore NOT capped: 2*M_PI is the
+// maximum solid angle a sphere can ever subtend, so min() is a no-op. The 0.02
+// firefly clamp only applies to indirect bounces (RtQ2Indirect.rgen). We
+// previously applied 0.02 here too, which attenuated close sphere lights by up
+// to ~26x and washed out their chroma (the pale-red-lamp bug). Follow Q2RTX.
+#define Q2_DIRECT_MAX_SPHERE_SOLID_ANGLE (2.0 * M_PI)
 
 void main()
 {

@@ -257,17 +257,6 @@ LightSample sampleSphereLight(const SphereLight l, const vec3 surfPosition, cons
     r.color = l.color;
     r.dw = calcSolidAngleForSphere(l.radius, toLightCenter.len);
 
-    // One-sided (Q2RTX spotlight factor): light-textured surfaces only
-    // illuminate surfaces in front of their emission normal. Without it, the
-    // sphere sitting inside the torch flame / sign geometry lights the
-    // mounting wall behind it through the geometry -> parallelogram /
-    // "light cylinder half in the wall" artifacts.
-    if (dot(l.normal, l.normal) > 1e-6)
-    {
-        const vec3 lightToSurf = normalize(surfPosition - r.position);
-        r.color *= getPolySpotFactor(normalize(l.normal), lightToSurf);
-    }
-
     return r;
 }
 

@@ -103,7 +103,7 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_classic_render, "0") \
 	CVAR_DEF_T (rt_enable_pvs, "0") \
 	CVAR_DEF_T (rt_shadowrays, "2") \
-	CVAR_DEF_T (rt_indir2bounces, "0") \
+	CVAR_DEF_T (rt_indir2bounces, "1") \
 	CVAR_DEF_T (rt_antifirefly, "1") \
 	CVAR_DEF_T (rt_roughmin, "0.02") \
     \
