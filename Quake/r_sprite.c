@@ -196,10 +196,11 @@ void R_DrawSpriteModel (cb_context_t *cbx, entity_t *e, int entuniqueid)
 	qboolean is_decal = psprite->type == SPR_ORIENTED;
 	qboolean is_rasterized = is_decal;
 
-	if (tx && tx->rtcustomtextype == RT_CUSTOMTEXTUREINFO_TYPE_RASTER_LIGHT)
-	{
+	if (tx && tx->rtforcerasterize)
 		is_rasterized = true;
 
+	if (tx && tx->rthaslightcolor)
+	{
 		vec3_t color = {tx->rtlightcolor[0], tx->rtlightcolor[1], tx->rtlightcolor[2]};
 		VectorScale (color, CVAR_TO_FLOAT (rt_dlight_intensity), color);
 		RT_FIXUP_LIGHT_INTENSITY (color, true);

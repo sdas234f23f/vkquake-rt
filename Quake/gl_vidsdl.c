@@ -116,6 +116,8 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_wlight_intensity, "3.0") \
 	CVAR_DEF_T (rt_wlight_radius, "0.01") \
 	\
+	CVAR_DEF_T (rt_emis_light_intensity, "10.0") \
+	\
 	CVAR_DEF_T (rt_elight_normaliz, "100") \
 	CVAR_DEF_T (rt_elight_default, "200") \
 	CVAR_DEF_T (rt_elight_default_mdl, "1000") \
@@ -227,6 +229,7 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_hud_padding, "8") \
 	\
 	CVAR_DEF_T (rt_debugflags, "0") \
+	CVAR_DEF_T (rt_debugemissive, "0") \
 	\
 	CVAR_DEF_T (_rt_firsttime, "1")
 
@@ -726,8 +729,6 @@ static void GL_InitInstance (void)
 
 	Cmd_AddCommand ("rt_pfnreloadshaders", RT_ReloadShaders);
 	Cmd_AddCommand ("rt_pfnswitch", RT_SwitchRenderer);
-	Cmd_AddCommand ("rt_pfnwlight_add", RT_CustomLights_AddCmd);
-	Cmd_AddCommand ("rt_pfnwlight_remove", RT_CustomLights_RemoveCmd);
 	Cmd_AddCommand ("rt_pfnportal", RT_PrintNearestPortal);
 	Cmd_AddCommand ("rt_water_color", RT_WaterColor);
 	Cmd_AddCommand ("rt_water_acidcolor", RT_AcidColor);

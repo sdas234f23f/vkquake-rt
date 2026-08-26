@@ -5,6 +5,8 @@
 #include "rt_material.h"
 #include "rt_pkz.h"
 
+#include <yaml.h>
+
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4505)
@@ -306,6 +308,7 @@ static void rt_mat_reset(rt_material_t *mat)
     mat->emissive_factor = 1.0f;
     mat->specular_factor = 1.0f;
     mat->base_factor = 1.0f;
+    mat->light_brightness = 1.0f;
     mat->kind = RT_MAT_KIND_REGULAR;
 }
 
@@ -322,6 +325,47 @@ static int rt_mat_parse_kind(const char *kindname)
     if (!q_strcasecmp(kindname, "SCREEN"))    return RT_MAT_KIND_SCREEN;
     if (!q_strcasecmp(kindname, "CAMERA"))    return RT_MAT_KIND_CAMERA;
     return RT_MAT_KIND_REGULAR;
+}
+
+// YAML booleans are "true"/"false"; the legacy .mat format used "0"/"1".
+// Accept all of them so the same key handler works for both.
+static qboolean rt_mat_parse_bool(const char *value)
+{
+    if (!q_strcasecmp(value, "true") || !q_strcasecmp(value, "yes") || !q_strcasecmp(value, "on"))
+        return true;
+    if (!q_strcasecmp(value, "false") || !q_strcasecmp(value, "no") || !q_strcasecmp(value, "off"))
+        return false;
+    return atoi(value) != 0;
+}
+
+// Parses a 6-digit RGB hex color ("rrggbb") into [0,1] components. Returns
+// false if the string is malformed (length != 6 or non-hex digits).
+static qboolean rt_mat_parse_hex_color(const char *value, vec3_t out)
+{
+    int i, c;
+
+    if (!value || strlen(value) != 6)
+        return false;
+
+    for (i = 0; i < 3; i++)
+    {
+        int hi = value[i * 2];
+        int lo = value[i * 2 + 1];
+
+        if (hi >= '0' && hi <= '9')       hi -= '0';
+        else if (hi >= 'a' && hi <= 'f')  hi = hi - 'a' + 10;
+        else if (hi >= 'A' && hi <= 'F')  hi = hi - 'A' + 10;
+        else return false;
+
+        if (lo >= '0' && lo <= '9')       lo -= '0';
+        else if (lo >= 'a' && lo <= 'f')  lo = lo - 'a' + 10;
+        else if (lo >= 'A' && lo <= 'F')  lo = lo - 'A' + 10;
+        else return false;
+
+        c = (hi << 4) | lo;
+        out[i] = (float)c / 255.0f;
+    }
+    return true;
 }
 
 static void rt_mat_set_attribute(rt_material_t *mat, const char *key, const char *value)
@@ -341,17 +385,29 @@ static void rt_mat_set_attribute(rt_material_t *mat, const char *key, const char
     else if (!q_strcasecmp(key, "kind"))
         mat->kind = rt_mat_parse_kind(value);
     else if (!q_strcasecmp(key, "is_light"))
-        mat->is_light = (value[0] != '0');
+        mat->is_light = rt_mat_parse_bool(value);
     else if (!q_strcasecmp(key, "light_styles"))
-        mat->light_styles = (value[0] != '0');
+        mat->light_styles = rt_mat_parse_bool(value);
     else if (!q_strcasecmp(key, "bsp_radiance"))
-        mat->bsp_radiance = (value[0] != '0');
+        mat->bsp_radiance = rt_mat_parse_bool(value);
     else if (!q_strcasecmp(key, "default_radiance"))
         mat->default_radiance = (float)atof(value);
     else if (!q_strcasecmp(key, "synth_emissive"))
-        mat->synth_emissive = (value[0] != '0');
+        mat->synth_emissive = rt_mat_parse_bool(value);
     else if (!q_strcasecmp(key, "emissive_threshold"))
         mat->emissive_threshold = atoi(value);
+    else if (!q_strcasecmp(key, "light_color"))
+        mat->has_light_color = rt_mat_parse_hex_color(value, mat->light_color);
+    else if (!q_strcasecmp(key, "light_brightness"))
+        mat->light_brightness = (float)atof(value);
+    else if (!q_strcasecmp(key, "light_upoffset"))
+        mat->light_upoffset = (float)atof(value);
+    else if (!q_strcasecmp(key, "mirror"))
+        mat->mirror = rt_mat_parse_bool(value);
+    else if (!q_strcasecmp(key, "exact_normals"))
+        mat->exact_normals = rt_mat_parse_bool(value);
+    else if (!q_strcasecmp(key, "force_rasterize"))
+        mat->force_rasterize = rt_mat_parse_bool(value);
     else if (!q_strcasecmp(key, "texture_base"))
         q_strlcpy(mat->filename_base, value, sizeof(mat->filename_base));
     else if (!q_strcasecmp(key, "texture_normals"))
@@ -367,160 +423,127 @@ static void rt_mat_set_attribute(rt_material_t *mat, const char *key, const char
 }
 
 // returns number of materials parsed into dest
-static int rt_mat_load_file(const char *file_name, rt_material_t *dest, int max_items)
+//
+// Parses a flat YAML document with libyaml (vendored, third_party/libyaml):
+//
+//   materials:
+//     - name: textures/#lava1
+//       texture_emissive: textures/#lava1_luma.png
+//       is_light: true
+//
+// The root "materials:" key maps to a sequence of material mappings; each
+// mapping's "name:" is the material name and every other "key: value" pair is
+// routed through rt_mat_set_attribute.
+static void rt_mat_yaml_scalar(const yaml_node_t *node, char *out, size_t outsize)
+{
+    if (!node || !node->data.scalar.value || outsize == 0)
+    {
+        if (outsize > 0)
+            out[0] = 0;
+        return;
+    }
+
+    size_t n = node->data.scalar.length;
+    if (n >= outsize)
+        n = outsize - 1;
+    memcpy(out, node->data.scalar.value, n);
+    out[n] = 0;
+}
+
+static int rt_mat_load_yaml_file(const char *file_name, rt_material_t *dest, int max_items)
 {
     int len = 0;
     char *filebuf = (char *)rt_load_file(file_name, &len);
     if (!filebuf || len == 0)
     {
         if (filebuf)
-        {
             rt_load_file_free((byte *)filebuf);
-        }
         return 0;
     }
 
-    char linebuf[1024];
+    yaml_parser_t parser;
+    yaml_document_t document;
     int count = 0;
-    int num_materials_in_group = 0;
-    int state = 0; // 0=initial, 1=accumulating names, 2=reading params
-    const char *ptr = filebuf;
-    const char *end = filebuf + len;
 
-    while (ptr < end)
+    if (!yaml_parser_initialize(&parser))
     {
-        // read a line
-        size_t pos = 0;
-        while (ptr < end && *ptr != '\n' && pos + 1 < sizeof(linebuf))
-        {
-            linebuf[pos++] = *ptr++;
-        }
-        if (ptr < end && *ptr == '\n')
-        {
-            ptr++;
-        }
-        linebuf[pos] = 0;
-
-        // strip comments. '#' starts a comment only at line start or when
-        // preceded by whitespace -- Quake 1 warp texture names legitimately
-        // contain '#' (e.g. "textures/#lava1")
-        char *t = linebuf;
-        while (*t == ' ' || *t == '\t')
-        {
-            t++;
-        }
-        if (*t == '#')
-        {
-            linebuf[0] = 0; // full-line comment
-        }
-        else
-        {
-            char *hash = strchr(linebuf, '#');
-            while (hash)
-            {
-                if (hash > linebuf && (hash[-1] == ' ' || hash[-1] == '\t'))
-                {
-                    *hash = 0;
-                    break;
-                }
-                hash = strchr(hash + 1, '#');
-            }
-        }
-
-        // trim leading whitespace. The .mat files indent keys with spaces
-        // (Q2RTX convention), so without this the key/value split below would
-        // treat the leading space as the key/value separator and drop every
-        // attribute (key becomes ""). This silently disabled the whole .mat
-        // attribute system.
-        {
-            char *sp = linebuf;
-            while (*sp == ' ' || *sp == '\t')
-            {
-                sp++;
-            }
-            if (sp != linebuf)
-            {
-                memmove(linebuf, sp, strlen(sp) + 1);
-            }
-        }
-
-        // trim trailing whitespace
-        size_t l = strlen(linebuf);
-        while (l > 0 && (linebuf[l - 1] == ' ' || linebuf[l - 1] == '\t' || linebuf[l - 1] == '\r'))
-        {
-            linebuf[--l] = 0;
-        }
-        if (l == 0)
-        {
-            continue;
-        }
-
-        char last = linebuf[l - 1];
-        if (last == ':' || last == ',')
-        {
-            if (state == 1 || state == 2)
-            {
-                dest++;
-            }
-            if (count >= max_items)
-            {
-                break;
-            }
-            count++;
-
-            rt_mat_reset(dest);
-            linebuf[l - 1] = 0;
-            q_strlcpy(dest->name, linebuf, sizeof(dest->name));
-            q_strlwr(dest->name);
-            dest->valid = true;
-
-            if (state == 1)
-            {
-                num_materials_in_group++;
-            }
-            else
-            {
-                num_materials_in_group = 1;
-            }
-
-            state = (last == ',') ? 1 : 2;
-            continue;
-        }
-
-        // key value pair
-        char *key = linebuf;
-        char *value = strchr(linebuf, ' ');
-        if (!value)
-        {
-            value = strchr(linebuf, '\t');
-        }
-        if (!value)
-        {
-            continue;
-        }
-        *value++ = 0;
-        // trim value
-        while (*value == ' ' || *value == '\t')
-        {
-            value++;
-        }
-
-        if (state == 0)
-        {
-            continue;
-        }
-        if (state == 1)
-        {
-            state = 0;
-            continue;
-        }
-
-        for (int i = 0; i < num_materials_in_group; i++)
-        {
-            rt_mat_set_attribute(dest - i, key, value);
-        }
+        rt_load_file_free((byte *)filebuf);
+        return 0;
     }
 
+    yaml_parser_set_input_string(&parser, (const unsigned char *)filebuf, (size_t)len);
+
+    if (yaml_parser_load(&parser, &document))
+    {
+        yaml_node_t *root = yaml_document_get_root_node(&document);
+        if (root && root->type == YAML_MAPPING_NODE)
+        {
+            for (yaml_node_pair_t *rp = root->data.mapping.pairs.start;
+                 rp < root->data.mapping.pairs.top; rp++)
+            {
+                yaml_node_t *rk = yaml_document_get_node(&document, rp->key);
+                if (!rk || rk->type != YAML_SCALAR_NODE || !rk->data.scalar.value)
+                    continue;
+                if (rk->data.scalar.length != 9 || memcmp(rk->data.scalar.value, "materials", 9) != 0)
+                    continue;
+
+                yaml_node_t *seq = yaml_document_get_node(&document, rp->value);
+                if (!seq || seq->type != YAML_SEQUENCE_NODE)
+                    continue;
+
+                for (yaml_node_item_t *it = seq->data.sequence.items.start;
+                     it < seq->data.sequence.items.top && count < max_items; it++)
+                {
+                    yaml_node_t *item = yaml_document_get_node(&document, *it);
+                    if (!item || item->type != YAML_MAPPING_NODE)
+                        continue;
+
+                    rt_mat_reset(dest);
+                    dest->valid = true;
+
+                    int have_name = 0;
+                    for (yaml_node_pair_t *mp = item->data.mapping.pairs.start;
+                         mp < item->data.mapping.pairs.top; mp++)
+                    {
+                        yaml_node_t *mk = yaml_document_get_node(&document, mp->key);
+                        yaml_node_t *mv = yaml_document_get_node(&document, mp->value);
+                        if (!mk || !mv || mk->type != YAML_SCALAR_NODE || mv->type != YAML_SCALAR_NODE)
+                            continue;
+
+                        char keybuf[128];
+                        char valbuf[1024];
+                        rt_mat_yaml_scalar(mk, keybuf, sizeof(keybuf));
+                        rt_mat_yaml_scalar(mv, valbuf, sizeof(valbuf));
+
+                        if (!q_strcasecmp(keybuf, "name"))
+                        {
+                            q_strlcpy(dest->name, valbuf, sizeof(dest->name));
+                            q_strlwr(dest->name);
+                            have_name = 1;
+                        }
+                        else
+                        {
+                            rt_mat_set_attribute(dest, keybuf, valbuf);
+                        }
+                    }
+
+                    if (have_name)
+                    {
+                        dest++;
+                        count++;
+                    }
+                }
+            }
+        }
+        yaml_document_delete(&document);
+    }
+    else
+    {
+        Con_DWarning("RT mat: failed to parse YAML '%s': %s\n",
+                     file_name, parser.problem ? parser.problem : "unknown error");
+    }
+
+    yaml_parser_delete(&parser);
     rt_load_file_free((byte *)filebuf);
     return count;
 }
@@ -531,9 +554,9 @@ static int rt_mat_load_file(const char *file_name, rt_material_t *dest, int max_
 
 static void rt_mat_find_dir_mats(int (*cb)(const char *name, void *ctx), void *ctx)
 {
-    // on-disk materials/*.mat
+    // on-disk materials/*.yaml
     char pattern[MAX_OSPATH];
-    q_snprintf(pattern, sizeof(pattern), "%s/materials/*.mat", com_gamedir);
+    q_snprintf(pattern, sizeof(pattern), "%s/materials/*.yaml", com_gamedir);
 
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(pattern, &fd);
@@ -569,7 +592,7 @@ static int rt_mat_load_cb(const char *name, void *vctx)
     {
         return 1;
     }
-    int loaded = rt_mat_load_file(name, ctx->dest + *ctx->count, ctx->max - *ctx->count);
+    int loaded = rt_mat_load_yaml_file(name, ctx->dest + *ctx->count, ctx->max - *ctx->count);
     *ctx->count += loaded;
     if (loaded > 0)
     {
@@ -596,7 +619,7 @@ void RT_MAT_Init(void)
 
     rt_mat_load_ctx_t ctx = { rt_global_materials, &rt_global_count, RT_MAT_MAX_GLOBAL };
     // .pkz entries
-    RT_PKZ_ListFiles("materials/", ".mat", rt_mat_load_cb, &ctx);
+    RT_PKZ_ListFiles("materials/", ".yaml", rt_mat_load_cb, &ctx);
     // on-disk files
     rt_mat_find_dir_mats(rt_mat_load_cb, &ctx);
 
@@ -630,9 +653,9 @@ void RT_MAT_ChangeMap(const char *mapname)
 
     rt_map_count = 0;
 
-    // map-specific material file: <mapname>.mat in materials/
+    // map-specific material file: <mapname>.yaml in materials/
     char name[MAX_QPATH];
-    q_snprintf(name, sizeof(name), "materials/%s.mat", mapname);
+    q_snprintf(name, sizeof(name), "materials/%s.yaml", mapname);
 
     rt_mat_load_ctx_t ctx = { rt_map_materials, &rt_map_count, RT_MAT_MAX_MAP };
     rt_mat_load_cb(name, &ctx);
@@ -723,113 +746,6 @@ rt_material_t *RT_MAT_Find(const char *name)
     return rt_mat_find_in(name, rt_global_materials, rt_global_count);
 }
 
-// ---------------------------------------------------------------------------
-// HD texture pack convention: no .mat files, but every texture set has
-// <name>_norm / <name>_gloss / <name>_luma / <name>_glow / <name>_bump.
-// ---------------------------------------------------------------------------
-
-static qboolean rt_tex_exists(const char *base)
-{
-    static const char *exts[] = { "tga", "jpg", "png" };
-    for (int e = 0; e < 3; e++)
-    {
-        char name[MAX_QPATH];
-        q_snprintf(name, sizeof(name), "%s.%s", base, exts[e]);
-
-        // .pkz archives: cheap central-directory lookup
-        if (RT_PKZ_Exists(name))
-        {
-            return true;
-        }
-
-        // filesystem + .pak
-        unsigned int path_id;
-        if (COM_FileExists(name, &path_id))
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-qboolean RT_MAT_AutoDetect(const char *name, rt_material_t *out)
-{
-    if (!RT_MAT_Enabled())
-    {
-        return false;
-    }
-    if (!name || !name[0])
-    {
-        return false;
-    }
-
-    rt_mat_reset(out);
-    rt_mat_normalize_name(name, out->name, sizeof(out->name));
-    char *dot = strrchr(out->name, '.');
-    if (dot && !strchr(dot, ':'))
-    {
-        *dot = 0;
-    }
-
-    char base[MAX_QPATH];
-    q_strlcpy(base, out->name, sizeof(base));
-
-    qboolean found = false;
-
-    // normal map: _norm preferred, _bump as fallback
-    char suf[MAX_QPATH];
-    q_snprintf(suf, sizeof(suf), "%s_norm", base);
-    if (rt_tex_exists(suf))
-    {
-        q_strlcpy(out->filename_normals, suf, sizeof(out->filename_normals));
-        found = true;
-    }
-    else
-    {
-        q_snprintf(suf, sizeof(suf), "%s_bump", base);
-        if (rt_tex_exists(suf))
-        {
-            q_strlcpy(out->filename_normals, suf, sizeof(out->filename_normals));
-            found = true;
-        }
-    }
-
-    // gloss map -> roughness = 1 - gloss
-    q_snprintf(suf, sizeof(suf), "%s_gloss", base);
-    if (rt_tex_exists(suf))
-    {
-        q_strlcpy(out->filename_gloss, suf, sizeof(out->filename_gloss));
-        found = true;
-    }
-
-    // emissive: _luma preferred, _glow as fallback
-    q_snprintf(suf, sizeof(suf), "%s_luma", base);
-    if (rt_tex_exists(suf))
-    {
-        q_strlcpy(out->filename_emissive, suf, sizeof(out->filename_emissive));
-        found = true;
-    }
-    else
-    {
-        q_snprintf(suf, sizeof(suf), "%s_glow", base);
-        if (rt_tex_exists(suf))
-        {
-            q_strlcpy(out->filename_emissive, suf, sizeof(out->filename_emissive));
-            found = true;
-        }
-    }
-
-    // HD packs carry no alpha/metallic data: keep surfaces non-metallic
-    out->metalness_factor = 0.0f;
-    out->bump_scale = 1.0f;
-    out->emissive_factor = 1.0f;
-    out->specular_factor = 1.0f;
-    out->base_factor = 1.0f;
-    out->kind = RT_MAT_KIND_REGULAR;
-
-    return found;
-}
-
 qboolean RT_MAT_Enabled(void)
 {
     return rt_materials.value != 0;
@@ -845,12 +761,6 @@ void RT_MAT_Cmd(void)
     }
 
     rt_material_t *m = RT_MAT_Find(Cmd_Argv(1));
-    rt_material_t autoMat;
-    if (!m && RT_MAT_AutoDetect(Cmd_Argv(1), &autoMat))
-    {
-        m = &autoMat;
-        Con_Printf("(auto-detected from texture suffixes)\n");
-    }
     if (!m)
     {
         Con_Printf("no material for '%s'\n", Cmd_Argv(1));

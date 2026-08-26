@@ -39,13 +39,29 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 cmake --build $BuildDir
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-# Deploy the override-material pack (id1/ovrd_mat.pkz, checked in) into the
-# build's game dir. The game loads its material overrides (emissive lava,
-# normal maps, ...) from this .pkz.
-$pkzSrc  = Join-Path $PSScriptRoot "id1\ovrd_mat.pkz"
+# Deploy the material system into the build's game dir:
+#  - materials.yaml  -> id1/materials/materials.yaml (material definitions)
+#  - textures/*.png   -> id1/textures/   (world PBR overrides)
+#  - progs/**/*.png   -> id1/progs/      (model skin PBR overrides)
+# The game loads materials from materials/*.yaml and textures from these loose
+# files (rt_load_file -> COM_LoadFile).
+$srcRoot = Join-Path $PSScriptRoot "vkpt\Source"
 $gameDir = Join-Path $BuildDir "id1"
-if (Test-Path $pkzSrc) {
-    if (-not (Test-Path $gameDir)) { New-Item -ItemType Directory -Path $gameDir -Force | Out-Null }
-    Copy-Item $pkzSrc (Join-Path $gameDir "ovrd_mat.pkz") -Force
+if (-not (Test-Path $gameDir)) { New-Item -ItemType Directory -Path $gameDir -Force | Out-Null }
+
+$matYaml = Join-Path $srcRoot "materials.yaml"
+if (Test-Path $matYaml) {
+    $matDir = Join-Path $gameDir "materials"
+    if (-not (Test-Path $matDir)) { New-Item -ItemType Directory -Path $matDir -Force | Out-Null }
+    Copy-Item $matYaml (Join-Path $matDir "materials.yaml") -Force
+}
+
+foreach ($sub in @("textures", "progs")) {
+    $src = Join-Path $srcRoot $sub
+    if (Test-Path $src) {
+        $dst = Join-Path $gameDir $sub
+        if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
+        Copy-Item -Path (Join-Path $src "*") -Destination $dst -Recurse -Force
+    }
 }
 exit 0

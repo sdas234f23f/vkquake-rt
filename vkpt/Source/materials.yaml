@@ -1,0 +1,621 @@
+# Global material definitions for the vkpt ray-traced renderer.
+# `is_light: true` marks a *static* surface (textures/*) whose luma
+# texture should generate emissive triangle lights. Dynamic surfaces
+# (progs/* models and sprites) are gated separately by the engine.
+materials:
+  - name: textures/#lava1
+    texture_gloss: textures/#lava1_gloss.png
+    texture_emissive: textures/#lava1_luma.png
+    is_light: true
+  - name: textures/#teleport
+    texture_gloss: textures/#teleport_gloss.png
+    texture_emissive: textures/#teleport_luma.png
+    is_light: true
+  - name: textures/+0_med100
+    texture_normals: textures/+0_med100_n.png
+    texture_gloss: textures/+0_med100_gloss.png
+    texture_emissive: textures/+0_med100_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/+0_med25
+    texture_normals: textures/+0_med25_n.png
+    texture_gloss: textures/+0_med25_gloss.png
+    texture_emissive: textures/+0_med25_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/+0_med25s
+    texture_normals: textures/+0_med25s_n.png
+    texture_gloss: textures/+0_med25s_gloss.png
+    texture_emissive: textures/+0_med25s_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/+1_med100
+    texture_normals: textures/+1_med100_n.png
+    texture_gloss: textures/+1_med100_gloss.png
+    texture_emissive: textures/+1_med100_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/+1_med25
+    texture_normals: textures/+1_med25_n.png
+    texture_gloss: textures/+1_med25_gloss.png
+    texture_emissive: textures/+1_med25_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/+1_med25s
+    texture_normals: textures/+1_med25s_n.png
+    texture_gloss: textures/+1_med25s_gloss.png
+    texture_emissive: textures/+1_med25s_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/+2_med100
+    texture_normals: textures/+2_med100_n.png
+    texture_gloss: textures/+2_med100_gloss.png
+    texture_emissive: textures/+2_med100_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/+2_med25
+    texture_normals: textures/+2_med25_n.png
+    texture_gloss: textures/+2_med25_gloss.png
+    texture_emissive: textures/+2_med25_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/+3_med100
+    texture_normals: textures/+3_med100_n.png
+    texture_gloss: textures/+3_med100_gloss.png
+    texture_emissive: textures/+3_med100_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/+3_med25
+    texture_normals: textures/+3_med25_n.png
+    texture_gloss: textures/+3_med25_gloss.png
+    texture_emissive: textures/+3_med25_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/afloor1_3
+    texture_normals: textures/afloor1_3_n.png
+    texture_gloss: textures/afloor1_3_gloss.png
+    is_light: false
+  - name: textures/afloor1_4
+    texture_normals: textures/afloor1_4_n.png
+    texture_gloss: textures/afloor1_4_gloss.png
+    is_light: false
+  - name: textures/afloor1_8
+    texture_normals: textures/afloor1_8_n.png
+    texture_gloss: textures/afloor1_8_gloss.png
+    is_light: false
+  - name: textures/afloor3_1
+    texture_normals: textures/afloor3_1_n.png
+    texture_gloss: textures/afloor3_1_gloss.png
+    is_light: false
+  - name: textures/batt0sid
+    texture_normals: textures/batt0sid_n.png
+    texture_gloss: textures/batt0sid_gloss.png
+    texture_emissive: textures/batt0sid_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/batt0top
+    texture_normals: textures/batt0top_n.png
+    texture_gloss: textures/batt0top_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: textures/batt1sid
+    texture_normals: textures/batt1sid_n.png
+    texture_gloss: textures/batt1sid_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: textures/batt1top
+    texture_normals: textures/batt1top_n.png
+    texture_gloss: textures/batt1top_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: textures/dem5_3
+    texture_normals: textures/dem5_3_n.png
+    texture_gloss: textures/dem5_3_gloss.png
+    texture_emissive: textures/dem5_3_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/med100
+    texture_normals: textures/med100_n.png
+    texture_gloss: textures/med100_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: textures/med3_0
+    texture_normals: textures/med3_0_n.png
+    texture_gloss: textures/med3_0_gloss.png
+    texture_emissive: textures/med3_0_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/med3_1
+    texture_normals: textures/med3_1_n.png
+    texture_gloss: textures/med3_1_gloss.png
+    texture_emissive: textures/med3_1_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/nail0sid
+    texture_normals: textures/nail0sid_n.png
+    texture_gloss: textures/nail0sid_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: textures/nail0top
+    texture_normals: textures/nail0top_n.png
+    texture_gloss: textures/nail0top_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: textures/nail1sid
+    texture_normals: textures/nail1sid_n.png
+    texture_gloss: textures/nail1sid_gloss.png
+    texture_emissive: textures/nail1sid_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/nail1top
+    texture_normals: textures/nail1top_n.png
+    texture_gloss: textures/nail1top_gloss.png
+    texture_emissive: textures/nail1top_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/rock0sid
+    texture_normals: textures/rock0sid_n.png
+    texture_gloss: textures/rock0sid_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: textures/rock1sid
+    texture_normals: textures/rock1sid_n.png
+    texture_gloss: textures/rock1sid_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: textures/sfloor4_4
+    texture_gloss: textures/sfloor4_4_gloss.png
+    light_color: bdf1ff
+    is_light: true
+  - name: textures/+0basebtn
+    light_color: ff3333
+    is_light: true
+  - name: textures/+abasebtn
+    light_color: ffe6b5
+    is_light: true
+  - name: textures/tlight01
+    light_color: 918971
+    is_light: true
+  - name: textures/tlight03
+    light_color: b8d8ff
+    is_light: true
+  - name: textures/tlight05
+    light_color: c6c4ff
+    is_light: true
+  - name: textures/ceil1_1
+    light_color: bdf1ff
+    is_light: true
+  - name: textures/light1_5
+    light_color: 7a7667
+    is_light: true
+  - name: textures/light1_4
+    light_color: 696f8c
+    is_light: true
+  - name: textures/light3_8
+    light_color: 86818a
+    is_light: true
+  - name: textures/shot0sid
+    texture_normals: textures/shot0sid_n.png
+    texture_gloss: textures/shot0sid_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: textures/shot0top
+    texture_normals: textures/shot0top_n.png
+    texture_gloss: textures/shot0top_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: textures/shot1sid
+    texture_normals: textures/shot1sid_n.png
+    texture_gloss: textures/shot1sid_gloss.png
+    texture_emissive: textures/shot1sid_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/shot1top
+    texture_normals: textures/shot1top_n.png
+    texture_gloss: textures/shot1top_gloss.png
+    texture_emissive: textures/shot1top_luma.png
+    metalness_factor: 1.0
+    is_light: true
+  - name: textures/stone1_7
+    texture_normals: textures/stone1_7_n.png
+    texture_gloss: textures/stone1_7_gloss.png
+    is_light: false
+  - name: textures/tlight02
+    texture_gloss: textures/tlight02_gloss.png
+    is_light: false
+  - name: textures/tlight10
+    texture_gloss: textures/tlight10_gloss.png
+    is_light: false
+  - name: textures/wall9_8
+    texture_normals: textures/wall9_8_n.png
+    texture_gloss: textures/wall9_8_gloss.png
+    is_light: false
+  - name: textures/window01_1
+    texture_base: textures/window01_1.png
+    texture_normals: textures/window01_1_n.png
+    mirror: true
+    is_light: false
+  - name: textures/window01_2
+    texture_base: textures/window01_2.png
+    texture_normals: textures/window01_2_n.png
+    mirror: true
+    is_light: false
+  - name: textures/window01_3
+    texture_base: textures/window01_3.png
+    texture_normals: textures/window01_3_n.png
+    mirror: true
+    is_light: false
+  - name: textures/window01_4
+    texture_base: textures/window01_4.png
+    texture_normals: textures/window01_4_n.png
+    mirror: true
+    is_light: false
+  - name: textures/window02_1
+    texture_base: textures/window02_1.png
+    texture_normals: textures/window02_1_n.png
+    mirror: true
+    is_light: false
+  - name: textures/window1_2
+    texture_base: textures/window1_2.png
+    texture_normals: textures/window1_2_n.png
+    mirror: true
+    is_light: false
+  - name: textures/window1_3
+    texture_base: textures/window1_3.png
+    texture_normals: textures/window1_3_n.png
+    mirror: true
+    is_light: false
+  - name: textures/window1_4
+    texture_base: textures/window1_4.png
+    texture_normals: textures/window1_4_n.png
+    mirror: true
+    is_light: false
+  - name: textures/wizwin1_2
+    texture_base: textures/wizwin1_2.png
+    texture_normals: textures/wizwin1_2_n.png
+    mirror: true
+    is_light: false
+  - name: textures/wizwin1_8
+    texture_base: textures/wizwin1_8.png
+    texture_normals: textures/wizwin1_8_n.png
+    mirror: true
+    is_light: false
+  - name: textures/woodflr1_4
+    texture_normals: textures/woodflr1_4_n.png
+    texture_gloss: textures/woodflr1_4_gloss.png
+    is_light: false
+  - name: textures/z_exit
+    texture_gloss: textures/z_exit_gloss.png
+    texture_emissive: textures/z_exit_luma.png
+    is_light: true
+  - name: progs/armor.mdl:frame0
+    texture_base: progs/armor/0.png
+    texture_normals: progs/armor/0_n.png
+    texture_gloss: progs/armor/0_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: progs/armor.mdl:frame1
+    texture_base: progs/armor/1.png
+    texture_normals: progs/armor/1_n.png
+    texture_gloss: progs/armor/1_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: progs/armor.mdl:frame2
+    texture_base: progs/armor/2.png
+    texture_normals: progs/armor/2_n.png
+    texture_gloss: progs/armor/2_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: progs/b_g_key.mdl:frame0
+    texture_base: progs/b_g_key/0.png
+    texture_gloss: progs/b_g_key/0_gloss.png
+    exact_normals: true
+    is_light: false
+  - name: progs/b_s_key.mdl:frame0
+    texture_base: progs/b_s_key/0.png
+    texture_gloss: progs/b_s_key/0_gloss.png
+    exact_normals: true
+    is_light: false
+  - name: progs/end1.mdl:frame0
+    texture_base: progs/end1/0.png
+    texture_gloss: progs/end1/0_gloss.png
+    exact_normals: true
+    is_light: false
+  - name: progs/end2.mdl:frame0
+    texture_base: progs/end2/0.png
+    texture_gloss: progs/end2/0_gloss.png
+    exact_normals: true
+    is_light: false
+  - name: progs/end3.mdl:frame0
+    texture_base: progs/end3/0.png
+    texture_gloss: progs/end3/0_gloss.png
+    exact_normals: true
+    is_light: false
+  - name: progs/end4.mdl:frame0
+    texture_base: progs/end4/0.png
+    texture_gloss: progs/end4/0_gloss.png
+    exact_normals: true
+    is_light: false
+  - name: progs/m_g_key.mdl:frame0
+    texture_base: progs/m_g_key/0.png
+    texture_gloss: progs/m_g_key/0_gloss.png
+    exact_normals: true
+    is_light: false
+  - name: progs/m_s_key.mdl:frame0
+    texture_base: progs/m_s_key/0.png
+    texture_gloss: progs/m_s_key/0_gloss.png
+    exact_normals: true
+    is_light: false
+  - name: progs/s_explod.spr:frame0
+    texture_base: progs/s_explod.spr/0.png
+    texture_gloss: progs/s_explod.spr/0_gloss.png
+    texture_emissive: progs/s_explod.spr/0_luma.png
+    force_rasterize: true
+    light_color: ffe6c4
+    light_brightness: 8.0
+    is_light: false
+  - name: progs/s_explod.spr:frame1
+    texture_base: progs/s_explod.spr/1.png
+    texture_gloss: progs/s_explod.spr/1_gloss.png
+    texture_emissive: progs/s_explod.spr/1_luma.png
+    force_rasterize: true
+    light_color: fffbf5
+    light_brightness: 18.0
+    is_light: false
+  - name: progs/s_explod.spr:frame2
+    texture_base: progs/s_explod.spr/2.png
+    texture_gloss: progs/s_explod.spr/2_gloss.png
+    texture_emissive: progs/s_explod.spr/2_luma.png
+    force_rasterize: true
+    light_color: ffe2b8
+    light_brightness: 22.0
+    is_light: false
+  - name: progs/s_explod.spr:frame3
+    texture_base: progs/s_explod.spr/3.png
+    texture_gloss: progs/s_explod.spr/3_gloss.png
+    texture_emissive: progs/s_explod.spr/3_luma.png
+    force_rasterize: true
+    light_color: e0bc89
+    light_brightness: 12.0
+    is_light: false
+  - name: progs/s_explod.spr:frame4
+    texture_base: progs/s_explod.spr/4.png
+    texture_gloss: progs/s_explod.spr/4_gloss.png
+    texture_emissive: progs/s_explod.spr/4_luma.png
+    force_rasterize: true
+    light_color: 857e75
+    light_brightness: 8.0
+    is_light: false
+  - name: progs/s_explod.spr:frame5
+    texture_base: progs/s_explod.spr/5.png
+    texture_gloss: progs/s_explod.spr/5_gloss.png
+    texture_emissive: progs/s_explod.spr/5_luma.png
+    force_rasterize: true
+    light_color: 524e49
+    light_brightness: 3.0
+    is_light: false
+  - name: progs/s_bubble.spr:frame0
+    force_rasterize: true
+    is_light: false
+  - name: progs/s_bubble.spr:frame1
+    force_rasterize: true
+    is_light: false
+  - name: progs/s_spike.mdl:frame0
+    texture_gloss: progs/s_spike/0_gloss.png
+    force_rasterize: true
+    light_color: "333333"
+    is_light: false
+  - name: progs/spike.mdl:frame0
+    texture_gloss: progs/spike/0_gloss.png
+    force_rasterize: true
+    light_color: "333333"
+    is_light: false
+  - name: progs/v_axe.mdl:frame0
+    texture_normals: progs/v_axe/0_n.png
+    texture_gloss: progs/v_axe/0_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: progs/v_light.mdl:frame0
+    texture_normals: progs/v_light/0_n.png
+    texture_gloss: progs/v_light/0_gloss.png
+    texture_emissive: progs/v_light/0_luma.png
+    metalness_factor: 1.0
+    exact_normals: true
+    is_light: false
+  - name: progs/v_nail.mdl:frame0
+    texture_normals: progs/v_nail/0_n.png
+    texture_gloss: progs/v_nail/0_gloss.png
+    texture_emissive: progs/v_nail/0_luma.png
+    metalness_factor: 1.0
+    exact_normals: true
+    is_light: false
+  - name: progs/v_nail2.mdl:frame0
+    texture_normals: progs/v_nail2/0_n.png
+    texture_gloss: progs/v_nail2/0_gloss.png
+    texture_emissive: progs/v_nail2/0_luma.png
+    metalness_factor: 1.0
+    exact_normals: true
+    is_light: false
+  - name: progs/v_rock.mdl:frame0
+    texture_normals: progs/v_rock/0_n.png
+    texture_gloss: progs/v_rock/0_gloss.png
+    texture_emissive: progs/v_rock/0_luma.png
+    metalness_factor: 1.0
+    exact_normals: true
+    is_light: false
+  - name: progs/v_rock2.mdl:frame0
+    texture_normals: progs/v_rock2/0_n.png
+    texture_gloss: progs/v_rock2/0_gloss.png
+    texture_emissive: progs/v_rock2/0_luma.png
+    metalness_factor: 1.0
+    exact_normals: true
+    is_light: false
+  - name: progs/v_shot.mdl:frame0
+    texture_base: progs/v_shot/0.png
+    texture_normals: progs/v_shot/0_n.png
+    texture_gloss: progs/v_shot/0_gloss.png
+    texture_emissive: progs/v_shot/0_luma.png
+    metalness_factor: 1.0
+    exact_normals: true
+    is_light: false
+  - name: progs/v_shot2.mdl:frame0
+    texture_normals: progs/v_shot2/0_n.png
+    texture_gloss: progs/v_shot2/0_gloss.png
+    texture_emissive: progs/v_shot2/0_luma.png
+    metalness_factor: 1.0
+    exact_normals: true
+    is_light: false
+  - name: progs/w_g_key.mdl:frame0
+    texture_base: progs/w_g_key/0.png
+    texture_gloss: progs/w_g_key/0_gloss.png
+    exact_normals: true
+    is_light: false
+  - name: progs/w_s_key.mdl:frame0
+    texture_base: progs/w_s_key/0.png
+    texture_gloss: progs/w_s_key/0_gloss.png
+    exact_normals: true
+    is_light: false
+  - name: progs/w_spike.mdl:frame0
+    texture_gloss: progs/w_spike/0_gloss.png
+    texture_emissive: progs/w_spike/0_luma.png
+    force_rasterize: true
+    light_color: c2f299
+    is_light: false
+  - name: progs/backpack.mdl:frame0
+    is_light: false
+  - name: progs/bolt.mdl:frame0
+    force_rasterize: true
+    is_light: false
+  - name: progs/bolt2.mdl:frame0
+    force_rasterize: true
+    is_light: false
+  - name: progs/bolt3.mdl:frame0
+    force_rasterize: true
+    is_light: false
+  - name: progs/boss.mdl:frame0
+    is_light: false
+  - name: progs/demon.mdl:frame0
+    is_light: false
+  - name: progs/dog.mdl:frame0
+    is_light: false
+  - name: progs/enforcer.mdl:frame0
+    is_light: false
+  - name: progs/eyes.mdl:frame0
+    is_light: false
+  - name: progs/fish.mdl:frame0
+    is_light: false
+  - name: progs/flame.mdl:frame0
+    texture_emissive: mdl_skins/flame_skin0_luma.png
+    is_light: true
+    light_brightness: 3.0
+  - name: progs/flame2.mdl:frame0
+    texture_emissive: mdl_skins/flame2_skin0_luma.png
+    is_light: true
+    light_brightness: 3.0
+  - name: progs/g_light.mdl:frame0
+    is_light: false
+  - name: progs/g_nail.mdl:frame0
+    is_light: false
+  - name: progs/g_nail2.mdl:frame0
+    is_light: false
+  - name: progs/g_rock.mdl:frame0
+    is_light: false
+  - name: progs/g_rock2.mdl:frame0
+    is_light: false
+  - name: progs/g_shot.mdl:frame0
+    is_light: false
+  - name: progs/gib1.mdl:frame0
+    is_light: false
+  - name: progs/gib2.mdl:frame0
+    is_light: false
+  - name: progs/gib3.mdl:frame0
+    is_light: false
+  - name: progs/grenade.mdl:frame0
+    force_rasterize: true
+    light_color: ffcdcd
+    light_brightness: 10.0
+    light_upoffset: 8.0
+    is_light: false
+  - name: progs/h_demon.mdl:frame0
+    is_light: false
+  - name: progs/h_dog.mdl:frame0
+    is_light: false
+  - name: progs/h_guard.mdl:frame0
+    is_light: false
+  - name: progs/h_hellkn.mdl:frame0
+    is_light: false
+  - name: progs/h_knight.mdl:frame0
+    is_light: false
+  - name: progs/h_mega.mdl:frame0
+    is_light: false
+  - name: progs/h_ogre.mdl:frame0
+    is_light: false
+  - name: progs/h_player.mdl:frame0
+    is_light: false
+  - name: progs/h_shal.mdl:frame0
+    is_light: false
+  - name: progs/h_shams.mdl:frame0
+    is_light: false
+  - name: progs/h_wizard.mdl:frame0
+    is_light: false
+  - name: progs/h_zombie.mdl:frame0
+    is_light: false
+  - name: progs/hknight.mdl:frame0
+    is_light: false
+  - name: progs/invisibl.mdl:frame0
+    is_light: false
+  - name: progs/invulner.mdl:frame0
+    is_light: false
+  - name: progs/k_spike.mdl:frame0
+    force_rasterize: true
+    light_color: fff0d6
+    is_light: false
+  - name: progs/knight.mdl:frame0
+    is_light: false
+  - name: progs/laser.mdl:frame0
+    force_rasterize: true
+    is_light: false
+  - name: progs/lavaball.mdl:frame0
+    force_rasterize: true
+    light_color: ff6b42
+    light_brightness: 10.0
+    is_light: false
+  - name: progs/missile.mdl:frame0
+    force_rasterize: true
+    light_color: ffdfcd
+    light_brightness: 18.0
+    is_light: false
+  - name: progs/ogre.mdl:frame0
+    is_light: false
+  - name: progs/oldone.mdl:frame0
+    is_light: false
+  - name: progs/player.mdl:frame0
+    is_light: false
+  - name: progs/quaddama.mdl:frame0
+    is_light: false
+  - name: progs/s_light.mdl:frame0
+    is_light: false
+  - name: progs/shalrath.mdl:frame0
+    is_light: false
+  - name: progs/shambler.mdl:frame0
+    is_light: false
+  - name: progs/soldier.mdl:frame0
+    is_light: false
+  - name: progs/suit.mdl:frame0
+    is_light: false
+  - name: progs/tarbaby.mdl:frame0
+    is_light: false
+  - name: progs/teleport.mdl:frame0
+    force_rasterize: true
+    light_color: ebf3fa
+    is_light: false
+  - name: progs/v_spike.mdl:frame0
+    force_rasterize: true
+    light_color: ebf3fa
+    is_light: false
+  - name: progs/wizard.mdl:frame0
+    is_light: false
+  - name: progs/zom_gib.mdl:frame0
+    is_light: false
+  - name: progs/zombie.mdl:frame0
+    is_light: false

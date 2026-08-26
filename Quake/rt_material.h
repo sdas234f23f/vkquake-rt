@@ -1,6 +1,6 @@
-// Q2RTX-style .mat material definitions (phase 4.5).
+// Q2RTX-style material definitions (phase 4.5).
 // Ported from Q2RTX material.c and adapted to the vkquake host: materials are
-// loaded from materials/*.mat files (global + <map>.mat) found either on disk
+// loaded from materials/*.yaml files (global + <map>.yaml) found either on disk
 // or inside a mounted .pkz archive, and are used to synthesize the vkpt
 // RGBA8 material textures (albedo-alpha, roughness-metallic-emissive, normal).
 
@@ -45,27 +45,28 @@ typedef struct rt_material_s {
     float default_radiance;
     qboolean synth_emissive;
     int emissive_threshold;
+    // legacy texture_custom_info.txt migrations (now authored in materials.yaml)
+    vec3_t light_color;            // explicit light color (hex) normalized to [0,1]
+    qboolean has_light_color;      // "light_color:" key present
+    float light_brightness;        // light intensity multiplier (Q2RTX-style ray-count scaling, default 1.0)
+    float light_upoffset;          // sphere light vertical offset, default 0.0
+    qboolean mirror;               // reflect/refract surface (was @MIRROR)
+    qboolean exact_normals;        // flat-shaded geometry (was @EXACT_NORMALS)
+    qboolean force_rasterize;      // rasterize, no shadows (was @RASTER_LIGHT)
     qboolean valid;
 } rt_material_t;
 
-// Clears the table and loads materials/*.mat (global materials) + any <map>.mat
-// for the current map (see RT_MAT_ChangeMap).
+// Clears the table and loads materials/*.yaml (global materials) + any
+// <map>.yaml for the current map (see RT_MAT_ChangeMap).
 void RT_MAT_Init(void);
 void RT_MAT_Shutdown(void);
 
-// Loads <mapname>.mat (map-specific materials) on top of the global ones.
+// Loads <mapname>.yaml (map-specific materials) on top of the global ones.
 void RT_MAT_ChangeMap(const char *mapname);
 
 // Finds a material by texture name (no extension, case-insensitive).
 // Returns NULL if no material is defined for this texture.
 rt_material_t *RT_MAT_Find(const char *name);
-
-// Auto-detects a material from the HD texture pack naming convention when
-// no .mat definition exists: it looks for <name>_norm (normal map),
-// <name>_gloss (gloss -> roughness), <name>_luma / <name>_glow (emissive) and
-// <name>_bump (legacy bump, used only if _norm is missing). Fills *out and
-// returns true if at least one suffix texture was found.
-qboolean RT_MAT_AutoDetect(const char *name, rt_material_t *out);
 
 // Loads the given material texture (RT_MAT_TEX_*) as RGBA8 from a .pkz
 // archive or the filesystem (TGA type 2/10, 24/32-bit). Returns a heap

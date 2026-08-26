@@ -221,6 +221,29 @@ add_subdirectory(vkpt)
 message(STATUS "vkpt renderer: vendored (static, built from vkpt/)")
 
 # ============================================================================
+# libyaml — vendored YAML parser (used by rt_material.c for materials.yaml)
+# ============================================================================
+# Parser-only subset (dumper/emitter/writer are emit-only and excluded).
+# Built as a separate static lib so the strict /W4 /WX C flags don't apply to
+# third-party code. YAML_DECLARE_STATIC avoids dllimport on MSVC.
+add_library(libyaml STATIC
+    third_party/libyaml/src/api.c
+    third_party/libyaml/src/reader.c
+    third_party/libyaml/src/scanner.c
+    third_party/libyaml/src/parser.c
+    third_party/libyaml/src/loader.c
+)
+target_include_directories(libyaml PUBLIC ${CMAKE_SOURCE_DIR}/third_party/libyaml/include)
+target_compile_definitions(libyaml PUBLIC YAML_DECLARE_STATIC)
+target_compile_definitions(libyaml PRIVATE HAVE_CONFIG_H)
+
+if(MSVC)
+    target_compile_options(libyaml PRIVATE /W1 /WX-)
+else()
+    target_compile_options(libyaml PRIVATE -w)
+endif()
+
+# ============================================================================
 # Source files
 # ============================================================================
 
@@ -433,6 +456,7 @@ endif()
 # ============================================================================
 target_link_libraries(vkquake PRIVATE Vulkan::Vulkan)
 target_link_libraries(vkquake PRIVATE vkpt)
+target_link_libraries(vkquake PRIVATE libyaml)
 
 if(VKQUAKE_PLATFORM_WINDOWS)
     target_link_libraries(vkquake PRIVATE SDL2::SDL2 SDL2::SDL2main)

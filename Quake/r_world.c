@@ -41,6 +41,8 @@ extern cvar_t rt_enable_pvs;
 extern cvar_t rt_reflrefr_depth;
 extern cvar_t rt_plight_intensity, rt_plight_radius;
 extern cvar_t rt_wlight_intensity, rt_wlight_radius;
+extern cvar_t rt_emis_light_intensity;
+extern cvar_t rt_debugemissive;
 
 cvar_t r_parallelmark = {"r_parallelmark", "1", CVAR_NONE};
 
@@ -66,23 +68,15 @@ static int                        rt_wldlights_tri_count = 0;
 static RgSphericalLightUploadInfo rt_wldlights_sph[MAX_WORLDLIGHTS_COUNT];
 static int                        rt_wldlights_sph_count = 0;
 
+// Emissive material surfaces (lava, buttons, runes, light panels) become true
+// TRIANGLE (area) lights so they are sampled via next-event estimation, instead
+// of only contributing when a random bounce happens to hit them.
+static RgPolygonalLightUploadInfo rt_wldlights_emissive[MAX_WORLDLIGHTS_COUNT];
+static int                        rt_wldlights_emissive_count = 0;
+
 #if RT_USE_SPHERE_INSTEAD_OF_POLY
 static RgPolygonalLightUploadInfo rt_tempbuffer[512]; 
 #endif
-
-#define RT_CUSTOMLIGHTS_PATH        RT_OVERRIDEN_FOLDER "world_custom_lights.txt"
-typedef struct rt_worldcustomlight_t
-{
-	char      mapname[64];
-	// color is in [0,1]
-	RgFloat3D color01;
-	RgFloat3D position;
-	qboolean  deleted;
-} rt_worldcustomlight_t;
-static rt_worldcustomlight_t *rt_customlights_all = NULL;
-static int                    rt_customlights_all_count = 0;
-static int                   *rt_customlights_curr = NULL;
-static int                    rt_customlights_curr_count = 0;
 
 #define RT_CUSTOMPORTALS_PATH RT_OVERRIDEN_FOLDER "world_custom_portals.txt"
 
@@ -836,6 +830,53 @@ typedef struct rt_uploadsurf_state_t
 	qboolean     is_teleport;
 } rt_uploadsurf_state_t;
 
+/*
+================
+RT_EmitEmissiveWireTriangle
+
+Debug visualization: draws a cyan wireframe outline of a single emissive
+triangle light (rt_debugemissive), analogous to the existing r_showbboxes
+wireframe overlays but limited to the generated emissive area lights.
+================
+*/
+static void RT_EmitEmissiveWireTriangle (const RgFloat3D *p0, const RgFloat3D *p1, const RgFloat3D *p2)
+{
+	const static uint32_t tri_indices[6] = {0, 1, 1, 2, 2, 0};
+	const uint32_t        cyan        = RT_PackColorToUint32 (0, 255, 255, 255);
+
+	RgVertex vertices[3] = {0};
+
+	vertices[0].position[0] = p0->data[0];
+	vertices[0].position[1] = p0->data[1];
+	vertices[0].position[2] = p0->data[2];
+	vertices[1].position[0] = p1->data[0];
+	vertices[1].position[1] = p1->data[1];
+	vertices[1].position[2] = p1->data[2];
+	vertices[2].position[0] = p2->data[0];
+	vertices[2].position[1] = p2->data[1];
+	vertices[2].position[2] = p2->data[2];
+
+	for (int i = 0; i < 3; i++)
+		vertices[i].packedColor = cyan;
+
+	RgRasterizedGeometryUploadInfo info = {
+		.renderType = RG_RASTERIZED_GEOMETRY_RENDER_TYPE_DEFAULT,
+		.vertexCount = 3,
+		.pVertices = vertices,
+		.indexCount = countof (tri_indices),
+		.pIndices = tri_indices,
+		.transform = RT_TRANSFORM_IDENTITY,
+		.color = RT_COLOR_WHITE,
+		.material = RG_NO_MATERIAL,
+		.pipelineState = RG_RASTERIZED_GEOMETRY_STATE_FORCE_LINE_LIST,
+		.blendFuncSrc = 0,
+		.blendFuncDst = 0,
+	};
+
+	RgResult r = rgUploadRasterizedGeometry (vulkan_globals.instance, &info, NULL, NULL);
+	RG_CHECK (r);
+}
+
 static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, uint32_t *brushpasses)
 {
 	if (cbx->batch_verts_count == 0 || cbx->batch_indices_count == 0)
@@ -883,10 +924,11 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 		lightmap_tex = NULL;
 	}
 
-	// Curated poly light textures (@POLY_LIGHT, e.g. *light*) become light
-	// sources; with RT_USE_SPHERE_INSTEAD_OF_POLY they are converted to sphere
-	// lights. (The 1.5 emissive-material area-light generation was removed.)
-	const qboolean is_poly_light = diffuse_tex && diffuse_tex->rtcustomtextype == RT_CUSTOMTEXTUREINFO_TYPE_POLY_LIGHT;
+	// Curated poly light textures (materials.yaml "light_color:" + "is_light: true",
+	// e.g. *light*) become light sources; with RT_USE_SPHERE_INSTEAD_OF_POLY they
+	// are converted to sphere lights. (The 1.5 emissive-material area-light
+	// generation was removed.)
+	const qboolean is_poly_light = diffuse_tex && diffuse_tex->rthaslightcolor && diffuse_tex->rtislight;
 
 	if (is_poly_light)
 	{
@@ -953,6 +995,67 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 #endif
 	}
 
+	// Emissive material surfaces (lava, glowing buttons/runes/panels) emit light
+	// but are not registered as poly lights, so they are never sampled via
+	// next-event estimation -- only when a random bounce happens to hit them.
+	// Generate true TRIANGLE (area) lights for them so they illuminate their
+	// surroundings directly. (This also replaces world_custom_lights.txt: lava
+	// no longer needs hand-placed point lights.)
+	// Static emissive surfaces must additionally carry the explicit material
+	// flag "is_light" (glt->rtislight), so only materials marked in
+	// materials.yaml generate static triangle lights. Dynamic geometry
+	// (models/sprites) keeps the previous rtemissive-only behaviour.
+	const qboolean is_emissive = !is_poly_light && diffuse_tex && diffuse_tex->rtemissive &&
+	                             VectorLength (diffuse_tex->rtemissivecolor) > 0.01f &&
+	                             (!is_static_geom || diffuse_tex->rtislight);
+
+	if (is_emissive)
+	{
+		const RgTransform transf = RT_GetBrushModelMatrix (s->ent);
+
+		vec3_t color;
+		VectorCopy (diffuse_tex->rtemissivecolor, color);
+		VectorScale (color, CVAR_TO_FLOAT (rt_emis_light_intensity), color);
+		RT_FIXUP_LIGHT_INTENSITY (color, true);
+
+		for (int tri = 0; tri < num_surf_indices / 3; tri++)
+		{
+			const vec_t *a0 = vertices[indices[tri * 3 + 0]].position;
+			const vec_t *a1 = vertices[indices[tri * 3 + 1]].position;
+			const vec_t *a2 = vertices[indices[tri * 3 + 2]].position;
+
+			const RgFloat3D p0 = ApplyTransform (&transf, a0);
+			const RgFloat3D p1 = ApplyTransform (&transf, a1);
+			const RgFloat3D p2 = ApplyTransform (&transf, a2);
+
+			RgPolygonalLightUploadInfo light_info = {
+				.uniqueID = RT_GetBrushSurfUniqueId (s->entuniqueid, s->model, s->surf, tri),
+				.color = RT_VEC3 (color),
+				.positions = { p0, p1, p2 },
+			};
+
+			if (!is_static_geom)
+			{
+				RgResult r = rgUploadPolygonalLight (vulkan_globals.instance, &light_info);
+				RG_CHECK (r);
+
+				vec3_t center;
+				VectorAdd (p0.data, p1.data, center);
+				VectorAdd (center, p2.data, center);
+				VectorScale (center, 1.0f / 3.0f, center);
+				RT_ClusterLightAdd (light_info.uniqueID, center);
+
+				if (CVAR_TO_BOOL (rt_debugemissive))
+					RT_EmitEmissiveWireTriangle (&p0, &p1, &p2);
+			}
+			else if (rt_wldlights_emissive_count < MAX_WORLDLIGHTS_COUNT)
+			{
+				rt_wldlights_emissive[rt_wldlights_emissive_count++] = light_info;
+			}
+			// else: overflow, skip (large maps may exceed the cap)
+		}
+	}
+
 	if (s->is_teleport && !CVAR_TO_BOOL (rt_classic_render) && CVAR_TO_INT32 (rt_reflrefr_depth) > 0)
 	{
 		diffuse_tex = NULL;
@@ -961,7 +1064,7 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 	float alpha = CLAMP (0.0f, s->alpha, 1.0f);
 	uint8_t portalindex = 0;
 
-	qboolean is_mirror = diffuse_tex && diffuse_tex->rtcustomtextype == RT_CUSTOMTEXTUREINFO_TYPE_MIRROR;
+	qboolean is_mirror = diffuse_tex && diffuse_tex->rtmirror;
 	qboolean rasterize = (alpha < 1.0f) && !s->is_warp;
 
 	if (rasterize)
@@ -1381,6 +1484,7 @@ void R_DrawWorld (cb_context_t *cbx, int index)
 {
 	rt_wldlights_sph_count = 0;
 	rt_wldlights_tri_count = 0;
+	rt_wldlights_emissive_count = 0;
 
 	if (!r_drawworld_cheatsafe)
 		return;
@@ -1427,250 +1531,6 @@ void R_DrawWorld_ShowTris (cb_context_t *cbx)
 
 
 
-void RT_CustomLights_Parse (void)
-{
-	rt_customlights_all_count = 0;
-	rt_customlights_curr_count = 0;
-
-	FILE *f = fopen (RT_CUSTOMLIGHTS_PATH, "r");
-	if (f == NULL)
-	{
-		Con_Printf ("Couldn't open %s\n", RT_CUSTOMLIGHTS_PATH);
-		return;
-	}
-
-	int alloccount = 1;
-	{
-		int ch = 0;
-		do
-		{
-			ch = fgetc (f);
-			if (ch == '\n')
-			{
-				alloccount++;
-			}
-		} while (ch != EOF);
-	}
-	rt_customlights_all = Mem_Realloc (rt_customlights_all, sizeof (rt_customlights_all[0]) * alloccount);
-	rt_customlights_curr = Mem_Realloc (rt_customlights_curr, sizeof (rt_customlights_curr[0]) * alloccount);
-	rewind (f);
-
-	qboolean foundend = false;
-	char     curline[256] = "";
-
-	while (!foundend)
-	{
-		{
-			int i = 0;
-
-			while (true)
-			{
-				int ch = fgetc (f);
-
-				if (ch == '\n' || ch == '\r' || ch == '\0' || ch == EOF)
-				{
-					foundend = (ch == '\0' || ch == EOF);
-					break;
-				}
-
-				if (i >= (int)sizeof (curline))
-				{
-					Sys_Error (RT_CUSTOMLIGHTS_PATH ": line must be < 256 characters");
-				}
-
-				curline[i] = (char)ch;
-				i++;
-			}
-
-			curline[i] = '\0';
-		}
-
-		if (curline[0] == '\0')
-		{
-			continue;
-		}
-
-		char      mapname[countof (rt_customlights_all[0].mapname)];
-		RgFloat3D position;
-		char      str_hexcolor[8];
-
-		int c = sscanf (curline, "%s %f %f %f %6s", mapname, &position.data[0], &position.data[1], &position.data[2], str_hexcolor);
-		if (c >= 5)
-		{
-			const RgFloat3D color01 = RT_HexStringToColor (str_hexcolor);
-
-			mapname[countof (mapname) - 1] = '\0';
-			
-			rt_worldcustomlight_t *dst = &rt_customlights_all[rt_customlights_all_count++];
-			{
-				strncpy (dst->mapname, mapname, sizeof (dst->mapname));
-				dst->color01 = color01;
-				dst->position = position;
-				dst->deleted = false;
-			}
-		}
-	}
-
-	fclose (f);
-
-
-	// make list for current map
-	const char *cur_mapname = cl.worldmodel->name;
-
-	for (int i = 0; i < rt_customlights_all_count; i++)
-	{
-		const rt_worldcustomlight_t *src = &rt_customlights_all[i];
-
-		if (strncmp (src->mapname, cur_mapname, countof (src->mapname)) == 0)
-		{
-			rt_customlights_curr[rt_customlights_curr_count++] = i;
-		}
-	}
-}
-
-void RT_CustomLights_SaveCmd (void)
-{
-#ifdef _WIN32
-	// backup file
-	{
-		static int backupId = 0;
-		backupId = (backupId + 1) % 15;
-        #define BACKUP_FOLDER RT_OVERRIDEN_FOLDER "backup"
-		char name[128];
-		sprintf (name, BACKUP_FOLDER "/world_custom_lights - %d.txt", backupId);
-		CreateDirectory (BACKUP_FOLDER, 0);
-	    CopyFile (RT_CUSTOMLIGHTS_PATH, name, FALSE);
-	}
-#endif
-
-	FILE *f = fopen (RT_CUSTOMLIGHTS_PATH, "w+");
-	if (f == NULL)
-	{
-		Con_Printf ("Couldn't open %s\n", RT_CUSTOMLIGHTS_PATH);
-		return;
-	}
-
-    for (int i = 0; i < rt_customlights_all_count; i++)
-	{
-		const rt_worldcustomlight_t *lt = &rt_customlights_all[i];
-
-		if (lt->deleted)
-		{
-			continue;
-		}
-
-		const float *rawcolor = lt->color01.data;
-		const float *position = lt->position.data;
-
-		char hexstr[7];
-		assert (rawcolor[0] >= 0.0f && rawcolor[0] < 1.01f);
-		assert (rawcolor[1] >= 0.0f && rawcolor[1] < 1.01f);
-		assert (rawcolor[2] >= 0.0f && rawcolor[2] < 1.01f);
-		RT_ColorToHexString (rawcolor, hexstr);
-
-	    fprintf (f, "%s %.2f %.2f %.2f %6s\n", lt->mapname, position[0], position[1], position[2], hexstr);
-	}
-
-	fclose (f);
-}
-
-void RT_CustomLights_AddCmd (void)
-{
-	if (Cmd_Argc () != 4)
-	{
-		Con_Printf ("adds a custom light around the camera\n");
-		Con_Printf ("usage: <r 0..255> <g 0..255> <b 0..255>\n");
-		return;
-	}
-
-	const char *cur_mapname = cl.worldmodel->name;
-	if (cur_mapname == NULL)
-	{
-		Con_Printf ("Null world\n");
-		return;
-	}
-
-	const RgFloat3D position = RT_VEC3 (r_refdef.vieworg);
-	RgFloat3D color01 = {
-		strtof (Cmd_Argv (1), NULL),
-		strtof (Cmd_Argv (2), NULL),
-		strtof (Cmd_Argv (3), NULL),
-	};
-	color01.data[0] = CLAMP (0.0f, color01.data[0] / 255.0f, 1.0f);
-	color01.data[1] = CLAMP (0.0f, color01.data[1] / 255.0f, 1.0f);
-	color01.data[2] = CLAMP (0.0f, color01.data[2] / 255.0f, 1.0f);
-
-	// add to global list
-	int gindex = rt_customlights_all_count;
-	{
-		rt_customlights_all_count++;
-		rt_customlights_all = Mem_Realloc (rt_customlights_all, sizeof (rt_customlights_all[0]) * rt_customlights_all_count);
-
-		rt_worldcustomlight_t *dst = &rt_customlights_all[gindex];
-		{
-			strncpy (dst->mapname, cur_mapname, sizeof (dst->mapname));
-			dst->color01 = color01;
-			dst->position = position;
-			dst->deleted = false;
-		}
-	}
-
-	// link current world light list
-	int curwld_index = rt_customlights_curr_count;
-	{
-		rt_customlights_curr_count++;
-		rt_customlights_curr = Mem_Realloc (rt_customlights_curr, sizeof (rt_customlights_curr[0]) * rt_customlights_curr_count);
-
-		rt_customlights_curr[curwld_index] = gindex;
-	}
-
-	{
-		RT_CustomLights_SaveCmd ();
-	}
-}
-
-void RT_CustomLights_RemoveCmd (void)
-{
-	if (Cmd_Argc() != 2)
-	{
-		Con_Printf ("removes custom lights around the camera\n");
-		Con_Printf ("usage: <radius (meters)>\n");
-
-		return;
-	}
-
-	const vec3_t around = RT_VEC3 (r_refdef.vieworg);
-	float radius = strtof (Cmd_Argv (1), NULL);
-	radius = METRIC_TO_QUAKEUNIT (radius);
-
-	int count = 0;
-
-	// scan current world lights
-	for (int i = 0; i < rt_customlights_curr_count; i++)
-	{
-		rt_worldcustomlight_t *lt = &rt_customlights_all[rt_customlights_curr[i]];
-
-		if (lt->deleted)
-		{
-			continue;
-		}
-
-		if (VectorLengthSquared (lt->position.data, around) < radius * radius)
-		{
-			lt->deleted = true;
-			count++;
-		}
-	}
-
-	Con_Printf ("removed %d lights\n", count);
-
-	{
-		RT_CustomLights_SaveCmd ();
-	}
-}
-
-
-
 void RT_UploadAllWorldModelLights (void)
 {
 #if RT_USE_SPHERE_INSTEAD_OF_POLY
@@ -1689,30 +1549,25 @@ void RT_UploadAllWorldModelLights (void)
 	}
 #endif
 
-	for (int i = 0; i < rt_customlights_curr_count; i++)
+	// Emissive material surfaces (static world geometry) become triangle area
+	// lights and are registered for per-cluster next-event estimation. This
+	// replaces world_custom_lights.txt: lava / buttons / runes no longer need
+	// hand-placed point lights, so they are not duplicated.
+	for (int i = 0; i < rt_wldlights_emissive_count; i++)
 	{
-		const rt_worldcustomlight_t *src = &rt_customlights_all[rt_customlights_curr[i]];
+		const RgPolygonalLightUploadInfo *lt = &rt_wldlights_emissive[i];
 
-		if (src->deleted)
-		{
-			continue;
-		}
-
-		RgFloat3D color = src->color01;
-		VectorScale (color.data, CVAR_TO_FLOAT (rt_wlight_intensity), color.data);
-		RT_FIXUP_LIGHT_INTENSITY (color.data, true);
-
-		RgSphericalLightUploadInfo lt = {
-			.uniqueID = RT_GetCustomObjectUniqueId (i),
-			.color = color,
-		    .position = src->position,
-			.radius = METRIC_TO_QUAKEUNIT (CVAR_TO_FLOAT (rt_wlight_radius) ),
-		};
-
-		RgResult r = rgUploadSphericalLight (vulkan_globals.instance, &lt);
+		RgResult r = rgUploadPolygonalLight (vulkan_globals.instance, lt);
 		RG_CHECK (r);
 
-		RT_ClusterLightAdd (lt.uniqueID, lt.position.data);
+		vec3_t center;
+		VectorAdd (lt->positions[0].data, lt->positions[1].data, center);
+		VectorAdd (center, lt->positions[2].data, center);
+		VectorScale (center, 1.0f / 3.0f, center);
+		RT_ClusterLightAdd (lt->uniqueID, center);
+
+		if (CVAR_TO_BOOL (rt_debugemissive))
+			RT_EmitEmissiveWireTriangle (&lt->positions[0], &lt->positions[1], &lt->positions[2]);
 	}
 }
 

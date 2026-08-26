@@ -56,15 +56,6 @@ enum srcformat
 
 typedef uintptr_t src_offset_t;
 
-enum
-{
-	RT_CUSTOMTEXTUREINFO_TYPE_NONE,
-	RT_CUSTOMTEXTUREINFO_TYPE_POLY_LIGHT,
-	RT_CUSTOMTEXTUREINFO_TYPE_RASTER_LIGHT,
-	RT_CUSTOMTEXTUREINFO_TYPE_MIRROR,
-	RT_CUSTOMTEXTUREINFO_TYPE_EXACT_NORMALS,
-};
-
 typedef struct gltexture_s
 {
 	// managed by texture manager
@@ -87,8 +78,14 @@ typedef struct gltexture_s
 	char                 rtname[64];
 	RgMaterial           rtmaterial;
 	vec3_t	             rtlightcolor;
-	int                  rtcustomtextype;        // RT_CUSTOMTEXTUREINFO_*
+	qboolean             rthaslightcolor;        // material light_color: present
 	float                rtupoffset;
+	qboolean             rtmirror;               // material mirror: reflect/refract surface
+	qboolean             rtexactnormals;         // material exact_normals: flat-shaded geometry
+	qboolean             rtforcerasterize;       // material force_rasterize: no shadows
+	qboolean             rtemissive;             // texture emits light (material emissive / fullbright mask)
+	vec3_t               rtemissivecolor;        // average emitted color (albedo * emissive) in [0,1]
+	qboolean             rtislight;              // material is_light: may generate static emissive area lights
 } gltexture_t;
 
 extern gltexture_t *notexture;

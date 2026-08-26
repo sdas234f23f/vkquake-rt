@@ -32,6 +32,8 @@ extern cvar_t rt_model_rough, rt_model_metal, rt_enable_pvs;
 extern cvar_t rt_viewm_fovscale, rt_viewm_wide;
 extern cvar_t rt_classic_render;
 extern cvar_t rt_dlight_intensity, rt_dlight_radius;
+extern cvar_t rt_emis_light_intensity;
+extern cvar_t rt_debugemissive;
 
 // up to 16 color translated skins
 gltexture_t *playertextures[MAX_SCOREBOARD]; // johnfitz -- changed to an array of pointers
@@ -183,6 +185,60 @@ static RgTransform RT_GetAliasModelTransform (const aliashdr_t *paliashdr, lerpd
 }
 
 /*
+=================
+RT_EmitEmissiveWireSphere
+
+Debug visualization: cyan wireframe octahedron marking a generated emissive
+spherical light for model skins (rt_debugemissive), matching the cyan wire
+triangle debug emitted for static emissive surfaces in r_world.c.
+=================
+*/
+static void RT_EmitEmissiveWireSphere (const vec3_t origin, float radius)
+{
+	if (radius < 8.0f)
+		radius = 8.0f;
+
+	const static uint32_t oct_indices[24] = {
+		0, 2, 0, 3, 0, 4, 0, 5,
+		1, 2, 1, 3, 1, 4, 1, 5,
+		2, 4, 2, 5, 3, 4, 3, 5,
+	};
+	const uint32_t cyan = RT_PackColorToUint32 (0, 255, 255, 255);
+
+	const float axis[6][3] = {
+		{  radius, 0, 0 }, { -radius, 0, 0 },
+		{ 0,  radius, 0 }, { 0, -radius, 0 },
+		{ 0, 0,  radius }, { 0, 0, -radius },
+	};
+
+	RgVertex vertices[6] = {0};
+	for (int i = 0; i < 6; i++)
+	{
+		vertices[i].position[0] = origin[0] + axis[i][0];
+		vertices[i].position[1] = origin[1] + axis[i][1];
+		vertices[i].position[2] = origin[2] + axis[i][2];
+		vertices[i].packedColor = cyan;
+	}
+
+	RgRasterizedGeometryUploadInfo info = {
+		.renderType = RG_RASTERIZED_GEOMETRY_RENDER_TYPE_DEFAULT,
+		.vertexCount = 6,
+		.pVertices = vertices,
+		.indexCount = countof (oct_indices),
+		.pIndices = oct_indices,
+		.transform = RT_TRANSFORM_IDENTITY,
+		.color = RT_COLOR_WHITE,
+		.material = RG_NO_MATERIAL,
+		.pipelineState = RG_RASTERIZED_GEOMETRY_STATE_FORCE_LINE_LIST,
+		.blendFuncSrc = 0,
+		.blendFuncDst = 0,
+	};
+
+	RgResult r = rgUploadRasterizedGeometry (vulkan_globals.instance, &info, NULL, NULL);
+	RG_CHECK (r);
+}
+
+/*
 =============
 GL_DrawAliasFrame -- ericw
 
@@ -207,10 +263,14 @@ static void GL_DrawAliasFrame (
 	qboolean isfirstperson = (e == &cl.viewent);
 	qboolean isviewer = (e == &cl.entities[cl.viewentity]) && !CVAR_TO_BOOL (chase_active);
 
-	if (tx && tx->rtcustomtextype == RT_CUSTOMTEXTUREINFO_TYPE_RASTER_LIGHT)
-	{
+	if (tx && tx->rtforcerasterize)
 		rasterize = true;
 
+	if (tx && tx->rthaslightcolor)
+	{
+		// Explicit spherical light with a hand-authored color (materials.yaml
+		// "light_color:"), migrated from the legacy @RASTER_LIGHT entries:
+		// projectiles, teleporter, lava balls, explosion sprites, etc.
 		vec3_t color = {tx->rtlightcolor[0], tx->rtlightcolor[1], tx->rtlightcolor[2]};
 		VectorScale (color, CVAR_TO_FLOAT (rt_dlight_intensity), color);
 		RT_FIXUP_LIGHT_INTENSITY (color, true);
@@ -231,6 +291,42 @@ static void GL_DrawAliasFrame (
 		VectorCopy (lerpdata.origin, lightorigin);
 		lightorigin[2] += tx->rtupoffset;
 		RT_ClusterLightAdd (light_info.uniqueID, lightorigin);
+	}
+
+	// An explicit light_color (curated spherical light) takes precedence over
+	// the emissive-luma light, mirroring r_world.c (is_emissive = !is_poly_light):
+	// both branches upload a spherical light with the SAME uniqueID, so they
+	// must be mutually exclusive or LightManager's per-frame uniqueness assert
+	// fires.
+	if (tx && !tx->rthaslightcolor && tx->rtislight && tx->rtemissive &&
+	    VectorLength (tx->rtemissivecolor) > 0.01f)
+	{
+		// Emissive model skins (materials.yaml "is_light: true") generate a
+		// spherical light at the model origin, mirroring the static emissive
+		// triangle lights generated in r_world.c. Intensity uses the same
+		// emissive-light cvar as the static path; radius uses the dynamic
+		// light radius (Q2RTX convention for model lights).
+		vec3_t color = {tx->rtemissivecolor[0], tx->rtemissivecolor[1], tx->rtemissivecolor[2]};
+		VectorScale (color, CVAR_TO_FLOAT (rt_emis_light_intensity), color);
+		RT_FIXUP_LIGHT_INTENSITY (color, true);
+
+		RgSphericalLightUploadInfo light_info = {
+			.uniqueID = RT_GetAliasModelUniqueId (entuniqueid),
+			.color = {color[0], color[1], color[2]},
+			.position = {lerpdata.origin[0], lerpdata.origin[1], lerpdata.origin[2] + tx->rtupoffset},
+			.radius = METRIC_TO_QUAKEUNIT (CVAR_TO_FLOAT (rt_dlight_radius)),
+		};
+
+		RgResult r = rgUploadSphericalLight (vulkan_globals.instance, &light_info);
+		RG_CHECK (r);
+
+		vec3_t lightorigin;
+		VectorCopy (lerpdata.origin, lightorigin);
+		lightorigin[2] += tx->rtupoffset;
+		RT_ClusterLightAdd (light_info.uniqueID, lightorigin);
+
+		if (CVAR_TO_BOOL (rt_debugemissive))
+			RT_EmitEmissiveWireSphere (lightorigin, light_info.radius);
 	}
 
 	assert (
@@ -281,7 +377,7 @@ static void GL_DrawAliasFrame (
 	else
 	{
 		qboolean is_invis = (isfirstperson || isviewer) && (cl.items & IT_INVISIBILITY);
-		qboolean exact_normals = tx ? tx->rtcustomtextype == RT_CUSTOMTEXTUREINFO_TYPE_EXACT_NORMALS : 0;
+		qboolean exact_normals = tx ? tx->rtexactnormals : 0;
 
 		RgGeometryUploadInfo info = {
 			.uniqueID = RT_GetAliasModelUniqueId (entuniqueid),

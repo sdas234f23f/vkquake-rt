@@ -418,7 +418,6 @@ void R_NewMap (void)
 	R_ParseWorldspawn (); // ericw -- wateralpha, lavaalpha, telealpha, slimealpha in worldspawn
 	RT_ParseElights ();
 	RT_ParseTeleports();
-	RT_CustomLights_Parse ();
 
 // !!!SHIPPING HACK!!!
 	if (strcmp (cl.worldmodel->name, "maps/e4m6.bsp") == 0)
@@ -505,17 +504,6 @@ uint64_t RT_GetSpriteModelUniqueId (int entuniqueid)
 		entuniqueid; // entity
 }
 
-uint64_t RT_GetCustomObjectUniqueId (int index)
-{
-	assert (index >= 0);
-
-	return
-        4ull << 60 | // custom object type
-		index;       // index
-}
-
-
-
 RgFloat3D RT_AnglesToDir (vec3_t angles)
 {
 	vec3_t f, r, u;
@@ -547,24 +535,6 @@ RgFloat3D RT_HexStringToColor(const char hex[6])
 		(float)CLAMP (0, ib, 255) / 255.0f,
 	};
 	return c;
-}
-
-void RT_ColorToHexString(const vec3_t color, char out_hex[7])
-{
-	static const char inttohex[] = "0123456789abcdef";
-
-	for (int i = 0; i < 3; i++)
-	{
-		int c = CLAMP (0, (int)(color[i] * 255.0f), 255);
-
-		int l = (c >> 0) & 0xF;
-		int h = (c >> 4) & 0xF;
-
-		out_hex[i * 2 + 0] = inttohex[h];
-		out_hex[i * 2 + 1] = inttohex[l];
-	}
-	
-	out_hex[6] = '\0';
 }
 
 float VectorLengthSquared(const vec3_t a, const vec3_t b)

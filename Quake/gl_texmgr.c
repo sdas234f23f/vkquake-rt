@@ -72,22 +72,6 @@ unsigned int d_8to24table_pants[256];
 SDL_mutex *texmgr_mutex;
 
 
-#define RT_CUSTOMTEXTUREINFO_PATH RT_OVERRIDEN_FOLDER"texture_custom_info.txt"
-#define RT_CUSTOMTEXTUREINFO_VERSION 1
-struct rt_texturecustominfo_s
-{
-	char   rtname[64];
-	vec3_t color;
-	float  upoffset;
-	int    type;
-};
-static struct rt_texturecustominfo_s *rt_texturecustominfos = NULL;
-static int rt_texturecustominfos_count = 0; // -1: there are no infos, 0: uninitialized
-
-static void RT_FillWithTextureCustomInfo (gltexture_t *dst);
-static void RT_ParseTextureCustomInfos (void);
-
-
 static RgMaterialCreateFlags TexMgr_GetRtFlags (gltexture_t *glt)
 {
 	RgMaterialCreateFlags fs = 0;
@@ -344,6 +328,33 @@ static void TexMgr_RT_SpecialFullbright (unsigned width, unsigned height, uint32
 	{
 		if (TexMgr_ApplyMaterialFromMat (rtspecial_target, (unsigned *)rtspecial_info_albedoAlpha, (byte *)fullbright))
 			return;
+	}
+
+	// average emitted color (albedo * fullbright emission) for emissive area
+	// lights (buttons, light panels, runes that use the classic fullbright mask
+	// and have no Q2RTX .mat definition)
+	{
+		const byte *alb = (const byte *)rtspecial_info_albedoAlpha;
+		const byte *fb  = (const byte *)fullbright;
+		const size_t npix = (size_t)width * height;
+		double emR = 0.0, emG = 0.0, emB = 0.0;
+		for (size_t i = 0; i < npix; i++)
+		{
+			const float e = fb[i * 4 + 2] / 255.0f;
+			if (e > 0.0f)
+			{
+				emR += alb[i * 4 + 0] * e;
+				emG += alb[i * 4 + 1] * e;
+				emB += alb[i * 4 + 2] * e;
+			}
+		}
+		if (emR > 0.0 || emG > 0.0 || emB > 0.0)
+		{
+			rtspecial_target->rtemissive = true;
+			rtspecial_target->rtemissivecolor[0] = emR / (npix * 255.0);
+			rtspecial_target->rtemissivecolor[1] = emG / (npix * 255.0);
+			rtspecial_target->rtemissivecolor[2] = emB / (npix * 255.0);
+		}
 	}
 
 	rtspecial_info.textures.pDataAlbedoAlpha = rtspecial_info_albedoAlpha;
@@ -1031,21 +1042,36 @@ material was applied.
 */
 static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoFallback, byte *fullbrightOverride)
 {
-	rt_material_t autoMat;
 	// The material key is the texture file path without extension, e.g.
-	// "textures/e1u1/foo" -- this matches the .mat entry names (Q2RTX
-	// convention) and the auto-detected suffix files (_norm/_gloss/_luma).
-	// Note: glt->rtname is the vkpt override path ("maps/...") and must NOT
-	// be used here.
+	// "textures/e1u1/foo" -- this matches the .yaml entry names (Q2RTX
+	// convention). Note: glt->rtname is the vkpt override path ("maps/...")
+	// and must NOT be used here.
 	rt_material_t *mat = RT_MAT_Find (glt->name);
 	if (!mat)
+		return false;
+
+	// Apply the explicit "is_light" flag up front: materials.yaml entries that
+	// only carry "is_light: true" (no PBR textures -- e.g. model skins like
+	// "progs/flame2.mdl:frame0") hit the early-return below, so the flag must
+	// be set before it, otherwise r_alias.c never generates their emissive
+	// spherical lights.
+	glt->rtislight = mat->is_light;
+
+	// Migrated texture_custom_info.txt flags (authored in materials.yaml).
+	// These must also be applied before the early-return below: many of the
+	// affected textures (projectiles, laser bolts, window glass, flat-shaded
+	// viewmodels) carry no PBR textures and would otherwise miss their flags.
+	if (mat->has_light_color)
 	{
-		// no .mat definition: auto-detect the HD texture pack suffixes
-		// (<name>_norm, <name>_gloss, <name>_luma/_glow, <name>_bump)
-		if (!RT_MAT_AutoDetect (glt->name, &autoMat))
-			return false;
-		mat = &autoMat;
+		VectorCopy (mat->light_color, glt->rtlightcolor);
+		glt->rthaslightcolor = true;
+		if (mat->light_brightness != 1.0f)
+			ModifyColorValue (glt->rtlightcolor, mat->light_brightness);
 	}
+	glt->rtupoffset = mat->light_upoffset;
+	glt->rtmirror = mat->mirror;
+	glt->rtexactnormals = mat->exact_normals;
+	glt->rtforcerasterize = mat->force_rasterize;
 
 	const int tw = glt->width;
 	const int th = glt->height;
@@ -1114,6 +1140,15 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	const float roughOverride = mat->roughness_override; // 0 = use map-based roughness
 	const float defaultRough = rtspecial_default_rough / 255.0f;
 
+	// average emitted color (albedo * emissive), used to generate emissive
+	// area lights (Q2RTX-style triangle lights) in r_world.c
+	glt->rtemissive = false;
+	glt->rtemissivecolor[0] = 0.0f;
+	glt->rtemissivecolor[1] = 0.0f;
+	glt->rtemissivecolor[2] = 0.0f;
+	glt->rtislight = false;
+	float emissR = 0.0f, emissG = 0.0f, emissB = 0.0f;
+
 	for (int i = 0; i < npix; i++)
 	{
 		// albedo (sRGB), alpha = opaque (or mask later)
@@ -1160,11 +1195,20 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 			if (fb > emiss)
 				emiss = fb;
 		}
-		else if (!emisBuf && (mat->synth_emissive || mat->is_light))
+		else if (!emisBuf && mat->synth_emissive)
 		{
 			const float lum = (0.2126f * src[0] + 0.7152f * src[1] + 0.0722f * src[2]) / 255.0f;
 			if (mat->emissive_threshold <= 0 || lum > mat->emissive_threshold / 255.0f)
 				emiss = lum * mat->emissive_factor;
+		}
+
+		// accumulate the average emitted color (albedo * emissive) for the
+		// emissive area-light generation
+		if (emiss > 0.0f)
+		{
+			emissR += albedo[i * 4 + 0] * emiss;
+			emissG += albedo[i * 4 + 1] * emiss;
+			emissB += albedo[i * 4 + 2] * emiss;
 		}
 
 		rme[i * 4 + 0] = CLAMP (0, (int)(rough * 255), 255);
@@ -1194,6 +1238,18 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	if (normBuf) Mem_Free (normBuf);
 	if (emisBuf) Mem_Free (emisBuf);
 	if (glossBuf) Mem_Free (glossBuf);
+
+	if (emissR > 0.0f || emissG > 0.0f || emissB > 0.0f)
+	{
+		glt->rtemissive = true;
+		glt->rtemissivecolor[0] = emissR / (npix * 255.0f);
+		glt->rtemissivecolor[1] = emissG / (npix * 255.0f);
+		glt->rtemissivecolor[2] = emissB / (npix * 255.0f);
+	}
+
+	// explicit "is_light" flag: this texture may generate static emissive
+	// area lights (gated on rtislight in r_world.c)
+	glt->rtislight = mat->is_light;
 
 	// 4.6 debug: report which material was applied and the average emissive
 	extern cvar_t rt_mat_debug;
@@ -1345,8 +1401,6 @@ gltexture_t *TexMgr_LoadImage (
 	if (isDedicated)
 		return NULL;
 
-	RT_ParseTextureCustomInfos ();
-
 	// cache check
 	if (flags & TEXPREF_OVERWRITE)
 		switch (format)
@@ -1395,6 +1449,20 @@ gltexture_t *TexMgr_LoadImage (
 		glt->rtname[0] = '\0';
 	}
 
+	// TexMgr_NewTexture reuses pooled gltexture_t objects, so any RT flags from
+	// a previous load must be cleared here before TexMgr_ApplyMaterialFromMat
+	// (called from TexMgr_LoadImage8/32 below) re-populates them. Textures
+	// without a material otherwise retain stale values.
+	glt->rtlightcolor[0] = glt->rtlightcolor[1] = glt->rtlightcolor[2] = 0.0f;
+	glt->rthaslightcolor = false;
+	glt->rtupoffset = 0.0f;
+	glt->rtmirror = false;
+	glt->rtexactnormals = false;
+	glt->rtforcerasterize = false;
+	glt->rtemissive = false;
+	glt->rtemissivecolor[0] = glt->rtemissivecolor[1] = glt->rtemissivecolor[2] = 0.0f;
+	glt->rtislight = false;
+
 	// upload it
 	switch (glt->source_format)
 	{
@@ -1409,8 +1477,6 @@ gltexture_t *TexMgr_LoadImage (
 		TexMgr_LoadImage32 (glt, (unsigned *)data);
 		break;
 	}
-
-	RT_FillWithTextureCustomInfo (glt);
 
 	return glt;
 }
@@ -1595,184 +1661,4 @@ static void GL_DeleteTexture (gltexture_t *texture)
 	}
 
 	SDL_UnlockMutex (texmgr_mutex);
-}
-
-
-static struct rt_texturecustominfo_s *RT_PushTexCustom (const char *texname, int type)
-{
-	struct rt_texturecustominfo_s *dst = &rt_texturecustominfos[rt_texturecustominfos_count];
-	rt_texturecustominfos_count++;
-
-	memset (dst, 0, sizeof (*dst));
-	{
-		strncpy (dst->rtname, texname, sizeof (dst->rtname));
-		dst->rtname[sizeof (dst->rtname) - 1] = '\0';
-
-		dst->type = type;
-	}
-
-	return dst;
-}
-
-
-static void RT_ParseTextureCustomInfos (void)
-{
-	if (rt_texturecustominfos_count != 0)
-	{
-		return;
-	}
-
-	rt_texturecustominfos_count = 0;
-
-	FILE *f = fopen (RT_CUSTOMTEXTUREINFO_PATH, "r");
-
-    if (f == NULL)
-	{
-		Con_Printf ("Couldn't open %s\n", RT_CUSTOMTEXTUREINFO_PATH);
-		return;
-	}
-
-	int alloccount = 1;
-	{
-		int ch = 0;
-		do
-		{
-			ch = fgetc (f);
-			if (ch == '\n')
-			{
-				alloccount++;
-			}
-		} while (ch != EOF);
-	}
-
-	rt_texturecustominfos = malloc (sizeof (struct rt_texturecustominfo_s) * alloccount);
-	rewind (f);
-
-	qboolean foundend = false;
-	char     curline[256];
-	int      curstate = RT_CUSTOMTEXTUREINFO_TYPE_NONE;
-
-	while (!foundend)
-	{
-		{
-			int i = 0;
-
-			while (true)
-			{
-				int ch = fgetc (f);
-
-				if (ch == '\n' || ch == '\r' || ch == '\0' || ch == EOF)
-				{
-					foundend = (ch == '\0' || ch == EOF);
-					break;
-				}
-
-				if (i >= (int)sizeof (curline))
-				{
-					Sys_Error (RT_CUSTOMTEXTUREINFO_PATH ": line must be < 256 characters");
-				}
-
-				curline[i] = (char)ch;
-				i++;
-			}
-
-			curline[i] = '\0';
-		}
-
-		if (curline[0] == '\0' || curline[0] == '#')
-		{
-		    continue;
-		}
-
-		if (strncmp (curline, "@VERSION", sizeof ("@VERSION") - 1) == 0)
-		{
-			int version;
-			int c = sscanf (curline + (sizeof ("@VERSION") - 1), "%d", &version);
-
-			if (c != 1 || version != RT_CUSTOMTEXTUREINFO_VERSION)
-			{
-			    Con_Printf (RT_CUSTOMTEXTUREINFO_PATH ": incompatible version");
-				rt_texturecustominfos_count = -1;
-				fclose (f);
-
-			    return;
-			}
-		}
-		else if (strcmp (curline, "@POLY_LIGHT") == 0)
-		{
-			curstate = RT_CUSTOMTEXTUREINFO_TYPE_POLY_LIGHT;   
-		}
-		else if (strcmp (curline, "@RASTER_LIGHT") == 0)
-		{
-			curstate = RT_CUSTOMTEXTUREINFO_TYPE_RASTER_LIGHT;
-		}
-		else if (strcmp (curline, "@MIRROR") == 0)
-		{
-			curstate = RT_CUSTOMTEXTUREINFO_TYPE_MIRROR;
-		}
-		else if (strcmp (curline, "@EXACT_NORMALS") == 0)
-		{
-			curstate = RT_CUSTOMTEXTUREINFO_TYPE_EXACT_NORMALS;
-		}
-		else
-		{
-			char texname[64];
-			char str_hexcolor[8];
-			float mult;
-			float upoffset;
-
-			if (curstate == RT_CUSTOMTEXTUREINFO_TYPE_MIRROR || curstate == RT_CUSTOMTEXTUREINFO_TYPE_EXACT_NORMALS)
-			{
-				int c = sscanf (curline, "%s", texname);
-				if (c >= 1)
-				{
-					RT_PushTexCustom (texname, curstate);
-				}
-			}
-			else
-			{
-				int c = sscanf (curline, "%s %6s %f %f", texname, str_hexcolor, &mult, &upoffset);
-			    if (c >= 2)
-			    {
-					const RgFloat3D color = RT_HexStringToColor (str_hexcolor);
-			        texname[sizeof texname - 1] = '\0';
-
-				    
-				    struct rt_texturecustominfo_s *dst = RT_PushTexCustom (texname, curstate);
-				    {
-						VectorCopy (color.data, dst->color);
-					    if (c >= 3)
-						{
-							ModifyColorValue (dst->color, mult);
-					    }
-					    dst->upoffset = c >= 4 ? upoffset : 0.0f;
-				    }
-			    }
-			}
-		}
-	}
-
-	if (rt_texturecustominfos_count == 0)
-	{
-		rt_texturecustominfos_count = -1;
-	}
-
-	fclose (f);
-}
-
-static void RT_FillWithTextureCustomInfo (gltexture_t *dst)
-{
-	for (int i = 0; i < rt_texturecustominfos_count; i++)
-	{
-		if (strcmp (dst->rtname, rt_texturecustominfos[i].rtname) == 0)
-		{
-			memcpy (dst->rtlightcolor, rt_texturecustominfos[i].color, sizeof (vec3_t));
-			dst->rtcustomtextype = rt_texturecustominfos[i].type;
-			dst->rtupoffset = rt_texturecustominfos[i].upoffset;
-
-		    return;
-		}
-	}
-
-	dst->rtcustomtextype = RT_CUSTOMTEXTUREINFO_TYPE_NONE;
 }
