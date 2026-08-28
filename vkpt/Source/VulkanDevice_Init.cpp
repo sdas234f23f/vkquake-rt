@@ -187,6 +187,10 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
         blueNoise,
         shadowMap);
 
+    // per-frame ray counters, written by the RT shaders when the stats overlay
+    // is enabled (desc set 11 of the ray tracing pipeline)
+    rayStats            = std::make_shared<RayStats>(device, memAllocator);
+
     rtPipeline = std::make_shared< RayTracingPipeline >( 
         device,
         physDevice,
@@ -201,6 +205,7 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
         rasterizer->GetRenderCubemap().get(),
         portalList.get(),
         volumetric.get(),
+        rayStats.get(),
         *info );
 
     pathTracer          = std::make_shared<PathTracer>(device, rtPipeline);

@@ -44,22 +44,15 @@
 #define Q2_STORAGE_SCALE_SPEC 32.0
 #define Q2_STORAGE_SCALE_HDR 128.0
 
-// ASVGF tuning parameters. Base values are the Q2RTX cvars defaults, but the
-// HF/SPEC antilag is reduced because the lighting input here is vkpt ReSTIR,
-// which is noisier per-frame than the Q2RTX path tracer: the gradient compares
-// two independent noisy samples (Q2RTX re-traces with the previous RNG seed,
-// which cancels the noise), so in dark areas the gradient is noise-dominated
-// and would otherwise collapse the temporal history. The spatial filters match
-// the Q2RTX defaults (flt_atrous_depth 0.5, flt_atrous_lum_hf 16,
+// ASVGF tuning parameters (Q2RTX cvar defaults). Antilag restored to the
+// Q2RTX defaults as a ghosting experiment: lower antilag kept history too long
+// and caused smearing of moving surfaces. The spatial filters match the Q2RTX
+// defaults (flt_atrous_depth 0.5, flt_atrous_lum_hf 16,
 // flt_atrous_normal_spec 1) to maximize dark-area noise removal.
-#define Q2_FLT_ANTILAG_HF 0.25
-#define Q2_FLT_ANTILAG_LF 0.15
-#define Q2_FLT_ANTILAG_SPEC 0.5
+#define Q2_FLT_ANTILAG_HF 1.0
+#define Q2_FLT_ANTILAG_LF 0.2
+#define Q2_FLT_ANTILAG_SPEC 2.0
 #define Q2_FLT_ANTILAG_SPEC_MOTION 0.004
-// Motion-driven antilag shared by the LF/HF channels: makes the temporal
-// history converge while the camera moves so bright emissive surfaces don't
-// leave ghost trails, while leaving static frames unchanged (motion == 0).
-#define Q2_FLT_ANTILAG_MOTION 0.004
 #define Q2_FLT_GRAD_WEAPON 0.25
 #define Q2_FLT_MIN_ALPHA_COLOR_HF 0.02
 #define Q2_FLT_MIN_ALPHA_COLOR_LF 0.01

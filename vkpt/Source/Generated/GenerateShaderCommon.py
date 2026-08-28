@@ -254,6 +254,7 @@ CONST = {
     "BINDING_TEXTURES"                          : 0,
     "BINDING_CUBEMAPS"                          : 0,
     "BINDING_RENDER_CUBEMAP"                    : 0,
+    "BINDING_RENDER_CUBEMAP_ENV"                : 1,
     "BINDING_BLUE_NOISE"                        : 0,
     "BINDING_LUM_HISTOGRAM"                     : 0,
     "BINDING_LIGHT_SOURCES"                     : 0,
@@ -396,6 +397,11 @@ CONST = {
     "DEBUG_SHOW_FLAG_ONLY_INDIRECT_DIFFUSE" : "1 << 7",
     "DEBUG_SHOW_FLAG_ALBEDO_WHITE"          : "1 << 8",
     "DEBUG_SHOW_FLAG_GOD_RAYS"              : "1 << 9",
+    "DEBUG_SHOW_FLAG_RAY_STATS"             : "1 << 10",
+
+    # Number of ray categories the RT shaders atomically accumulate per frame
+    # (see vkpt/Source/RayStats.h).
+    "RAY_STATS_CATEGORY_COUNT"              : 4,
     
     "MAX_RAY_LENGTH"                        : "10000.0",
 

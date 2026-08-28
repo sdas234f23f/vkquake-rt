@@ -186,10 +186,12 @@ float q2LightSelectionMass(const ShLightEncoded encoded, const vec3 p, const vec
 // ------------------------------------------------------------------------- //
 //
 // Inverse-CDF over the cluster's light list, partitioned into blocks of
-// Q2_MAX_BRUTEFORCE_SAMPLING. The mass of each light is multiplied by the
-// absolute luminance and the adaptive shadow-statistics factor. For gradient
-// pixels the CDF uses the statistics from two frames ago (frame-2 slot) so it
-// matches the previous frame's CDF (the re-trace reproduces the same light).
+// Q2_MAX_BRUTEFORCE_SAMPLING. The mass of each light is its projected solid
+// angle times luminance (Q2RTX sample_polygonal_lights) times the adaptive
+// shadow-statistics factor. The 1/pdf NEE weight keeps this unbiased, so
+// luminance does NOT cancel the light's brightness. For gradient pixels the
+// CDF uses the statistics from two frames ago (frame-2 slot) so it matches the
+// previous frame's CDF (the re-trace reproduces the same light).
 //
 // Returns the selected light index, its slot in the cluster list (for the
 // stats addressing) and its selection pdf (for the NEE weight).

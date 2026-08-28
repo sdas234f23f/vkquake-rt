@@ -401,6 +401,7 @@ typedef enum
 #define EF_TRACER2 64         // orange split trail + rotate
 #define EF_TRACER3 128        // purple trail
 #define MF_HOLEY   (1u << 14) // MarkV/QSS -- make index 255 transparent on mdl's
+#define MF_RT_LUMA (1u << 13) // RT: model has an emissive (luma) skin material; classic dlight should be suppressed
 
 // johnfitz -- extra flags for rendering
 #define MOD_NOLERP       256  // don't lerp when animating

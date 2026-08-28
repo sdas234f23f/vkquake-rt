@@ -946,6 +946,9 @@ typedef enum RgDebugDrawFlagBits
     RG_DEBUG_DRAW_Q2RTX_CORE_BIT = 1024,
     // Internal: shows the raw god rays buffer (volumetric sunlight).
     RG_DEBUG_DRAW_GOD_RAYS_BIT = 2048,
+    // Internal: enables the in-game ray stats / FPS overlay (host reads the
+    // GPU ray counters and draws the overlay via the "rt_stats" cvar).
+    RG_DEBUG_DRAW_STATS_BIT = 4096,
 } RgDebugDrawFlagBits;
 typedef RgFlags RgDebugDrawFlags;
 
@@ -1276,6 +1279,14 @@ RGAPI RgResult RGCONV rgSetFogVolumes(
 RGAPI RgBool32 RGCONV rgIsRenderUpscaleTechniqueAvailable(
     RgInstance                          rgInstance,
     RgRenderUpscaleTechnique            technique);
+
+// Returns the latest ray count per frame and the smoothed FPS (fixed point,
+// x10) used by the in-game debug stats overlay. Both outputs are optional;
+// pass NULL for any value that is not needed.
+RGAPI RgResult RGCONV rgGetFrameStats(
+    RgInstance                          rgInstance,
+    uint32_t                           *pRays,
+    uint32_t                           *pFpsX10);
 
 RGAPI const char* RGCONV rgGetResultDescription(RgResult result);
 

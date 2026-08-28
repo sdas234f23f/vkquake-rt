@@ -115,6 +115,7 @@ extern cvar_t rt_sun;
 extern cvar_t rt_sun_pitch;
 extern cvar_t rt_classic_render;
 extern cvar_t rt_sun_yaw;
+extern cvar_t rt_materials_only;
 
 /*
 =================
@@ -356,6 +357,16 @@ static void R_SetupContext (cb_context_t *cbx)
 
 static void RT_UploadAllDlights ()
 {
+	// materials-only mode: only light sources defined in materials.yaml are
+	// active (world poly/emissive lights, model/sprite light_color spheres,
+	// luma emission). Classic dlights (muzzle flash, explosions), the
+	// flashlight and the sun are all skipped; with the sun missing,
+	// directionalLightExists = 0 in the shaders, which also disables the sun NEE.
+	if (CVAR_TO_BOOL (rt_materials_only))
+	{
+		return;
+	}
+
 	for (int i = 0; i < MAX_DLIGHTS; i++)
 	{
 		const dlight_t *l = &cl_dlights[i];
@@ -363,6 +374,35 @@ static void RT_UploadAllDlights ()
 		if (l->die < cl.time || !l->radius)
 		{
 			continue;
+		}
+
+		// RT: a model whose skin has an emissive (luma) material is lit purely
+		// by its luma texture emission (scaled by rt_emis_mapboost and
+		// rt_emis_light_intensity); it generates no spherical light of its own
+		// (see r_alias.c). Skip the classic EF_BRIGHTLIGHT/EF_DIMLIGHT dlight
+		// for those entities so luma is the sole light source and
+		// rt_emis_light_intensity 0 fully extinguishes them (torches etc.).
+		// The classic render path (R_PushDlights) is unaffected.
+		{
+			static int dl_diag = 0;
+			const qboolean isflame = l->key > 0 && l->key < cl.num_entities && cl.entities[l->key].model &&
+			                        strstr (cl.entities[l->key].model->name, "flame") != NULL;
+			if (isflame && dl_diag++ < 10)
+				Con_Printf ("DIAG: dlight key=%d model=%s flags=0x%X skip=%d\n",
+				            l->key,
+				            cl.entities[l->key].model ? cl.entities[l->key].model->name : "NULL",
+				            cl.entities[l->key].model ? cl.entities[l->key].model->flags : 0,
+				            (!CVAR_TO_BOOL (rt_classic_render) && cl.entities[l->key].model &&
+				             (cl.entities[l->key].model->flags & MF_RT_LUMA)) ? 1 : 0);
+		}
+
+		if (!CVAR_TO_BOOL (rt_classic_render) && l->key > 0 && l->key < cl.num_entities)
+		{
+			entity_t *src = &cl.entities[l->key];
+			if (src->model && (src->model->flags & MF_RT_LUMA))
+			{
+				continue;
+			}
 		}
 
 		// The muzzle-flash / explosion dlights use a small sphere (point-light
@@ -578,16 +618,18 @@ void R_DrawEntitiesOnList (cb_context_t *cbx, qboolean alphapass, int chain, int
 		if (!currententity->model)
 			continue;
 
+		const int entuniqueid = RT_GetEntityUniqueId (currententity);
+
 		switch (currententity->model->type)
 		{
 		case mod_alias:
-			R_DrawAliasModel (cbx, currententity, i);
+			R_DrawAliasModel (cbx, currententity, entuniqueid);
 			break;
 		case mod_brush:
-			R_DrawBrushModel (cbx, currententity, chain, i);
+			R_DrawBrushModel (cbx, currententity, chain, entuniqueid);
 			break;
 		case mod_sprite:
-			R_DrawSpriteModel (cbx, currententity, i);
+			R_DrawSpriteModel (cbx, currententity, entuniqueid);
 			break;
 		}
 	}
@@ -831,7 +873,7 @@ void R_ShowTris (cb_context_t *cbx)
 R_DrawWorldTask
 ================
 */
-void R_DrawWorldTask (int index, void *unused)
+void R_DrawWorldTask (void *unused)
 {
 	if (!Atomic_LoadUInt32 (&rt_require_static_submit))
 	{
@@ -843,11 +885,10 @@ void R_DrawWorldTask (int index, void *unused)
 	r = rgBeginStaticGeometries (vulkan_globals.instance);
 	RG_CHECK (r);
 
-	const int     cbx_index = index + CBX_WORLD_0;
-	cb_context_t *cbx = &vulkan_globals.secondary_cb_contexts[cbx_index];
+	cb_context_t *cbx = &vulkan_globals.secondary_cb_contexts[CBX_WORLD_0];
 	R_SetupContext (cbx);
 	Fog_EnableGFog (cbx);
-	R_DrawWorld (cbx, index);
+	R_DrawWorld (cbx);
 
 	r = rgSubmitStaticGeometries (vulkan_globals.instance);
 	RG_CHECK (r);
@@ -972,7 +1013,7 @@ void R_RenderView (qboolean use_tasks, task_handle_t begin_rendering_task, task_
 		task_handle_t chain_surfaces = INVALID_TASK_HANDLE;
 		R_MarkSurfaces (use_tasks, before_mark, &store_efrags, &cull_surfaces, &chain_surfaces);
 
-		task_handle_t draw_world_task = Task_AllocateAndAssignIndexedFunc (R_DrawWorldTask, NUM_WORLD_CBX, NULL, 0);
+		task_handle_t draw_world_task = Task_AllocateAndAssignFunc (R_DrawWorldTask, NULL, 0);
 		Task_AddDependency (chain_surfaces, draw_world_task);
 		Task_AddDependency (begin_rendering_task, draw_world_task);
 		Task_AddDependency (draw_world_task, draw_done_task);
@@ -1008,7 +1049,16 @@ void R_RenderView (qboolean use_tasks, task_handle_t begin_rendering_task, task_
 		Task_AddDependency (begin_rendering_task, update_lightmaps_task);
 		Task_AddDependency (update_lightmaps_task, draw_done_task);
 
-		// RT: no need for draw_world_task, as it's done on R_NewMap
+		// RT: world/entity/sprite/water draw tasks register lights into shared
+		// arrays (rt_wldlights_* and the per-cluster light lists). The upload in
+		// R_DrawViewModelTask reads those arrays, so it must run strictly after
+		// every light-registering task completes.
+		Task_AddDependency (draw_world_task, draw_view_model_task);
+		Task_AddDependency (draw_sky_and_water_task, draw_view_model_task);
+		Task_AddDependency (draw_entities_task, draw_view_model_task);
+		Task_AddDependency (draw_alpha_entities_task, draw_view_model_task);
+		Task_AddDependency (draw_particles_task, draw_view_model_task);
+
 		task_handle_t tasks[] = {before_mark,          store_efrags,		                         draw_world_task,     draw_sky_and_water_task,
 		                         draw_view_model_task, draw_entities_task, draw_alpha_entities_task, draw_particles_task, update_lightmaps_task};
 		Tasks_Submit ((sizeof (tasks) / sizeof (task_handle_t)), tasks);
@@ -1022,7 +1072,7 @@ void R_RenderView (qboolean use_tasks, task_handle_t begin_rendering_task, task_
 	{
 		R_SetupViewBeforeMark (NULL);
 		R_MarkSurfaces (use_tasks, INVALID_TASK_HANDLE, NULL, NULL, NULL); // johnfitz -- create texture chains from PVS
-		R_DrawWorldTask (0, NULL);
+		R_DrawWorldTask (NULL);
 		R_DrawSkyAndWaterTask (NULL);
 		for (int i = 0; i < NUM_ENTITIES_CBX; ++i)
 			R_DrawEntitiesTask (i, NULL);

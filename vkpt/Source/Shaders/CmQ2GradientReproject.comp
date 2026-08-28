@@ -165,8 +165,20 @@ void main()
                texelFetch(framebufMetallicRoughness_Prev_Sampler, found_pos_prev, 0));
     imageStore(framebufSurfacePosition, ipos,
                texelFetch(framebufSurfacePosition_Prev_Sampler, found_pos_prev, 0));
-    imageStore(framebufViewDirection, ipos,
-               texelFetch(framebufViewDirection_Prev_Sampler, found_pos_prev, 0));
+
+    // View direction: like Q2RTX patch_position, recompute it from the current
+    // camera for primary surfaces. The re-traced gradient sample must reflect
+    // the current view, otherwise specular changes on camera rotation are not
+    // detected and the antilag stays off (specular ghosting). For reflections
+    // and refractions the stored direction is the bounce direction (not camera
+    // relative), so keep the previous frame's value.
+    vec4 view_direction = texelFetch(framebufViewDirection_Prev_Sampler, found_pos_prev, 0);
+    if (wasOnlyPrimary(texelFetch(framebufThroughput_Sampler, ipos, 0).a))
+    {
+        const vec3 surface_pos = texelFetch(framebufSurfacePosition_Prev_Sampler, found_pos_prev, 0).xyz;
+        view_direction.xyz = normalize(surface_pos - globalUniform.cameraPosition.xyz);
+    }
+    imageStore(framebufViewDirection, ipos, view_direction);
 
     // Keep the Q2 G-buffer consistent with the patched values.
     imageStore(framebufQ2BaseColor, ipos,

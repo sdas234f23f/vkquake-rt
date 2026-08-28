@@ -1165,6 +1165,9 @@ static void PF_sv_precache_model (void)
 	G_INT (OFS_RETURN) = G_INT (OFS_PARM0);
 	PR_CheckEmptyString (s);
 
+	if (strstr (s, "flame"))
+		Con_Printf ("DIAG: PF_sv_precache_model(\"%s\") state=%d\n", s, sv.state);
+
 	for (i = 0; i < MAX_MODELS; i++)
 	{
 		if (!sv.model_precache[i])

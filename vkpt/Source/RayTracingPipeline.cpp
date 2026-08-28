@@ -40,6 +40,7 @@ RayTracingPipeline::RayTracingPipeline( VkDevice                           _devi
                                         const RenderCubemap*               _renderCubemap,
                                         const PortalList*                  _portalList,
                                         const Volumetric*                  _volumetric,
+                                        const RayStats*                    _rayStats,
                                         const RgInstanceCreateInfo&        _rgInfo )
     : device( _device )
     , physDevice( std::move( _physDevice ) )
@@ -81,6 +82,8 @@ RayTracingPipeline::RayTracingPipeline( VkDevice                           _devi
         _portalList->GetDescSetLayout(),
         // device local buffers for volumetrics
         _volumetric->GetDescSetLayout(),
+        // ray statistics counters (host-visible storage buffer)
+        _rayStats->GetDescSetLayout(),
     };
 
     CreatePipelineLayout(setLayouts, std::size(setLayouts));

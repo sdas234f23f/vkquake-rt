@@ -113,6 +113,7 @@ extern cvar_t r_tasks;
 extern cvar_t r_gpulightmapupdate;
 extern cvar_t r_showtris;
 extern cvar_t r_showbboxes;
+extern cvar_t rt_stats;
 
 qboolean scr_initialized; // ready to draw
 
@@ -566,6 +567,41 @@ void SCR_DrawFPS (cb_context_t *cbx)
 		GL_SetCanvas (cbx, CANVAS_BOTTOMRIGHT);
 		Draw_String (cbx, x, y, st);
 	}
+}
+
+/*
+==============
+SCR_DrawRTStats
+==============
+*/
+void SCR_DrawRTStats (cb_context_t *cbx)
+{
+	if (!rt_stats.value)
+		return;
+
+	uint32_t rays = 0;
+	uint32_t fps_x10 = 0;
+	rgGetFrameStats (vulkan_globals.instance, &rays, &fps_x10);
+
+	char st[64];
+	static const RgFloat4D color_orange = { 1.0f, 0.30f, 0.05f, 1.0f };
+	static const RgFloat4D color_shadow = { 0.0f, 0.0f, 0.0f, 1.0f };
+	const float scale = 4.0f;
+	const int step = 8 * (int)scale;
+
+	GL_SetCanvas (cbx, CANVAS_DEFAULT);
+
+	// shadow pass (offset by one unscaled pixel, scaled up)
+	sprintf (st, "RAYS: %u", rays);
+	Draw_StringScaled (cbx, 8 + 4, 8 + 4, st, scale, &color_shadow);
+	sprintf (st, "FPS: %u.%u", fps_x10 / 10, fps_x10 % 10);
+	Draw_StringScaled (cbx, 8 + 4, 8 + step + 4, st, scale, &color_shadow);
+
+	// main pass
+	sprintf (st, "RAYS: %u", rays);
+	Draw_StringScaled (cbx, 8, 8, st, scale, &color_orange);
+	sprintf (st, "FPS: %u.%u", fps_x10 / 10, fps_x10 % 10);
+	Draw_StringScaled (cbx, 8, 8 + step, st, scale, &color_orange);
 }
 
 /*
@@ -1027,6 +1063,7 @@ static void SCR_DrawGUI (void *unused)
 		Sbar_Draw (cbx);
 		SCR_DrawDevStats (cbx); // johnfitz
 		SCR_DrawFPS (cbx);      // johnfitz
+		SCR_DrawRTStats (cbx);
 		SCR_DrawClock (cbx);    // johnfitz
 		SCR_DrawConsole (cbx);
 		M_Draw (cbx);

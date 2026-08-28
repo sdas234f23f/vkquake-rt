@@ -77,6 +77,7 @@ layout(set = DESC_SET_CUBEMAPS, binding = BINDING_CUBEMAPS) uniform samplerCube 
 
 #ifdef DESC_SET_RENDER_CUBEMAP
 layout(set = DESC_SET_RENDER_CUBEMAP, binding = BINDING_RENDER_CUBEMAP) uniform samplerCube renderCubemap;
+layout(set = DESC_SET_RENDER_CUBEMAP, binding = BINDING_RENDER_CUBEMAP_ENV) uniform samplerCube renderCubemapEnv;
 #endif
 
 #ifdef DESC_SET_PORTALS
@@ -289,6 +290,50 @@ vec3 getSky(vec3 direction)
     vec3 col = getSkyPrimary(direction);
     return col * globalUniform.skyColorMultiplier;
 }
+
+// Mip chain of the render cubemap (1024^2 -> 1), must match cubemapMipLevels
+// in RenderCubemap.cpp.
+#define SKY_MIP_COUNT 11.0
+// LOD for diffuse sky bounces: the sun disc (~1.4 deg) is smeared over the
+// ~5.6 deg texel of LOD 6, so it cannot produce a firefly on a single sample.
+#define SKY_DIFFUSE_BOUNCE_LOD 6.0
+
+// Sky color for lighting (bounces, reflections): sampled from the mip chain so
+// a bright sun disc / hot texels are spread over a large solid angle instead of
+// producing fireflies (Q2RTX prefiltered env behavior). LOD 0 is the sharp sky,
+// used only for direct visibility.
+vec3 getSkyFiltered(vec3 direction, float lod)
+{
+    uint skyType = globalUniform.skyType;
+
+#ifdef DESC_SET_RENDER_CUBEMAP
+    if (skyType == SKY_TYPE_RASTERIZED_GEOMETRY)
+    {
+        return textureLod(renderCubemap, direction, lod).rgb;
+    }
+
+    if (skyType == SKY_TYPE_PROCEDURAL)
+    {
+        // sun-free lighting env: the sun disc is sampled separately by the NEE
+        // directional light, so it never smears into rough reflections.
+        return textureLod(renderCubemapEnv, direction, lod).rgb;
+    }
+#endif
+
+    if (skyType == SKY_TYPE_CUBEMAP)
+    {
+        direction = mat3(globalUniform.skyCubemapRotationTransform) * direction;
+        return textureLod(globalCubemaps[nonuniformEXT(globalUniform.skyCubemapIndex)], direction, lod).rgb;
+    }
+
+    return globalUniform.skyColorDefault.xyz;
+}
+
+// getSky equivalent with an explicit LOD (includes skyColorMultiplier)
+vec3 getSkyFilteredMultiplied(vec3 direction, float lod)
+{
+    return getSkyFiltered(direction, lod) * globalUniform.skyColorMultiplier;
+}
 #endif
 
 
@@ -380,6 +425,33 @@ void shade(const Surface surf, const LightSample light, float oneOverPdf, out ve
 
     diffuse  *= oneOverPdf;
     specular *= oneOverPdf;
+}
+
+
+
+// ---------------------------------------------------------------------------
+// Ray statistics (debug stats overlay)
+// ---------------------------------------------------------------------------
+
+#define RAY_STATS_CATEGORY_PRIMARY            0
+#define RAY_STATS_CATEGORY_REFLECTION_REFRACTION 1
+#define RAY_STATS_CATEGORY_INDIRECT           2
+#define RAY_STATS_CATEGORY_SHADOW             3
+
+// Host-visible per-frame counters (desc set 11 of the ray tracing pipeline).
+// Only written when the stats overlay is enabled; read back by the host on the
+// next frame that reuses that frame index.
+layout(set = DESC_SET_RAY_STATS, binding = 0) buffer RtRayStats
+{
+    uint counts[RAY_STATS_CATEGORY_COUNT];
+} rtStats;
+
+void rayStatsAdd(const uint category, const uint count)
+{
+    if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_RAY_STATS) != 0)
+    {
+        atomicAdd(rtStats.counts[category], count);
+    }
 }
 
 #endif // RAYGEN_COMMON_H_

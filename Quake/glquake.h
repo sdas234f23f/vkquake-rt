@@ -347,7 +347,7 @@ void R_ClearParticles (void);
 void R_TranslatePlayerSkin (int playernum);
 void R_TranslateNewPlayerSkin (int playernum); // johnfitz -- this handles cases when the actual texture changes
 
-void R_DrawWorld (cb_context_t *cbx, int index);
+void R_DrawWorld (cb_context_t *cbx);
 void R_DrawAliasModel (cb_context_t *cbx, entity_t *e, int entuniqueid);
 void R_DrawBrushModel (cb_context_t *cbx, entity_t *e, int chain, int entuniqueid);
 void R_DrawSpriteModel (cb_context_t *cbx, entity_t *e, int entuniqueid);
@@ -514,6 +514,7 @@ static inline uint32_t RT_PackColorToUint32_FromFloat01(float r, float g, float 
 uint64_t RT_GetBrushSurfUniqueId (int entuniqueid, const qmodel_t *model, const msurface_t *surf, uint64_t triangle /* = 0 */);
 uint64_t RT_GetAliasModelUniqueId (int entuniqueid);
 uint64_t RT_GetSpriteModelUniqueId (int entuniqueid);
+int RT_GetEntityUniqueId (const entity_t *ent);
 
 RgTransform RT_GetModelTransform (const float model_matrix[16]);
 RgTransform RT_GetBrushModelMatrix (entity_t *e);

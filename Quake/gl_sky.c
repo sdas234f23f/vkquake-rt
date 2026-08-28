@@ -638,6 +638,16 @@ void Sky_ClipPoly (int nump, vec3_t vecs, int stage)
 static void RT_GetSkyTintColor (float color[3])
 {
 	extern cvar_t rt_sky_color_r, rt_sky_color_g, rt_sky_color_b, rt_sky_brightness, rt_brightness;
+	extern cvar_t rt_materials_only;
+
+	// materials-only mode: primary sky is fully black (rasterized sky polys,
+	// skybox, cloud layers) - only materials.yaml light sources stay active.
+	if (CVAR_TO_BOOL (rt_materials_only))
+	{
+		color[0] = color[1] = color[2] = 0.0f;
+		return;
+	}
+
 	const float mult = CVAR_TO_FLOAT (rt_sky_brightness) * CVAR_TO_FLOAT (rt_brightness);
 	color[0] = mult * (CLAMP (0, CVAR_TO_INT32 (rt_sky_color_r), 255) / 255.0f);
 	color[1] = mult * (CLAMP (0, CVAR_TO_INT32 (rt_sky_color_g), 255) / 255.0f);
@@ -790,7 +800,7 @@ void Sky_ProcessEntities (cb_context_t *cbx, float color[3])
 				dot = DotProduct (modelorg, s->plane->normal) - s->plane->dist;
 				if (((s->flags & SURF_PLANEBACK) && (dot < -BACKFACE_EPSILON)) || (!(s->flags & SURF_PLANEBACK) && (dot > BACKFACE_EPSILON)))
 				{
-					Sky_DrawSkySurface (cbx, color, i, e, e->model, s, rotated, forward, right, up);
+					Sky_DrawSkySurface (cbx, color, RT_GetEntityUniqueId (e), e, e->model, s, rotated, forward, right, up);
 				}
 			}
 		}

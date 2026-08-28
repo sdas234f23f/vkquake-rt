@@ -59,6 +59,7 @@
 #include "Volumetric.h"
 #include "ShadowMap.h"
 #include "GodRays.h"
+#include "RayStats.h"
 
 namespace vkpt
 {
@@ -116,6 +117,8 @@ public:
 
     bool IsSuspended() const;
     bool IsRenderUpscaleTechniqueAvailable(RgRenderUpscaleTechnique technique) const;
+
+    void GetFrameStats(uint32_t *pRays, uint32_t *pFpsX10) const;
 
 
     void Print(const char *pMessage) const;
@@ -181,6 +184,7 @@ private:
     std::shared_ptr<Bloom>                  bloom;
     std::shared_ptr<ShadowMap>              shadowMap;
     std::shared_ptr<GodRays>                godRays;
+    std::shared_ptr<RayStats>               rayStats;
     std::shared_ptr<FSR>                    amdFsr;
     std::shared_ptr<DLSS>                   nvDlss;
     std::shared_ptr<Sharpening>             sharpening;
@@ -222,6 +226,12 @@ private:
 
     double                                  previousFrameTime;
     double                                  currentFrameTime;
+
+    // In-game debug stats overlay: the latest ray count read back from the GPU
+    // and the smoothed FPS (fixed point, x10), shown when the overlay is enabled.
+    uint32_t                                statsRays = 0;
+    uint32_t                                statsFpsX10 = 0;
+    float                                   statsSmoothedFps = 0.0f;
 };
 
 }

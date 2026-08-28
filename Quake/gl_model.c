@@ -531,20 +531,6 @@ qmodel_t *Mod_ForName (const char *name, qboolean crash)
 
 /*
 =================
-Mod_CheckFullbrights -- johnfitz
-=================
-*/
-qboolean Mod_CheckFullbrights (byte *pixels, int count)
-{
-	int i;
-	for (i = 0; i < count; i++)
-		if (*pixels++ > 223)
-			return true;
-	return false;
-}
-
-/*
-=================
 Mod_CheckAnimTextureArrayQ64
 
 Quake64 bsp
@@ -583,7 +569,6 @@ static void Mod_LoadTextureTask (int i, load_texture_task_args_t *args)
 		return;
 
 	byte        *pixels_p = (byte *)tx + sizeof (texture_t);
-	int          pixels = tx->width * tx->height / 64 * 85;
 	char         texturename[64];
 	src_offset_t offset;
 	int          fwidth, fheight;
@@ -682,24 +667,9 @@ static void Mod_LoadTextureTask (int i, load_texture_task_args_t *args)
 		{
 			q_snprintf (texturename, sizeof (texturename), "%s:%s", mod->name, tx->name);
 			offset = (src_offset_t)(pixels_p) - (src_offset_t)mod_base;
-			if (Mod_CheckFullbrights ((byte *)(tx + 1), pixels))
-			{
-				tx->gltexture = TexMgr_LoadImage (
-					rtname,
-					mod, texturename, tx->width, tx->height, SRC_INDEXED, (byte *)(tx + 1), mod->name, offset, TEXPREF_MIPMAP | TEXPREF_NOBRIGHT | extraflags);
-				q_snprintf (texturename, sizeof (texturename), "%s:%s_glow", mod->name, tx->name);
-
-			    tx->fullbright = TexMgr_LoadImage (
-					NULL,
-					mod, texturename, tx->width, tx->height, SRC_INDEXED, (byte *)(tx + 1), mod->name, offset,
-					TEXPREF_RT_IS_EMISSIVE | TEXPREF_MIPMAP | TEXPREF_FULLBRIGHT | extraflags);
-			}
-			else
-			{
-				tx->gltexture = TexMgr_LoadImage (
-					rtname, 
-					mod, texturename, tx->width, tx->height, SRC_INDEXED, (byte *)(tx + 1), mod->name, offset, TEXPREF_MIPMAP | extraflags);
-			}
+			tx->gltexture = TexMgr_LoadImage (
+				rtname,
+				mod, texturename, tx->width, tx->height, SRC_INDEXED, (byte *)(tx + 1), mod->name, offset, TEXPREF_MIPMAP | extraflags);
 		}
 
 		TexMgr_RT_SpecialEnd ();
@@ -2750,6 +2720,16 @@ typedef struct load_skin_task_args_s
 	byte    **ppskintypes;
 } load_skin_task_args_t;
 
+// A skin that has a Q2RTX .mat material with an emissive (luma) texture must
+// use that luma texture as its sole emissive source -- the classic _glow
+// fullbright mask is skipped, so model lighting stays consistent with world
+// and sprite luma lighting.
+static qboolean Mod_SkinHasLumaMaterial (const char *skinName)
+{
+	rt_material_t *mat = RT_MAT_Find (skinName);
+	return mat && mat->filename_emissive[0] != '\0';
+}
+
 static void Mod_LoadSkinTask (int i, load_skin_task_args_t *args)
 {
 	int          j, k, size, groupskins;
@@ -2760,7 +2740,6 @@ static void Mod_LoadSkinTask (int i, load_skin_task_args_t *args)
 	byte        *pskintype = args->ppskintypes[i];
 	byte        *pinskingroup;
 	byte        *pinskinintervals;
-	char         fbr_mask_name[MAX_QPATH]; // johnfitz -- added for fullbright support
 	src_offset_t offset;                   // johnfitz
 	unsigned int texflags = TEXPREF_PAD;
 	qmodel_t    *mod = args->mod;
@@ -2788,28 +2767,13 @@ static void Mod_LoadSkinTask (int i, load_skin_task_args_t *args)
 		q_snprintf (rtname, sizeof (rtname), "%s/%i", namenoext, i);
 
 		offset = (src_offset_t)(skin) - (src_offset_t)mod_base;
-		if (Mod_CheckFullbrights (skin, size))
-		{
-			TexMgr_RT_SpecialStart (CVAR_TO_FLOAT (rt_model_rough), CVAR_TO_FLOAT (rt_model_metal));
+		if (Mod_SkinHasLumaMaterial (name))
+			mod->flags |= MF_RT_LUMA;
 
-			pheader->gltextures[i][0] = TexMgr_LoadImage (
-				rtname,
-				mod, name, pheader->skinwidth, pheader->skinheight, SRC_INDEXED, skin, mod->name, offset, texflags | TEXPREF_MIPMAP | TEXPREF_NOBRIGHT);
-			q_snprintf (fbr_mask_name, sizeof (fbr_mask_name), "%s:frame%i_glow", mod->name, i);
-			pheader->fbtextures[i][0] = TexMgr_LoadImage (
-				NULL,
-				mod, fbr_mask_name, pheader->skinwidth, pheader->skinheight, SRC_INDEXED, skin, mod->name, offset,
-				TEXPREF_RT_IS_EMISSIVE | texflags | TEXPREF_MIPMAP | TEXPREF_FULLBRIGHT);
-
-			TexMgr_RT_SpecialEnd ();
-		}
-		else
-		{
-			pheader->gltextures[i][0] = TexMgr_LoadImage (
-				rtname, 
-				mod, name, pheader->skinwidth, pheader->skinheight, SRC_INDEXED, skin, mod->name, offset, texflags | TEXPREF_MIPMAP);
-			pheader->fbtextures[i][0] = NULL;
-		}
+		pheader->gltextures[i][0] = TexMgr_LoadImage (
+			rtname,
+			mod, name, pheader->skinwidth, pheader->skinheight, SRC_INDEXED, skin, mod->name, offset, texflags | TEXPREF_MIPMAP);
+		pheader->fbtextures[i][0] = NULL;
 
 		pheader->gltextures[i][3] = pheader->gltextures[i][2] = pheader->gltextures[i][1] = pheader->gltextures[i][0];
 		pheader->fbtextures[i][3] = pheader->fbtextures[i][2] = pheader->fbtextures[i][1] = pheader->fbtextures[i][0];
@@ -2838,28 +2802,13 @@ static void Mod_LoadSkinTask (int i, load_skin_task_args_t *args)
 			q_snprintf (rtname, sizeof (rtname), "%s/%i_%i", namenoext, i, j);
 
 			offset = (src_offset_t)(skin) - (src_offset_t)mod_base; // johnfitz
-			if (Mod_CheckFullbrights (skin, size))
-			{
-				TexMgr_RT_SpecialStart (CVAR_TO_FLOAT (rt_model_rough), CVAR_TO_FLOAT (rt_model_metal));
+			if (Mod_SkinHasLumaMaterial (name))
+				mod->flags |= MF_RT_LUMA;
 
-				pheader->gltextures[i][j & 3] = TexMgr_LoadImage (
-					rtname,
-					mod, name, pheader->skinwidth, pheader->skinheight, SRC_INDEXED, skin, mod->name, offset, texflags | TEXPREF_MIPMAP | TEXPREF_NOBRIGHT);
-				q_snprintf (fbr_mask_name, sizeof (fbr_mask_name), "%s:frame%i_%i_glow", mod->name, i, j);
-				pheader->fbtextures[i][j & 3] = TexMgr_LoadImage (
-					NULL,
-					mod, fbr_mask_name, pheader->skinwidth, pheader->skinheight, SRC_INDEXED, skin, mod->name, offset,
-					TEXPREF_RT_IS_EMISSIVE | texflags | TEXPREF_MIPMAP | TEXPREF_FULLBRIGHT);
-
-				TexMgr_RT_SpecialEnd ();
-			}
-			else
-			{
-				pheader->gltextures[i][j & 3] = TexMgr_LoadImage (
-					rtname,
-					mod, name, pheader->skinwidth, pheader->skinheight, SRC_INDEXED, skin, mod->name, offset, texflags | TEXPREF_MIPMAP);
-				pheader->fbtextures[i][j & 3] = NULL;
-			}
+			pheader->gltextures[i][j & 3] = TexMgr_LoadImage (
+				rtname,
+				mod, name, pheader->skinwidth, pheader->skinheight, SRC_INDEXED, skin, mod->name, offset, texflags | TEXPREF_MIPMAP);
+			pheader->fbtextures[i][j & 3] = NULL;
 			// johnfitz
 
 			skin += size;
@@ -3020,7 +2969,7 @@ void Mod_SetExtraFlags (qmodel_t *mod)
 	if (!mod)
 		return;
 
-	mod->flags &= (0xFF | MF_HOLEY); // only preserve first byte, plus MF_HOLEY
+	mod->flags &= (0xFF | MF_HOLEY | MF_RT_LUMA); // only preserve first byte, plus MF_HOLEY and MF_RT_LUMA
 
 	if (mod->type == mod_alias)
 	{

@@ -73,9 +73,11 @@ vkpt::RenderCubemap::RenderCubemap(
     pipelineLayout(VK_NULL_HANDLE),
     multiviewRenderPass(VK_NULL_HANDLE),
     cubemap{},
+    envCubemap{},
     cubemapDepth{},
     cubemapFramebuffer(VK_NULL_HANDLE),
     cubemapSize(CUBEMAP_SIDE_SIZE),
+    cubemapMipLevels(static_cast<uint32_t>(std::log2(CUBEMAP_SIDE_SIZE)) + 1),
     descSetLayout(VK_NULL_HANDLE),
     descPool(VK_NULL_HANDLE),
     descSet(VK_NULL_HANDLE)
@@ -86,6 +88,7 @@ vkpt::RenderCubemap::RenderCubemap(
 
     VkCommandBuffer cmd = _cmdManager->StartGraphicsCmd();
     CreateAttch(_allocator, cmd, cubemapSize, cubemap, false);
+    CreateAttch(_allocator, cmd, cubemapSize, envCubemap, false);
     CreateAttch(_allocator, cmd, cubemapSize, cubemapDepth, true);
     _cmdManager->Submit(cmd);
     _cmdManager->WaitGraphicsIdle();
@@ -120,6 +123,10 @@ vkpt::RenderCubemap::~RenderCubemap()
     vkDestroyImage(device, cubemap.image, nullptr);
     vkDestroyImageView(device, cubemap.view, nullptr);
     vkFreeMemory(device, cubemap.memory, nullptr);
+
+    vkDestroyImage(device, envCubemap.image, nullptr);
+    vkDestroyImageView(device, envCubemap.view, nullptr);
+    vkFreeMemory(device, envCubemap.memory, nullptr);
 
     vkDestroyImage(device, cubemapDepth.image, nullptr);
     vkDestroyImageView(device, cubemapDepth.view, nullptr);
@@ -216,6 +223,113 @@ void vkpt::RenderCubemap::Draw(VkCommandBuffer cmd, uint32_t frameIndex,
     }
 
     vkCmdEndRenderPass(cmd);
+
+    // generate the mip chain from the just-rendered mip 0 (used by lighting shaders)
+    GenerateMipmaps(cmd, cubemap.image);
+}
+
+void vkpt::RenderCubemap::GenerateMipmaps(VkCommandBuffer cmd, VkImage image, VkImageLayout mip0Layout)
+{
+    if (cubemapMipLevels <= 1)
+    {
+        return;
+    }
+
+    const VkImageSubresourceRange mip0Range =
+    {
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 6,
+    };
+
+    // mip 0: its current layout -> TRANSFER_SRC
+    const VkAccessFlags mip0SrcAccess =
+        mip0Layout == VK_IMAGE_LAYOUT_GENERAL ? VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_SHADER_READ_BIT;
+
+    Utils::BarrierImage(
+        cmd, image,
+        mip0SrcAccess, VK_ACCESS_TRANSFER_READ_BIT,
+        mip0Layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        mip0Range);
+
+    uint32_t mipWidth = cubemapSize;
+    uint32_t mipHeight = cubemapSize;
+
+    for (uint32_t mipLevel = 1; mipLevel < cubemapMipLevels; mipLevel++)
+    {
+        const uint32_t prevMipWidth = mipWidth;
+        const uint32_t prevMipHeight = mipHeight;
+
+        mipWidth >>= 1;
+        mipHeight >>= 1;
+
+        const VkImageSubresourceRange curMipmap =
+        {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = mipLevel,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 6,
+        };
+
+        // current mip: UNDEFINED -> TRANSFER_DST
+        Utils::BarrierImage(
+            cmd, image,
+            0, VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            curMipmap);
+
+        // blit from the previous mip level (all 6 faces at once)
+        VkImageBlit curBlit = {};
+        curBlit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        curBlit.srcSubresource.mipLevel = mipLevel - 1;
+        curBlit.srcSubresource.baseArrayLayer = 0;
+        curBlit.srcSubresource.layerCount = 6;
+        curBlit.srcOffsets[0] = { 0, 0, 0 };
+        curBlit.srcOffsets[1] = { (int32_t)prevMipWidth, (int32_t)prevMipHeight, 1 };
+
+        curBlit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        curBlit.dstSubresource.mipLevel = mipLevel;
+        curBlit.dstSubresource.baseArrayLayer = 0;
+        curBlit.dstSubresource.layerCount = 6;
+        curBlit.dstOffsets[0] = { 0, 0, 0 };
+        curBlit.dstOffsets[1] = { (int32_t)mipWidth, (int32_t)mipHeight, 1 };
+
+        vkCmdBlitImage(
+            cmd,
+            image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1, &curBlit, VK_FILTER_LINEAR);
+
+        // current mip: TRANSFER_DST -> TRANSFER_SRC for the next one
+        Utils::BarrierImage(
+            cmd, image,
+            VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            curMipmap);
+    }
+
+    // all mips: TRANSFER_SRC -> SHADER_READ_ONLY
+    const VkImageSubresourceRange allMips =
+    {
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = cubemapMipLevels,
+        .baseArrayLayer = 0,
+        .layerCount = 6,
+    };
+
+    Utils::BarrierImage(
+        cmd, image,
+        VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        allMips);
 }
 
 VkDescriptorSetLayout vkpt::RenderCubemap::GetDescSetLayout() const
@@ -379,13 +493,14 @@ void vkpt::RenderCubemap::CreateAttch(
     imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     imageInfo.format = isDepth ? CUBEMAP_DEPTH_FORMAT : CUBEMAP_FORMAT;
     imageInfo.extent = { sideSize, sideSize, 1 };
-    imageInfo.mipLevels = 1;
+    imageInfo.mipLevels = isDepth ? 1 : cubemapMipLevels;
     imageInfo.arrayLayers = 6;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.usage = isDepth ?
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT :
-        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+        VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VkResult r = vkCreateImage(device, &imageInfo, nullptr, &result.image);
@@ -419,7 +534,7 @@ void vkpt::RenderCubemap::CreateAttch(
     viewInfo.subresourceRange = {};
     viewInfo.subresourceRange.aspectMask = isDepth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.levelCount = isDepth ? 1 : cubemapMipLevels;
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 6;
     viewInfo.image = result.image;
@@ -451,7 +566,7 @@ void vkpt::RenderCubemap::CreateAttch(
         imageBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     }
     imageBarrier.subresourceRange.baseMipLevel = 0;
-    imageBarrier.subresourceRange.levelCount = 1;
+    imageBarrier.subresourceRange.levelCount = isDepth ? 1 : cubemapMipLevels;
     imageBarrier.subresourceRange.baseArrayLayer = 0;
     imageBarrier.subresourceRange.layerCount = 6;
 
@@ -494,17 +609,23 @@ void vkpt::RenderCubemap::CreateFramebuffer(uint32_t sideSize)
 
 void vkpt::RenderCubemap::CreateDescriptors(const std::shared_ptr<SamplerManager> &samplerManager)
 {
-    VkDescriptorSetLayoutBinding binding = {};
+    VkDescriptorSetLayoutBinding bindings[2] = {};
 
-    binding.binding = BINDING_RENDER_CUBEMAP;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_ALL;
+    bindings[0].binding = BINDING_RENDER_CUBEMAP;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_ALL;
+
+    // sun-free env cubemap used for procedural sky lighting (getSkyFiltered)
+    bindings[1].binding = BINDING_RENDER_CUBEMAP_ENV;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_ALL;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo = {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &binding;
+    layoutInfo.bindingCount = 2;
+    layoutInfo.pBindings = bindings;
 
     VkResult r = vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descSetLayout);
     VK_CHECKERROR(r);
@@ -514,7 +635,7 @@ void vkpt::RenderCubemap::CreateDescriptors(const std::shared_ptr<SamplerManager
 
     VkDescriptorPoolSize poolSize = {};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 1;
+    poolSize.descriptorCount = 2;
 
     VkDescriptorPoolCreateInfo poolInfo = {};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -545,16 +666,27 @@ void vkpt::RenderCubemap::CreateDescriptors(const std::shared_ptr<SamplerManager
     img.imageView = cubemap.view;
     img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    VkWriteDescriptorSet wrt = {};
-    wrt.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    wrt.dstSet = descSet;
-    wrt.dstBinding = BINDING_RENDER_CUBEMAP;
-    wrt.dstArrayElement = 0;
-    wrt.descriptorCount = 1;
-    wrt.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    wrt.pImageInfo = &img;
+    VkDescriptorImageInfo envImg = img;
+    envImg.imageView = envCubemap.view;
 
-    vkUpdateDescriptorSets(device, 1, &wrt, 0, nullptr);
+    VkWriteDescriptorSet wrt[2] = {};
+    wrt[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wrt[0].dstSet = descSet;
+    wrt[0].dstBinding = BINDING_RENDER_CUBEMAP;
+    wrt[0].dstArrayElement = 0;
+    wrt[0].descriptorCount = 1;
+    wrt[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wrt[0].pImageInfo = &img;
+
+    wrt[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wrt[1].dstSet = descSet;
+    wrt[1].dstBinding = BINDING_RENDER_CUBEMAP_ENV;
+    wrt[1].dstArrayElement = 0;
+    wrt[1].descriptorCount = 1;
+    wrt[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wrt[1].pImageInfo = &envImg;
+
+    vkUpdateDescriptorSets(device, 2, wrt, 0, nullptr);
 }
 
 void vkpt::RenderCubemap::CreateProceduralSkyParamsBuffer()
@@ -577,9 +709,9 @@ void vkpt::RenderCubemap::CreateProceduralSkyDescriptors()
 {
     VkResult r;
 
-    VkDescriptorSetLayoutBinding bindings[2] = {};
+    VkDescriptorSetLayoutBinding bindings[3] = {};
 
-    // 0: cubemap storage image
+    // 0: cubemap storage image (visual sky with sun disc)
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[0].descriptorCount = 1;
@@ -591,9 +723,15 @@ void vkpt::RenderCubemap::CreateProceduralSkyDescriptors()
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
+    // 2: env cubemap storage image (sun-free lighting environment)
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo = {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 2;
+    layoutInfo.bindingCount = 3;
     layoutInfo.pBindings = bindings;
 
     r = vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &procSkyDescSetLayout);
@@ -603,7 +741,7 @@ void vkpt::RenderCubemap::CreateProceduralSkyDescriptors()
 
     VkDescriptorPoolSize poolSizes[2] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSizes[0].descriptorCount = 1;
+    poolSizes[0].descriptorCount = 2;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 1;
 
@@ -633,12 +771,16 @@ void vkpt::RenderCubemap::CreateProceduralSkyDescriptors()
     imgInfo.imageView = cubemap.view;
     imgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
+    VkDescriptorImageInfo envImgInfo = {};
+    envImgInfo.imageView = envCubemap.view;
+    envImgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
     VkDescriptorBufferInfo bufInfo = {};
     bufInfo.buffer = procSkyParamsBuffer.GetBuffer();
     bufInfo.offset = 0;
     bufInfo.range = VK_WHOLE_SIZE;
 
-    VkWriteDescriptorSet writes[2] = {};
+    VkWriteDescriptorSet writes[3] = {};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = procSkyDescSet;
     writes[0].dstBinding = 0;
@@ -653,7 +795,14 @@ void vkpt::RenderCubemap::CreateProceduralSkyDescriptors()
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writes[1].pBufferInfo = &bufInfo;
 
-    vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = procSkyDescSet;
+    writes[2].dstBinding = 2;
+    writes[2].descriptorCount = 1;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[2].pImageInfo = &envImgInfo;
+
+    vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
 }
 
 void vkpt::RenderCubemap::CreateProceduralSkyPipelineLayout()
@@ -720,11 +869,12 @@ void vkpt::RenderCubemap::DrawProcedural(VkCommandBuffer cmd, const ProceduralSk
         memcpy(mappedProcSkyParams, &params, sizeof(ProceduralSkyParams));
     }
 
-    // cubemap: SHADER_READ_ONLY -> GENERAL
+    // cubemap/envCubemap: SHADER_READ_ONLY -> GENERAL (the shader writes both)
+    for (VkImage image : { cubemap.image, envCubemap.image })
     {
         VkImageMemoryBarrier barrier = {};
         barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.image = cubemap.image;
+        barrier.image = image;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -753,29 +903,10 @@ void vkpt::RenderCubemap::DrawProcedural(VkCommandBuffer cmd, const ProceduralSk
     const uint32_t wgY = Utils::GetWorkGroupCount(cubemapSize, 16);
     vkCmdDispatch(cmd, wgX, wgY, 6);
 
-    // cubemap: GENERAL -> SHADER_READ_ONLY
-    {
-        VkImageMemoryBarrier barrier = {};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.image = cubemap.image;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = 6;
-
-        vkCmdPipelineBarrier(
-            cmd,
-            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-            0, nullptr,
-            0, nullptr,
-            1, &barrier);
-    }
+    // generate the mip chain from the just-filled mip 0 (GENERAL) and leave the
+    // whole image SHADER_READ_ONLY for the lighting shaders. Both the visual
+    // cubemap (with sun disc) and the env cubemap (sun-free) get mip chains.
+    GenerateMipmaps(cmd, cubemap.image, VK_IMAGE_LAYOUT_GENERAL);
+    GenerateMipmaps(cmd, envCubemap.image, VK_IMAGE_LAYOUT_GENERAL);
 }
 

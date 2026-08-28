@@ -27,6 +27,7 @@
 #include "RenderCubemap.h"
 #include "PortalList.h"
 #include "Volumetric.h"
+#include "RayStats.h"
 
 namespace vkpt
 {
@@ -67,7 +68,8 @@ public:
                       const CubemapManager*            cubemapManager,
                       const RenderCubemap*             renderCubemap,
                       const PortalList*                portalList,
-                      const Volumetric*                volumetric );
+                      const Volumetric*                volumetric,
+                      const RayStats*                  rayStats );
     
     void TracePrimaryRays(const TraceParams &params);
     // Q2RTX-style reflection/refraction pass (separate raygen), used on the

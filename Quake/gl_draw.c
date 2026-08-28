@@ -462,10 +462,11 @@ void Draw_Init (void)
 Draw_FillCharacterQuad
 ================
 */
-static void Draw_FillCharacterQuad (int x, int y, char num, RgVertex *output, int rotation)
+static void Draw_FillCharacterQuad (int x, int y, char num, RgVertex *output, int rotation, float scale)
 {
 	int   row, col;
 	float frow, fcol, size;
+	float step = 8.0f * scale;
 
 	row = num >> 4;
 	col = num & 15;
@@ -478,9 +479,9 @@ static void Draw_FillCharacterQuad (int x, int y, char num, RgVertex *output, in
 
 	float texcoords[4][2] = {
 		{x, y},
-		{x + 8, y},
-		{x + 8, y + 8},
-		{x, y + 8},
+		{x + step, y},
+		{x + step, y + step},
+		{x, y + step},
 	};
 
 	corner_verts[0].position[0] = texcoords[(rotation + 0) % 4][0];
@@ -536,7 +537,7 @@ void Draw_Character (cb_context_t *cbx, int x, int y, int num)
 		return; // don't waste verts on spaces
 
 	RgVertex vertices[6];
-	Draw_FillCharacterQuad (x, y, (char)num, vertices, rotation);
+	Draw_FillCharacterQuad (x, y, (char)num, vertices, rotation, 1.0f);
 
 	RgRasterizedGeometryUploadInfo info = {
 		.renderType = RG_RASTERIZED_GEOMETRY_RENDER_TYPE_SWAPCHAIN,
@@ -558,32 +559,44 @@ void Draw_Character (cb_context_t *cbx, int x, int y, int num)
 
 /*
 ================
-Draw_String
+Draw_StringScaled
 ================
 */
-void Draw_String (cb_context_t *cbx, int x, int y, const char *str)
+void Draw_StringScaled (cb_context_t *cbx, int x, int y, const char *str, float scale, const RgFloat4D *color)
 {
 	int         num_verts = 0;
 	int         i;
 	const char *tmp;
+	const float step = 8.0f * scale;
 
-	if (y <= -8)
+	if (y <= -8.0f * scale)
 		return; // totally off screen
 
 	for (tmp = str; *tmp != 0; ++tmp)
 		if (*tmp != 32)
 			num_verts += 6;
-	
+
 	RgVertex *vertices = RT_AllocScratchMemoryNulled (num_verts * sizeof (RgVertex));
 
 	for (i = 0; *str != 0; ++str)
 	{
 		if (*str != 32)
 		{
-			Draw_FillCharacterQuad (x, y, *str, vertices + i * 6, 0);
+			Draw_FillCharacterQuad (x, y, *str, vertices + i * 6, 0, scale);
 			i++;
 		}
-		x += 8;
+		x += (int)step;
+	}
+
+	RgFloat4D use_color;
+	if (color != NULL)
+		use_color = *color;
+	else
+	{
+		use_color.data[0] = 1.0f;
+		use_color.data[1] = 1.0f;
+		use_color.data[2] = 1.0f;
+		use_color.data[3] = 1.0f;
 	}
 
 	RgRasterizedGeometryUploadInfo info = {
@@ -593,7 +606,7 @@ void Draw_String (cb_context_t *cbx, int x, int y, const char *str)
 		.indexCount = 0,
 		.pIndices = NULL,
 		.transform = RT_TRANSFORM_IDENTITY,
-		.color = RT_COLOR_WHITE,
+		.color = use_color,
 		.material = char_texture ? char_texture->rtmaterial : RG_NO_MATERIAL,
 		.pipelineState = RG_RASTERIZED_GEOMETRY_STATE_ALPHA_TEST,
 		.blendFuncSrc = 0,
@@ -602,6 +615,16 @@ void Draw_String (cb_context_t *cbx, int x, int y, const char *str)
 
 	RgResult r = rgUploadRasterizedGeometry (vulkan_globals.instance, &info, cbx->cur_viewprojection, &cbx->cur_viewport);
 	RG_CHECK (r);
+}
+
+/*
+================
+Draw_String
+================
+*/
+void Draw_String (cb_context_t *cbx, int x, int y, const char *str)
+{
+	Draw_StringScaled (cbx, x, y, str, 1.0f, NULL);
 }
 
 /*

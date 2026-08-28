@@ -284,6 +284,11 @@ RgBool32 rgIsRenderUpscaleTechniqueAvailable(RgInstance rgInstance, RgRenderUpsc
     return Call(rgInstance, &VulkanDevice::IsRenderUpscaleTechniqueAvailable, technique);
 }
 
+RgResult rgGetFrameStats(RgInstance rgInstance, uint32_t *pRays, uint32_t *pFpsX10)
+{
+    return Call(rgInstance, &VulkanDevice::GetFrameStats, pRays, pFpsX10);
+}
+
 
 const char *rgGetResultDescription(RgResult result)
 {

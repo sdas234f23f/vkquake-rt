@@ -43,6 +43,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 #  - materials.yaml  -> id1/materials/materials.yaml (material definitions)
 #  - textures/*.png   -> id1/textures/   (world PBR overrides)
 #  - progs/**/*.png   -> id1/progs/      (model skin PBR overrides)
+#  - mdl_skins/*.png  -> id1/mdl_skins/  (model emissive luma overrides)
 # The game loads materials from materials/*.yaml and textures from these loose
 # files (rt_load_file -> COM_LoadFile).
 $srcRoot = Join-Path $PSScriptRoot "vkpt\Source"
@@ -56,12 +57,21 @@ if (Test-Path $matYaml) {
     Copy-Item $matYaml (Join-Path $matDir "materials.yaml") -Force
 }
 
-foreach ($sub in @("textures", "progs")) {
+foreach ($sub in @("textures", "progs", "mdl_skins")) {
     $src = Join-Path $srcRoot $sub
     if (Test-Path $src) {
         $dst = Join-Path $gameDir $sub
         if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
         Copy-Item -Path (Join-Path $src "*") -Destination $dst -Recurse -Force
+    }
+}
+
+# Deploy runtime RT data files (blue noise + water normal) required by the
+# vkpt renderer; the renderer loads them from the game dir (id1/) at startup.
+foreach ($f in @("BlueNoise_LDR_RGBA_128.ktx2", "WaterNormal_n.ktx2")) {
+    $src = Join-Path $srcRoot $f
+    if (Test-Path $src) {
+        Copy-Item $src (Join-Path $gameDir $f) -Force
     }
 }
 exit 0

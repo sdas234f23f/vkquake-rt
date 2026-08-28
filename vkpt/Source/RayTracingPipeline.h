@@ -29,6 +29,7 @@
 #include "RenderCubemap.h"
 #include "PortalList.h"
 #include "Volumetric.h"
+#include "RayStats.h"
 
 namespace vkpt
 {
@@ -49,6 +50,7 @@ public:
                         const RenderCubemap*               renderCubemap,
                         const PortalList*                  portalList,
                         const Volumetric*                  volumetric,
+                        const RayStats*                    rayStats,
                         const RgInstanceCreateInfo&        rgInfo );
     ~RayTracingPipeline() override;
 

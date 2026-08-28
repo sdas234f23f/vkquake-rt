@@ -98,6 +98,12 @@ cvar_t                          r_usesops = {"r_usesops", "1", CVAR_ARCHIVE};   
 task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 
 // RT
+// Master emissive-luma brightness knob (must match rt_emis_light_intensity's
+// default above): luma surface emission is scaled by
+// rt_emis_mapboost * (rt_emis_light_intensity / RT_EMIS_LIGHT_INTENSITY_DEFAULT),
+// so at the default the effective boost equals rt_emis_mapboost and the cvar
+// acts as a relative multiplier (0 extinguishes luma glow entirely).
+#define RT_EMIS_LIGHT_INTENSITY_DEFAULT 10.0f
 #define CVAR_DEF_LIST( CVAR_DEF_T ) \
 	\
 	CVAR_DEF_T (rt_classic_render, "0") \
@@ -123,6 +129,8 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_elight_default_mdl, "1000") \
 	CVAR_DEF_T (rt_elight_threshold, "-1") \
     CVAR_DEF_T (rt_elight_radius, "0.01") \
+	CVAR_DEF_T (rt_truelight, "1") \
+	CVAR_DEF_T (rt_materials_only, "0") \
 	\
 	CVAR_DEF_T (rt_poi_distthresh, "2") \
 	CVAR_DEF_T (rt_poi_distthresh_super, "3") \
@@ -230,6 +238,7 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	\
 	CVAR_DEF_T (rt_debugflags, "0") \
 	CVAR_DEF_T (rt_debugemissive, "0") \
+	CVAR_DEF_T (rt_stats, "0") \
 	\
 	CVAR_DEF_T (_rt_firsttime, "1")
 
@@ -1146,6 +1155,8 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	// 4.6: sky brightness (all sky types, incl. procedural) + master brightness
 	const float skyBrightness = CVAR_TO_FLOAT (rt_sky_brightness) * CVAR_TO_FLOAT (rt_brightness);
 
+	const qboolean materials_only = CVAR_TO_BOOL (rt_materials_only);
+
 	const int usePhysicalSky = CVAR_TO_BOOL (rt_physical_sky) != 0;
 
 	vec3_t sky_base_color;
@@ -1165,6 +1176,12 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	VectorScale (sky_base_color, skyBrightness, sky_base_color);
 	RT_APPLY_SKY_COLOR (sky_base_color);
 
+	// materials-only mode: fully black sky (no sky display, no sun, no ambient)
+	if (materials_only)
+	{
+		sky_base_color[0] = sky_base_color[1] = sky_base_color[2] = 0.0f;
+	}
+
 	RgDrawFrameSkyParams sky_params = {
 		.skyType = CVAR_TO_BOOL (r_fastsky) ? RG_SKY_TYPE_COLOR
 		         : usePhysicalSky ? RG_SKY_TYPE_PROCEDURAL
@@ -1172,7 +1189,7 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 		.skyColorDefault = RT_VEC3 (sky_base_color),
 		// for the procedural sky this is passed as its brightness (skyParams[0]);
 		// for rasterized/color skies it scales the sky in reflections (getSky)
-		.skyColorMultiplier = usePhysicalSky ? skyBrightness : skyMult * skyBrightness,
+		.skyColorMultiplier = materials_only ? 0.0f : (usePhysicalSky ? skyBrightness : skyMult * skyBrightness),
 		// repurposed field: carries the procedural sky tint strength (rt_sky_tint)
 		.skyColorSaturation = CVAR_TO_FLOAT (rt_sky_tint),
 		.skyViewerPosition = RT_VEC3 (r_origin),
@@ -1215,12 +1232,19 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	VectorScale (skyflatcolor, CVAR_TO_FLOAT (rt_volume_ambient) * CVAR_TO_FLOAT (rt_brightness), volume_ambient_color);
 	RT_APPLY_LIGHT_TINT (volume_ambient_color);
 
+	// materials-only mode: no volumetric fog/light contribution
+	if (materials_only)
+	{
+		volume_light_color[0] = volume_light_color[1] = volume_light_color[2] = 0.0f;
+		volume_ambient_color[0] = volume_ambient_color[1] = volume_ambient_color[2] = 0.0f;
+	}
+
 	RgDrawFrameVolumetricParams volumetric_params = {
-		.enable = CVAR_TO_UINT32 (rt_volume_type) != 0,
+		.enable = !materials_only && CVAR_TO_UINT32 (rt_volume_type) != 0,
 		.useSimpleDepthBased = CVAR_TO_UINT32 (rt_volume_type) == 1 || CVAR_TO_BOOL (rt_classic_render),
 		.volumetricFar = CVAR_TO_FLOAT (rt_volume_far),
 		.ambientColor = RT_VEC3 (volume_ambient_color),
-		.scaterring = CVAR_TO_FLOAT (rt_volume_scatter),
+		.scaterring = materials_only ? 0.0f : CVAR_TO_FLOAT (rt_volume_scatter),
 		.sourceColor = RT_VEC3 (volume_light_color),
 		.sourceDirection = RT_AnglesToDir (volume_light_angles),
 		.sourceAssymetry = CVAR_TO_FLOAT (rt_volume_lassymetry),
@@ -1229,7 +1253,7 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	RgDrawFrameTexturesParams texture_params = {
 		.dynamicSamplerFilter = CVAR_TO_INT32 (vid_filter) == 1 ? RG_SAMPLER_FILTER_NEAREST : RG_SAMPLER_FILTER_LINEAR,
 		.normalMapStrength = CVAR_TO_FLOAT (rt_normalmap_stren),
-		.emissionMapBoost = CVAR_TO_FLOAT (rt_emis_mapboost),
+		.emissionMapBoost = CVAR_TO_FLOAT (rt_emis_mapboost) * (CVAR_TO_FLOAT (rt_emis_light_intensity) / RT_EMIS_LIGHT_INTENSITY_DEFAULT),
 		.emissionMaxScreenColor = CVAR_TO_FLOAT (rt_emis_maxscrcolor),
 		.minRoughness = CVAR_TO_FLOAT (rt_roughmin),
 	};
@@ -1332,6 +1356,11 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	// 4.7: the Q2RTX-style core is the only renderer (the legacy pre-Q2RTX
 	// render path was removed), so the core flag is always set.
 	debug_params.drawFlags |= RG_DEBUG_DRAW_Q2RTX_CORE_BIT;
+	// in-game ray stats / FPS overlay is driven by its own cvar (rt_stats)
+	if (CVAR_TO_BOOL (rt_stats))
+	{
+		debug_params.drawFlags |= RG_DEBUG_DRAW_STATS_BIT;
+	}
 
 	float cameranear = GL_GetCameraNear (DEG2RAD (r_fovx), DEG2RAD (r_fovy));
 	float camerafar = GL_GetCameraFar ();
@@ -2080,6 +2109,7 @@ enum
 	VID_OPT_FILTER,
 	VID_OPT_PARTICLES,
 	VID_OPT_VOLUMETRICS,
+	VID_OPT_MATERIALS_ONLY,
 	VID_OPT_RENDER_SCALE,
 
 	VID_OPT_BACK,
@@ -2455,6 +2485,9 @@ static void VID_MenuKey (int key)
 			int newval = (CVAR_TO_UINT32 (rt_volume_type) + 2) % 3; // left arrow: previous
 			Cvar_SetValueQuick (&rt_volume_type, newval);
 			break;
+		case VID_OPT_MATERIALS_ONLY:
+			Cvar_SetValueQuick (&rt_materials_only, !CVAR_TO_BOOL (rt_materials_only));
+			break;
 		default:
 			break;
 		}
@@ -2508,6 +2541,9 @@ static void VID_MenuKey (int key)
 		case VID_OPT_VOLUMETRICS:
 			int newval = (CVAR_TO_UINT32 (rt_volume_type) + 1) % 3;
 			Cvar_SetValueQuick (&rt_volume_type, newval);
+			break;
+		case VID_OPT_MATERIALS_ONLY:
+			Cvar_SetValueQuick (&rt_materials_only, !CVAR_TO_BOOL (rt_materials_only));
 			break;
 		default:
 			break;
@@ -2666,6 +2702,10 @@ static void VID_MenuDraw (cb_context_t *cbx)
 		case VID_OPT_VOLUMETRICS:
 			M_Print (cbx, 16, y, "       Volumetrics");
 			M_Print (cbx, 184, y, CVAR_TO_UINT32 (rt_volume_type) == 2 ? "sky" : CVAR_TO_UINT32 (rt_volume_type) == 1 ? "simple" : "off");
+			break;
+		case VID_OPT_MATERIALS_ONLY:
+			M_Print (cbx, 16, y, "  Materials only");
+			M_Print (cbx, 184, y, CVAR_TO_BOOL (rt_materials_only) ? "on" : "off");
 			break;
 		case VID_OPT_RENDER_SCALE:
 			M_Print (cbx, 16, y, "           Vintage");

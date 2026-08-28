@@ -51,6 +51,10 @@ extern cvar_t vid_filter;
 extern cvar_t vid_anisotropic;
 
 extern cvar_t rt_emis_fullbright_dflt;
+extern cvar_t rt_brush_rough;
+extern cvar_t rt_brush_metal;
+extern cvar_t rt_model_rough;
+extern cvar_t rt_model_metal;
 
 #define MAX_MIPS 16
 static int          numgltextures;
@@ -1084,6 +1088,7 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	byte *normTex = RT_MAT_LoadTexture (mat, RT_MAT_TEX_NORMALS, &nw, &nh);
 	int ew = 0, eh = 0;
 	byte *emisTex = RT_MAT_LoadTexture (mat, RT_MAT_TEX_EMISSIVE, &ew, &eh);
+	glt->rtemissivetex = (emisTex != NULL);
 	int gw = 0, gh = 0;
 	byte *glossTex = RT_MAT_LoadTexture (mat, RT_MAT_TEX_GLOSS, &gw, &gh);
 
@@ -1138,7 +1143,17 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 
 	const float baseFactor = (mat->base_factor > 0.0f) ? mat->base_factor : 1.0f;
 	const float roughOverride = mat->roughness_override; // 0 = use map-based roughness
-	const float defaultRough = rtspecial_default_rough / 255.0f;
+
+	// Fallback roughness for materials with no explicit PBR data (bare
+	// materials.yaml entries for model skins, etc.). The brush world's
+	// TexMgr_RT_SpecialStart thread-locals are only valid on the thread that
+	// happens to run the world texture task, so model textures synthesized
+	// elsewhere (e.g. main-thread single-skin loads) would otherwise get a
+	// stale rough=0 -- i.e. perfectly mirrored surfaces. Derive the default
+	// from the owner model type instead, matching the cvar used when the
+	// geometry is uploaded (r_world.c / r_alias.c / r_sprite.c).
+	const qboolean isBrush = glt->owner && glt->owner->type == mod_brush;
+	const float defaultRough = isBrush ? CVAR_TO_FLOAT (rt_brush_rough) : CVAR_TO_FLOAT (rt_model_rough);
 
 	// average emitted color (albedo * emissive), used to generate emissive
 	// area lights (Q2RTX-style triangle lights) in r_world.c
@@ -1245,6 +1260,15 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		glt->rtemissivecolor[0] = emissR / (npix * 255.0f);
 		glt->rtemissivecolor[1] = emissG / (npix * 255.0f);
 		glt->rtemissivecolor[2] = emissB / (npix * 255.0f);
+
+		// Apply the material's light_brightness multiplier so emissive lights
+		// (is_light: true without light_color, e.g. flame skins) scale exactly
+		// like curated light_color lights do (see the has_light_color path
+		// above). rtemissivecolor is only consumed by light generation
+		// (r_world.c / r_alias.c), so this does not brighten the surface
+		// emissive itself.
+		if (mat->light_brightness != 1.0f)
+			ModifyColorValue (glt->rtemissivecolor, mat->light_brightness);
 	}
 
 	// explicit "is_light" flag: this texture may generate static emissive
@@ -1260,13 +1284,17 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		{
 			emSum += rme[i * 4 + 2];
 		}
-		Con_Printf ("RT: applied material '%s' (glt='%s') base=%s norm=%s emis=%s gloss=%s avg_emis=%.1f/255\n",
+		Con_Printf ("RT: applied material '%s' (glt='%s') base=%s norm=%s emis=%s gloss=%s avg_emis=%.1f/255 light_brightness=%.3f is_light=%d rtemissive=%d rtemissivecolor=(%.4f, %.4f, %.4f)\n",
 		            mat->name, glt->name,
 		            mat->filename_base[0] ? mat->filename_base : "-",
 		            mat->filename_normals[0] ? mat->filename_normals : "-",
 		            mat->filename_emissive[0] ? mat->filename_emissive : "-",
 		            mat->filename_gloss[0] ? mat->filename_gloss : "-",
-		            npix > 0 ? emSum / npix : 0.0);
+		            npix > 0 ? emSum / npix : 0.0,
+		            mat->light_brightness,
+		            glt->rtislight ? 1 : 0,
+		            glt->rtemissive ? 1 : 0,
+		            glt->rtemissivecolor[0], glt->rtemissivecolor[1], glt->rtemissivecolor[2]);
 	}
 
 	RgMaterialCreateInfo info = {
@@ -1335,12 +1363,9 @@ static void TexMgr_LoadImage8 (gltexture_t *glt, byte *data)
 	}
 
 	// choose palette and padbyte
-	if (glt->flags & TEXPREF_FULLBRIGHT)
+	if (glt->flags & TEXPREF_CONCHARS)
 	{
-		if (glt->flags & TEXPREF_ALPHA)
-			usepal = d_8to24table_fbright_fence;
-		else
-			usepal = d_8to24table_fbright;
+		usepal = d_8to24table_conchars;
 	}
 #if !RT_RENDERER
 	else if (glt->flags & TEXPREF_NOBRIGHT && gl_fullbrights.value)
@@ -1351,10 +1376,6 @@ static void TexMgr_LoadImage8 (gltexture_t *glt, byte *data)
 			usepal = d_8to24table_nobright;
 	}
 #endif
-	else if (glt->flags & TEXPREF_CONCHARS)
-	{
-		usepal = d_8to24table_conchars;
-	}
 	else
 	{
 		usepal = d_8to24table;
@@ -1461,6 +1482,7 @@ gltexture_t *TexMgr_LoadImage (
 	glt->rtforcerasterize = false;
 	glt->rtemissive = false;
 	glt->rtemissivecolor[0] = glt->rtemissivecolor[1] = glt->rtemissivecolor[2] = 0.0f;
+	glt->rtemissivetex = false;
 	glt->rtislight = false;
 
 	// upload it

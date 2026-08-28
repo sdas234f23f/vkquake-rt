@@ -21,6 +21,7 @@ layout (constant_id = 0) const uint maxAlbedoLayerCount = 0;
 #define DESC_SET_LIGHT_SOURCES 6
 #define DESC_SET_CUBEMAPS 7
 #define DESC_SET_RENDER_CUBEMAP 8
+#define DESC_SET_RAY_STATS 11
 #define LIGHT_SAMPLE_METHOD (LIGHT_SAMPLE_METHOD_INDIR)
 #include "RaygenCommon.h"
 #include "Q2Asvgf.h"
@@ -75,6 +76,7 @@ Surface traceBounce(const vec3 originPosition, float originRoughness, uint origi
                     const vec3 bounceDir, float bounceMipBias)
 {
     const ShPayload p = traceIndirectRay( originInstCustomIndex, originPosition, bounceDir );
+    rayStatsAdd( RAY_STATS_CATEGORY_INDIRECT, 1 );
 
     if ( !doesPayloadContainHitInfo( p ) )
     {
@@ -103,7 +105,9 @@ vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 
 
     if ( hitSurf.isSky )
     {
-        return getSky( bounceDir ) * oneOverPdf;
+        // Prefiltered sky (high LOD): the diffuse bounce sees the sun disc
+        // smeared over a large solid angle -> no fireflies at high brightness.
+        return getSkyFilteredMultiplied( bounceDir, SKY_DIFFUSE_BOUNCE_LOD ) * oneOverPdf;
     }
 
     // Direct illumination at the second hit (bounce = 2). Same cluster-light
@@ -150,9 +154,16 @@ vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 
             if ( getLuminance( light.color ) > 0.0 )
             {
                 const float vis = traceVisibility( hitSurf, light.position, lightIndex );
+                rayStatsAdd( RAY_STATS_CATEGORY_SHADOW, 1 );
 
-                // Adaptive shadow statistics for the next frames' CDF.
-                q2AccumulateLightStats( cluster, lightSlot, hitSurf.normal, vis );
+                // Adaptive shadow statistics for the next frames' CDF. Only
+                // triangle (polygonal) lights accumulate, like Q2RTX; their
+                // per-cluster slots are the stable ones (static luma-emissive
+                // surfaces), so the counters stay attributed to the right light.
+                if ( lightSources[ lightIndex ].lightType == LIGHT_TYPE_TRIANGLE )
+                {
+                    q2AccumulateLightStats( cluster, lightSlot, hitSurf.normal, vis );
+                }
 
                 vec3 d, s;
                 shade( hitSurf, light, 1.0 / lightPdf, d, s );
@@ -173,6 +184,7 @@ vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 
         {
             const float sunVis =
                 traceVisibility( hitSurf, sunLight.position, LIGHT_ARRAY_DIRECTIONAL_LIGHT_OFFSET );
+            rayStatsAdd( RAY_STATS_CATEGORY_SHADOW, 1 );
 
             vec3 d, s;
             shade( hitSurf, sunLight, 1.0, d, s ); // pdf = 1 (sun is always sampled)
@@ -246,7 +258,10 @@ void main()
     if ( hitSurf.isSky )
     {
         hitPos      = surf.position + bounceDir * MAX_RAY_LENGTH;
-        hitRadiance = getSky( bounceDir );
+        // Prefiltered sky with a roughness-based LOD (standard PBR IBL):
+        // rough surfaces sample a blurred env, so a bright sun disc cannot
+        // turn a single GGX sample into a firefly.
+        hitRadiance = getSkyFilteredMultiplied( bounceDir, surf.roughness * ( SKY_MIP_COUNT - 1.0 ) );
     }
     else
     {
@@ -295,9 +310,16 @@ void main()
                 if ( getLuminance( light.color ) > 0.0 )
                 {
                     const float vis = traceVisibility( hitSurf, light.position, lightIndex );
+                    rayStatsAdd( RAY_STATS_CATEGORY_SHADOW, 1 );
 
-                    // Adaptive shadow statistics for the next frames' CDF.
-                    q2AccumulateLightStats( cluster, lightSlot, hitSurf.normal, vis );
+                    // Adaptive shadow statistics for the next frames' CDF. Only
+                    // triangle (polygonal) lights accumulate, like Q2RTX; their
+                    // per-cluster slots are the stable ones (static luma-emissive
+                    // surfaces), so the counters stay attributed to the right light.
+                    if ( lightSources[ lightIndex ].lightType == LIGHT_TYPE_TRIANGLE )
+                    {
+                        q2AccumulateLightStats( cluster, lightSlot, hitSurf.normal, vis );
+                    }
 
                     vec3 d, s;
                     shade( hitSurf, light, 1.0 / lightPdf, d, s );
@@ -318,6 +340,7 @@ void main()
             {
                 const float sunVis =
                     traceVisibility( hitSurf, sunLight.position, LIGHT_ARRAY_DIRECTIONAL_LIGHT_OFFSET );
+                rayStatsAdd( RAY_STATS_CATEGORY_SHADOW, 1 );
 
                 vec3 d, s;
                 shade( hitSurf, sunLight, 1.0, d, s ); // pdf = 1 (sun is always sampled)

@@ -1,7 +1,13 @@
 // Procedural atmospheric sky.
-// Fills the render cubemap used by getSkyPrimary() when skyType == SKY_TYPE_PROCEDURAL.
+// Fills two cubemaps:
+//   - cubemapOut (binding 0): the VISUAL sky, including the sun disc. Read by
+//     getSkyPrimary() for primary visibility only.
+//   - envCubemapOut (binding 2): the LIGHTING environment, WITHOUT the sun disc.
+//     Read by getSkyFiltered()/getSkyFilteredMultiplied() for sky lighting
+//     (bounces, reflections). The sun is sampled separately by the NEE
+//     directional light, so the bright disc never smears into the prefiltered
+//     env (Q2RTX behavior) and cannot produce fireflies at high LODs.
 // Single-scattering atmosphere (Rayleigh + Mie) evaluated analytically, no LUTs.
-// Sun disc is added around the directional light (sun) direction.
 // The per-face camera bases are passed from the CPU side and match the convention
 // of the rasterized sky cubemap path (Matrix::GetCubemapViewProjMat).
 
@@ -11,6 +17,7 @@
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(rgba16f, set = 0, binding = 0) uniform imageCube cubemapOut;
+layout(rgba16f, set = 0, binding = 2) uniform imageCube envCubemapOut;
 
 layout(std140, set = 0, binding = 1) uniform Params
 {
@@ -111,8 +118,9 @@ float cloudMask(vec3 dir, float time, float speed)
     return n;
 }
 
-vec3 evaluateSky(vec3 rd, vec3 sunDir, vec3 sunColor, float sunAngRad,
-                 float sunIntensity, float multiplier, float tintStrength)
+// Returns the base sky color WITHOUT the sun disc and WITHOUT the sky color
+// multiplier; both are applied by the caller (once, so they never double-multiply).
+vec3 evaluateSky(vec3 rd, vec3 sunDir, vec3 sunColor, float tintStrength)
 {
     vec3 camera = vec3(0.0, 0.0, PLANET_RADIUS);
     // exit distance of the atmosphere along the view ray
@@ -185,13 +193,6 @@ vec3 evaluateSky(vec3 rd, vec3 sunDir, vec3 sunColor, float sunAngRad,
         col = mix(col, params.cloudColor.xyz, clamp(opacity, 0.0, 1.0));
     }
 
-    // sun disc on top of the clouds
-    float cosAng = cos(sunAngRad);
-    float disc = smoothstep(cosAng, 1.0, dot(rd, sunDir));
-    col += sunColor * sunIntensity * disc;
-
-    col *= multiplier;
-
     return col;
 }
 
@@ -218,7 +219,15 @@ void main()
     float tintStrength = params.skyParams.y;
     float sunIntensity = params.skyParams.z;
 
-    vec3 col = evaluateSky(dir, sunDir, sunColor, sunAngRad, sunIntensity, multiplier, tintStrength);
+    vec3 base = evaluateSky(dir, sunDir, sunColor, tintStrength);
+
+    // lighting env: base sky, no sun disc (the sun is a separate NEE light)
+    imageStore(envCubemapOut, ipos, vec4(base * multiplier, 1.0));
+
+    // visual sky: same base plus the sun disc, then the multiplier once
+    float cosAng = cos(sunAngRad);
+    float disc = smoothstep(cosAng, 1.0, dot(dir, sunDir));
+    vec3 col = (base + sunColor * sunIntensity * disc) * multiplier;
 
     imageStore(cubemapOut, ipos, vec4(col, 1.0));
 }

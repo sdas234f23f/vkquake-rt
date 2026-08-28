@@ -7,6 +7,7 @@ materials:
     texture_gloss: textures/#lava1_gloss.png
     texture_emissive: textures/#lava1_luma.png
     is_light: true
+    light_brightness: 1.0
   - name: textures/#teleport
     texture_gloss: textures/#teleport_gloss.png
     texture_emissive: textures/#teleport_luma.png
@@ -109,10 +110,7 @@ materials:
     metalness_factor: 1.0
     is_light: false
   - name: textures/dem5_3
-    texture_normals: textures/dem5_3_n.png
-    texture_gloss: textures/dem5_3_gloss.png
     texture_emissive: textures/dem5_3_luma.png
-    metalness_factor: 1.0
     is_light: true
   - name: textures/med100
     texture_normals: textures/med100_n.png
@@ -168,19 +166,78 @@ materials:
     light_color: bdf1ff
     is_light: true
   - name: textures/+0basebtn
-    light_color: ff3333
+    texture_emissive: textures/+0basebtn_luma.png
+    light_color: d70000
+    light_brightness: 1
     is_light: true
   - name: textures/+abasebtn
-    light_color: ffe6b5
+    light_color: dbcb13
+    light_brightness: 0.1
+    is_light: true
+  - name: textures/basebutn3
+    light_color: b30000
+    light_brightness: 0.1
     is_light: true
   - name: textures/tlight01
-    light_color: 918971
+    light_color: ffffdd
+    light_brightness: 0.5
+    is_light: true
+  - name: textures/tlight02
+    texture_emissive: textures/tlight10_luma.png
+    light_color: ffffdd
+    light_brightness: 0.5
     is_light: true
   - name: textures/tlight03
-    light_color: b8d8ff
+    light_color: ffffdd
+    light_brightness: 0.5
+    is_light: true
+  - name: textures/tlight04
+    light_color: ffffdd
+    light_brightness: 0.5
     is_light: true
   - name: textures/tlight05
-    light_color: c6c4ff
+    light_color: ffffdd
+    light_brightness: 0.5
+    is_light: true
+  - name: textures/tlight06
+    light_color: ffffdd
+    light_brightness: 0.5
+    is_light: true
+  - name: textures/tlight07
+    texture_emissive: textures/tlight07_luma.png
+    light_color: ffffdd
+    light_brightness: 1.0
+    is_light: true
+  - name: textures/tlight08
+    light_color: ffffdd
+    light_brightness: 0.5
+    is_light: true
+  - name: textures/tlight09
+    light_color: ffffdd
+    light_brightness: 0.5
+    is_light: true
+  - name: textures/tlight10
+    texture_emissive: textures/tlight10_luma.png
+    light_color: fff31b
+    light_brightness: 1.0
+    is_light: true
+  - name: textures/tlight11
+    light_color: ffffdd
+    light_brightness: 1
+    is_light: true
+  - name: textures/+0slip
+    is_light: true
+  - name: textures/+1slip
+    is_light: true
+  - name: textures/+2slip
+    is_light: true
+  - name: textures/+3slip
+    is_light: true
+  - name: textures/+4slip
+    is_light: true
+  - name: textures/+5slip
+    is_light: true
+  - name: textures/+6slip
     is_light: true
   - name: textures/ceil1_1
     light_color: bdf1ff
@@ -193,6 +250,18 @@ materials:
     is_light: true
   - name: textures/light3_8
     light_color: 86818a
+    is_light: true
+  - name: textures/sliplite
+    light_color: ff0000
+    is_light: false
+  - name: textures/slipside
+    light_color: ff0000
+    is_light: false
+  - name: textures/switch_1
+    light_color: ff0000
+    is_light: false
+  - name: textures/comp1_6
+    light_color: ff0000
     is_light: true
   - name: textures/shot0sid
     texture_normals: textures/shot0sid_n.png
@@ -219,12 +288,6 @@ materials:
   - name: textures/stone1_7
     texture_normals: textures/stone1_7_n.png
     texture_gloss: textures/stone1_7_gloss.png
-    is_light: false
-  - name: textures/tlight02
-    texture_gloss: textures/tlight02_gloss.png
-    is_light: false
-  - name: textures/tlight10
-    texture_gloss: textures/tlight10_gloss.png
     is_light: false
   - name: textures/wall9_8
     texture_normals: textures/wall9_8_n.png
@@ -507,11 +570,11 @@ materials:
   - name: progs/flame.mdl:frame0
     texture_emissive: mdl_skins/flame_skin0_luma.png
     is_light: true
-    light_brightness: 3.0
+    light_brightness: 1.0
   - name: progs/flame2.mdl:frame0
     texture_emissive: mdl_skins/flame2_skin0_luma.png
     is_light: true
-    light_brightness: 3.0
+    light_brightness: 1.0
   - name: progs/g_light.mdl:frame0
     is_light: false
   - name: progs/g_nail.mdl:frame0

@@ -80,6 +80,7 @@ set(vkpt_SOURCES
     Source/ShadowMap.cpp
     Source/GodRays.cpp
     Source/Q2Denoiser.cpp
+    Source/RayStats.cpp
 )
 
 set(vkpt_KTX_FOLDER Source/KTX/lib)

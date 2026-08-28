@@ -40,7 +40,8 @@ PathTracer::TraceParams PathTracer::Bind( VkCommandBuffer                  cmd,
                                           const CubemapManager*            cubemapManager,
                                           const RenderCubemap*             renderCubemap,
                                           const PortalList*                portalList,
-                                          const Volumetric*                volumetric )
+                                          const Volumetric*                volumetric,
+                                          const RayStats*                  rayStats )
 {
     rtPipeline->Bind(cmd);
 
@@ -67,6 +68,8 @@ PathTracer::TraceParams PathTracer::Bind( VkCommandBuffer                  cmd,
         portalList->GetDescSet(frameIndex),
         // device local buffers for volumetrics
         volumetric->GetDescSet(frameIndex),
+        // ray statistics counters
+        rayStats->GetDescSet(frameIndex),
     };
 
     vkCmdBindDescriptorSets( cmd,

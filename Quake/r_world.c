@@ -70,7 +70,9 @@ static int                        rt_wldlights_sph_count = 0;
 
 // Emissive material surfaces (lava, buttons, runes, light panels) become true
 // TRIANGLE (area) lights so they are sampled via next-event estimation, instead
-// of only contributing when a random bounce happens to hit them.
+// of only contributing when a random bounce happens to hit them. The light
+// emanates from the whole surface (random point on the triangle per sample),
+// not from a single centroid point - so nothing "hangs in the air".
 static RgPolygonalLightUploadInfo rt_wldlights_emissive[MAX_WORLDLIGHTS_COUNT];
 static int                        rt_wldlights_emissive_count = 0;
 
@@ -820,6 +822,13 @@ typedef struct rt_uploadsurf_state_t
 	qmodel_t    *model;
 	msurface_t  *surf;
 	gltexture_t *diffuse_tex;
+	// Light source material (is_light / light_color / emissive) of the BASE
+	// texture, NOT the current animated frame. Animated chains (e.g.
+	// +0basebtn -> +1basebtn -> +abasebtn) share the same surfaces, but only the
+	// base frame is usually authored in materials.yaml, so R_TextureAnimation
+	// would hand us a frame without a material and the light would blink on/off
+	// every animation tick (~0.2s).
+	gltexture_t *light_tex;
 	gltexture_t *lightmap_tex;
 	qboolean     alpha_test;
 	float        alpha;
@@ -834,9 +843,10 @@ typedef struct rt_uploadsurf_state_t
 ================
 RT_EmitEmissiveWireTriangle
 
-Debug visualization: draws a cyan wireframe outline of a single emissive
-triangle light (rt_debugemissive), analogous to the existing r_showbboxes
-wireframe overlays but limited to the generated emissive area lights.
+Debug visualization: draws a cyan wireframe outline of a single generated
+triangle light (rt_debugemissive) -- both poly lights (light_color + is_light)
+and emissive area lights -- analogous to the existing r_showbboxes wireframe
+overlays.
 ================
 */
 static void RT_EmitEmissiveWireTriangle (const RgFloat3D *p0, const RgFloat3D *p1, const RgFloat3D *p2)
@@ -912,7 +922,10 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 
 	gltexture_t *diffuse_tex = r_lightmap_cheatsafe ? NULL : s->diffuse_tex;
 	gltexture_t *lightmap_tex = r_fullbright_cheatsafe ? NULL : s->lightmap_tex;
-
+	// Light source properties (is_light / light_color / emissive) come from the
+	// base texture's material so animated chains don't blink the light on/off
+	// (see rt_uploadsurf_state_t::light_tex).
+	gltexture_t *light_tex = r_lightmap_cheatsafe ? NULL : (s->light_tex ? s->light_tex : s->diffuse_tex);
 	// The classic lightmap (static baked light + dynamic dlight patches) is
 	// applied as a SHADE layer on top of the RT albedo. In the RT renderer the
 	// ray tracer produces ALL the lighting (Q2RTX model), so the classic
@@ -926,16 +939,19 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 
 	// Curated poly light textures (materials.yaml "light_color:" + "is_light: true",
 	// e.g. *light*) become light sources; with RT_USE_SPHERE_INSTEAD_OF_POLY they
-	// are converted to sphere lights. (The 1.5 emissive-material area-light
-	// generation was removed.)
-	const qboolean is_poly_light = diffuse_tex && diffuse_tex->rthaslightcolor && diffuse_tex->rtislight;
+	// are converted to sphere lights. A material that ALSO has a real
+	// texture_emissive (luma) is NOT a poly light -- it generates an emissive
+	// TRIANGLE (area) light below so the light comes from the whole luma surface
+	// instead of a single sphere centered on the surface.
+	const qboolean is_poly_light = light_tex && light_tex->rthaslightcolor && light_tex->rtislight &&
+	                               !light_tex->rtemissivetex;
 
 	if (is_poly_light)
 	{
 		const RgTransform transf = RT_GetBrushModelMatrix (s->ent);
 
 		vec3_t color;
-		VectorCopy (diffuse_tex->rtlightcolor, color);
+		VectorCopy (light_tex->rtlightcolor, color);
 		VectorScale (color, CVAR_TO_FLOAT (rt_plight_intensity), color);
 		RT_FIXUP_LIGHT_INTENSITY (color, true);
 
@@ -999,22 +1015,32 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 	// but are not registered as poly lights, so they are never sampled via
 	// next-event estimation -- only when a random bounce happens to hit them.
 	// Generate true TRIANGLE (area) lights for them so they illuminate their
-	// surroundings directly. (This also replaces world_custom_lights.txt: lava
-	// no longer needs hand-placed point lights.)
-	// Static emissive surfaces must additionally carry the explicit material
-	// flag "is_light" (glt->rtislight), so only materials marked in
-	// materials.yaml generate static triangle lights. Dynamic geometry
-	// (models/sprites) keeps the previous rtemissive-only behaviour.
-	const qboolean is_emissive = !is_poly_light && diffuse_tex && diffuse_tex->rtemissive &&
-	                             VectorLength (diffuse_tex->rtemissivecolor) > 0.01f &&
-	                             (!is_static_geom || diffuse_tex->rtislight);
+	// surroundings directly. The shader samples a random point on the triangle
+	// (sampleTriangleLight), so the light emanates from the whole luma surface,
+	// not from a single centroid point.
+	// Only materials explicitly marked with "is_light: true" in materials.yaml
+	// generate these lights (rtislight); plain luma-emissive surfaces without
+	// the flag keep the previous bounce-only behaviour. A material qualifies
+	// when it has a real texture_emissive (rtemissivetex) AND a usable color --
+	// either a hand-authored light_color or a non-zero average luma emission.
+	const qboolean is_emissive = !is_poly_light && light_tex && light_tex->rtemissivetex &&
+	                             light_tex->rtislight &&
+	                             (light_tex->rthaslightcolor ||
+	                              VectorLength (light_tex->rtemissivecolor) > 0.01f);
 
 	if (is_emissive)
 	{
 		const RgTransform transf = RT_GetBrushModelMatrix (s->ent);
 
+		// Prefer the hand-authored light_color when present (materials.yaml),
+		// falling back to the average luma emission color. The light still
+		// emanates from the whole luma TRIANGLE surface, but with the curated
+		// tint applied so e.g. tlight07 (light_color: ffff00) stays yellow.
 		vec3_t color;
-		VectorCopy (diffuse_tex->rtemissivecolor, color);
+		if (light_tex->rthaslightcolor)
+			VectorCopy (light_tex->rtlightcolor, color);
+		else
+			VectorCopy (light_tex->rtemissivecolor, color);
 		VectorScale (color, CVAR_TO_FLOAT (rt_emis_light_intensity), color);
 		RT_FIXUP_LIGHT_INTENSITY (color, true);
 
@@ -1278,6 +1304,7 @@ void R_DrawTextureChains_Water (cb_context_t *cbx, qmodel_t *model, entity_t *en
 				.model = model,
 				.surf = s,
 				.diffuse_tex = t->gltexture, // t->warpimage,
+				.light_tex = t->gltexture,
 				.lightmap_tex = (s->lightmaptexturenum >= 0) ? lightmaps[s->lightmaptexturenum].texture : greytexture,
 				.alpha_test = false,
 				.alpha = GL_WaterAlphaForEntitySurface (ent, s),
@@ -1349,6 +1376,7 @@ void R_DrawTextureChains_Multitexture (
 				.model = model,
 				.surf = s,
 				.diffuse_tex = diffuse_tex,
+				.light_tex = t->gltexture,
 				.lightmap_tex = (s->lightmaptexturenum >= 0) ? lightmaps[s->lightmaptexturenum].texture : greytexture,
 				.alpha_test = alpha_test,
 				.alpha = alpha,
@@ -1480,7 +1508,7 @@ static void PolyToSphericalLights (const RgPolygonalLightUploadInfo *polys, int 
 R_DrawWorld -- ericw -- moved from R_DrawTextureChains, which is no longer specific to the world.
 =============
 */
-void R_DrawWorld (cb_context_t *cbx, int index)
+void R_DrawWorld (cb_context_t *cbx)
 {
 	rt_wldlights_sph_count = 0;
 	rt_wldlights_tri_count = 0;
@@ -1492,7 +1520,7 @@ void R_DrawWorld (cb_context_t *cbx, int index)
 	R_BeginDebugUtilsLabel (cbx, "World");
 	if (!r_gpulightmapupdate.value)
 		R_UploadLightmaps ();
-	R_DrawTextureChains_Multitexture (cbx, cl.worldmodel, NULL, chain_world, 1, world_texstart[index], world_texend[index], ENT_UNIQUEID_WORLD);
+	R_DrawTextureChains_Multitexture (cbx, cl.worldmodel, NULL, chain_world, 1, 0, cl.worldmodel->numtextures, ENT_UNIQUEID_WORLD);
 
 #if RT_USE_SPHERE_INSTEAD_OF_POLY
 	PolyToSphericalLights (rt_wldlights_tri, rt_wldlights_tri_count, false);
@@ -1550,9 +1578,8 @@ void RT_UploadAllWorldModelLights (void)
 #endif
 
 	// Emissive material surfaces (static world geometry) become triangle area
-	// lights and are registered for per-cluster next-event estimation. This
-	// replaces world_custom_lights.txt: lava / buttons / runes no longer need
-	// hand-placed point lights, so they are not duplicated.
+	// lights and are registered for per-cluster next-event estimation, so the
+	// luma surface illuminates its surroundings directly (noise-free, NEE).
 	for (int i = 0; i < rt_wldlights_emissive_count; i++)
 	{
 		const RgPolygonalLightUploadInfo *lt = &rt_wldlights_emissive[i];
@@ -1568,6 +1595,17 @@ void RT_UploadAllWorldModelLights (void)
 
 		if (CVAR_TO_BOOL (rt_debugemissive))
 			RT_EmitEmissiveWireTriangle (&lt->positions[0], &lt->positions[1], &lt->positions[2]);
+	}
+
+	// Debug visualization for poly lights (light_color + is_light). These are
+	// converted to sphere lights above, but rt_wldlights_tri still holds the
+	// source triangles, so draw their cyan wireframe overlay.
+	if (CVAR_TO_BOOL (rt_debugemissive))
+	{
+		for (int i = 0; i < rt_wldlights_tri_count; i++)
+			RT_EmitEmissiveWireTriangle (&rt_wldlights_tri[i].positions[0],
+			                             &rt_wldlights_tri[i].positions[1],
+			                             &rt_wldlights_tri[i].positions[2]);
 	}
 }
 

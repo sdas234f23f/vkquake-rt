@@ -30,6 +30,7 @@
 #define DESC_SET_TEXTURES 4
 #define DESC_SET_RANDOM 5
 #define DESC_SET_LIGHT_SOURCES 6
+#define DESC_SET_RAY_STATS 11
 #define LIGHT_SAMPLE_METHOD (LIGHT_SAMPLE_METHOD_DIRECT)
 #include "RaygenCommon.h"
 #include "Q2Asvgf.h"
@@ -121,10 +122,19 @@ void main()
             if (getLuminance(light.color) > 0.0)
             {
                 const float vis = traceVisibility(surf, light.position, lightIndex);
+                rayStatsAdd(RAY_STATS_CATEGORY_SHADOW, 1);
 
                 // Adaptive shadow statistics for the next frames' CDF (occluded
                 // lights get a smaller mass -> sampled less -> stable choice).
-                q2AccumulateLightStats(cluster, lightSlot, surf.normal, vis);
+                // Like Q2RTX, only triangle (polygonal) lights accumulate: their
+                // per-cluster slots are the stable ones (static luma-emissive
+                // surfaces), so hit/miss counters never get mixed up with a
+                // neighbouring light's (the flicker cause). Sphere/spot lights
+                // are picked purely by solid angle x luminance.
+                if (lightSources[lightIndex].lightType == LIGHT_TYPE_TRIANGLE)
+                {
+                    q2AccumulateLightStats(cluster, lightSlot, surf.normal, vis);
+                }
 
                 vec3 d, s;
                 shade(surf, light, 1.0 / lightPdf, d, s);
@@ -144,6 +154,7 @@ void main()
         const LightSample sunLight = sampleDirectionalLight(sun, surf.position, sunRnd);
 
         const float sunVis = traceVisibility(surf, sunLight.position, LIGHT_ARRAY_DIRECTIONAL_LIGHT_OFFSET);
+        rayStatsAdd(RAY_STATS_CATEGORY_SHADOW, 1);
 
         vec3 d, s;
         shade(surf, sunLight, 1.0, d, s); // pdf = 1 (sun is always sampled)

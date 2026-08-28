@@ -379,6 +379,8 @@ int R_LightPoint (vec3_t p, lightcache_t *cache, vec3_t *lightcolor)
 
 
 extern cvar_t rt_elight_normaliz, rt_elight_default, rt_elight_default_mdl, rt_elight_radius, rt_elight_threshold;
+extern cvar_t rt_truelight;
+extern cvar_t rt_materials_only;
 extern cvar_t rt_poi_trigger, rt_poi_func, rt_poi_weapon, rt_poi_pwrup, rt_poi_armor, rt_poi_key, rt_poi_health, rt_poi_ammo;
 extern cvar_t rt_poi_distthresh, rt_poi_distthresh_super;
 
@@ -778,6 +780,14 @@ void RT_ParseElights ()
 
 void RT_UploadAllElights ()
 {
+	// rt_truelight 1 = only real light sources (emissive textures, lava,
+	// explosions, sky, etc.). Legacy entity lights that "hang in the air"
+	// are skipped.
+	if (CVAR_TO_BOOL (rt_truelight) || CVAR_TO_BOOL (rt_materials_only))
+	{
+		return;
+	}
+
 	if (CVAR_TO_FLOAT (rt_elight_normaliz) < 0.5f)
 	{
 		return;
@@ -870,6 +880,17 @@ void RT_UploadAllElights ()
 #define RT_CLUSTER_MAX_PER_LIST  64    // must match Q2_LIGHT_LIST_MAX_PER_CELL
 #define RT_CLUSTER_MAX_CLUSTERS  8192  // must match Q2_MAX_CLUSTERS
 
+// A per-cluster light slot is stable across frames: it is assigned to a light
+// unique ID the first time it is seen and kept while the light keeps appearing.
+// The renderer's adaptive shadow statistics are keyed by (cluster, slot), so a
+// stable slot keeps each light's hit/miss counters attributed to itself. Slots
+// that stay unused for this many frames are recycled for new lights.
+#define RT_CLUSTER_SLOT_RECYCLE_FRAMES 60
+// Hole marker written into the slot-indexed per-cluster lists: it never matches
+// a real light unique ID, resolves to an invalid light-array index on the
+// renderer side, and the shader skips it (mass contribution zero).
+#define RT_CLUSTER_INVALID_LIGHT       (~0ull)
+
 typedef struct rt_cluster_light_s
 {
 	uint64_t uniqueID;
@@ -922,29 +943,63 @@ void RT_ClusterLightListsUpload (void)
 	if (numClusters > RT_CLUSTER_MAX_CLUSTERS)
 		return;
 
+	// Per-cluster light slots are STABLE across frames: a slot (0..63) is
+	// assigned to each light unique ID the first time it is seen in a cluster
+	// and kept while the light keeps appearing. The renderer's adaptive shadow
+	// statistics are keyed by (cluster, slot), and the per-cluster lists are
+	// written slot-indexed (holes as RT_CLUSTER_INVALID_LIGHT), so a light's
+	// hit/miss counters are addressed by the SAME slot every frame, regardless
+	// of registration order or of other lights appearing/leaving. Without this,
+	// a light whose slot shifted read/wrote the counters of a neighbouring
+	// light, which made the CDF mass oscillate and generated emissive triangle
+	// lights toggle on/off ("timer" flicker of tlight07/tlight11 on e1m1).
+	static uint64_t *slotUids = NULL;
+	static uint32_t *slotStamp = NULL;
+	static uint8_t *slotFill = NULL;
+	static uint32_t frameStamp = 0;
+	static int allocSlots = 0;
+	static int lastClusters = 0;
+
+	const int slotCount = numClusters * RT_CLUSTER_MAX_PER_LIST;
+	if (numClusters != lastClusters)
+	{
+		if (slotCount > allocSlots)
+		{
+			slotUids = (uint64_t *)Mem_Realloc (slotUids, sizeof (uint64_t) * slotCount);
+			slotStamp = (uint32_t *)Mem_Realloc (slotStamp, sizeof (uint32_t) * slotCount);
+			slotFill = (uint8_t *)Mem_Realloc (slotFill, sizeof (uint8_t) * numClusters);
+			allocSlots = slotCount;
+		}
+		// Reset the per-cluster slot state for the new map. slotUids/slotStamp
+		// are gated by slotFill, so only slotFill and slotStamp need clearing
+		// (slotStamp is read for recycling, never for stale slots).
+		memset (slotFill, 0, sizeof (uint8_t) * numClusters);
+		memset (slotStamp, 0, sizeof (uint32_t) * slotCount);
+		lastClusters = numClusters;
+	}
+
+	frameStamp++;
+
 	static uint32_t *offsets = NULL;
 	static uint64_t *lights = NULL;
-	static int *counts = NULL;
-	static int *fill = NULL;
 	static int allocClusters = 0;
 
 	if (numClusters > allocClusters)
 	{
 		offsets = (uint32_t *)Mem_Realloc (offsets, sizeof (uint32_t) * (numClusters + 1));
 		lights = (uint64_t *)Mem_Realloc (lights, sizeof (uint64_t) * numClusters * RT_CLUSTER_MAX_PER_LIST);
-		counts = (int *)Mem_Realloc (counts, sizeof (int) * numClusters);
-		fill = (int *)Mem_Realloc (fill, sizeof (int) * numClusters);
 		allocClusters = numClusters;
 	}
 
-	// Pass 1: count how many lights each cluster sees (via the PVS).
-	memset (counts, 0, sizeof (int) * numClusters);
+	// Pass 1: find or assign the stable slot of every registered light in every
+	// cluster it illuminates (via the PVS) and stamp it as present this frame.
 	for (int li = 0; li < rt_cluster_light_count; li++)
 	{
 		mleaf_t *leaf = Mod_PointInLeaf (rt_cluster_lights[li].origin, wm);
 		if (!leaf)
 			continue;
 
+		const uint64_t uid = rt_cluster_lights[li].uniqueID;
 		const byte *vis = Mod_LeafPVS (leaf, wm);
 		for (int j = 0; j < (numClusters + 7) / 8; j++)
 		{
@@ -959,56 +1014,78 @@ void RT_ClusterLightListsUpload (void)
 				const int c = (j << 3) + k + 1;
 				if (c >= numClusters)
 					continue;
-				if (counts[c] < RT_CLUSTER_MAX_PER_LIST)
+
+				uint64_t *cuids = slotUids + c * RT_CLUSTER_MAX_PER_LIST;
+				uint32_t *cstamp = slotStamp + c * RT_CLUSTER_MAX_PER_LIST;
+				const int cfill = slotFill[c];
+
+				// Already assigned slot for this unique ID?
+				int slot = -1;
+				for (int s = 0; s < cfill; s++)
 				{
-					counts[c]++;
+					if (cuids[s] == uid)
+					{
+						slot = s;
+						break;
+					}
 				}
-				else
+
+				if (slot < 0)
+				{
+					// Recycle a slot that has been unused for a while.
+					for (int s = 0; s < cfill; s++)
+					{
+						if (frameStamp - cstamp[s] > RT_CLUSTER_SLOT_RECYCLE_FRAMES)
+						{
+							slot = s;
+							break;
+						}
+					}
+					// Otherwise append a fresh slot.
+					if (slot < 0 && slotFill[c] < RT_CLUSTER_MAX_PER_LIST)
+						slot = slotFill[c]++;
+				}
+
+				if (slot < 0)
 				{
 					if (!rt_cluster_perlist_warned)
 					{
-						Con_DWarning ("RT: a cluster sees more than RT_CLUSTER_MAX_PER_LIST (%i) "
-							"lights, the per-cluster light list is truncated.\n",
+						Con_DWarning ("RT: a cluster reached the %i distinct-light limit, "
+							"new lights are not sampled by the RT renderer.\n",
 							RT_CLUSTER_MAX_PER_LIST);
 						rt_cluster_perlist_warned = true;
 					}
+					continue;
 				}
+
+				cuids[slot] = uid;
+				cstamp[slot] = frameStamp;
 			}
 		}
 	}
 
-	// Prefix sums -> offsets.
+	// Prefix sums over the allocated slot counts -> offsets.
 	uint32_t total = 0;
 	for (int c = 0; c < numClusters; c++)
 	{
 		offsets[c] = total;
-		total += (uint32_t)counts[c];
+		total += (uint32_t)slotFill[c];
 	}
 	offsets[numClusters] = total;
 
-	// Pass 2: fill the tightly-packed light unique ID arrays.
-	memset (fill, 0, sizeof (int) * numClusters);
-	for (int li = 0; li < rt_cluster_light_count; li++)
+	// Pass 2: write the slot-indexed lists. Lights present this frame keep
+	// their slot; absent ones leave a hole (RT_CLUSTER_INVALID_LIGHT) in their
+	// slot, so downstream slots never shift and the shader's stats stay keyed
+	// to the same light as last frame.
+	for (int c = 0; c < numClusters; c++)
 	{
-		mleaf_t *leaf = Mod_PointInLeaf (rt_cluster_lights[li].origin, wm);
-		if (!leaf)
-			continue;
-
-		const byte *vis = Mod_LeafPVS (leaf, wm);
-		for (int j = 0; j < (numClusters + 7) / 8; j++)
+		const int cfill = slotFill[c];
+		uint64_t *dst = lights + offsets[c];
+		uint64_t *cuids = slotUids + c * RT_CLUSTER_MAX_PER_LIST;
+		uint32_t *cstamp = slotStamp + c * RT_CLUSTER_MAX_PER_LIST;
+		for (int s = 0; s < cfill; s++)
 		{
-			if (!vis[j])
-				continue;
-			for (int k = 0; k < 8; k++)
-			{
-				if (!(vis[j] & (1u << k)))
-					continue;
-				const int c = (j << 3) + k + 1;
-				if (c >= numClusters)
-					continue;
-				if (fill[c] < counts[c])
-					lights[offsets[c] + (uint32_t)fill[c]++] = rt_cluster_lights[li].uniqueID;
-			}
+			dst[s] = (cstamp[s] == frameStamp) ? cuids[s] : RT_CLUSTER_INVALID_LIGHT;
 		}
 	}
 

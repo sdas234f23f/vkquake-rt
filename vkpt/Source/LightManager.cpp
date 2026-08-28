@@ -160,6 +160,8 @@ static vkpt::ShLightEncoded EncodeAsTriangleLight(const RgPolygonalLightUploadIn
     vkpt::ShLightEncoded lt = {};
     lt.lightType = LIGHT_TYPE_TRIANGLE;
 
+
+
     lt.color[0] = info.color.data[0] / area;
     lt.color[1] = info.color.data[1] / area;
     lt.color[2] = info.color.data[2] / area;

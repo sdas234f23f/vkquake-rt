@@ -61,7 +61,7 @@ VkCommandBuffer VulkanDevice::BeginFrame(const RgStartFrameInfo &startInfo)
         {
             // Signal inFrameSemaphore after completion.
             // Signal outOfFrameFences, but for the next frame
-            // because we can't reset cmd pool with cmds (in this case 
+            // because we can't reset cmd pool with cmds (in this case
             // it's preFrameCmd) that are in use.
             cmdManager->Submit(preFrameCmd,
                                semaphoreToWaitOnSubmit, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
@@ -141,10 +141,10 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
 
         memcpy( gu->view, drawInfo.view, 16 * sizeof( float ) );
 
-        Matrix::MakeProjectionMatrix( gu->projection, 
-                                      aspect, 
-                                      drawInfo.fovYRadians, 
-                                      drawInfo.cameraNear, 
+        Matrix::MakeProjectionMatrix( gu->projection,
+                                      aspect,
+                                      drawInfo.fovYRadians,
+                                      drawInfo.cameraNear,
                                       drawInfo.cameraFar );
 
         Matrix::Inverse( gu->invView, gu->view );
@@ -209,7 +209,7 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
     }
 
     {
-        static_assert( sizeof( gu->skyCubemapRotationTransform ) == sizeof( IdentityMat4x4 ) && 
+        static_assert( sizeof( gu->skyCubemapRotationTransform ) == sizeof( IdentityMat4x4 ) &&
                        sizeof( IdentityMat4x4 ) == 16 * sizeof( float ), "Recheck skyCubemapRotationTransform sizes" );
         memcpy( gu->skyCubemapRotationTransform, IdentityMat4x4, 16 * sizeof( float ) );
 
@@ -299,6 +299,10 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
         {
             gu->debugShowFlags |= DEBUG_SHOW_FLAG_GOD_RAYS;
         }
+        if( fs & RG_DEBUG_DRAW_STATS_BIT )
+        {
+            gu->debugShowFlags |= DEBUG_SHOW_FLAG_RAY_STATS;
+        }
     }
 
     // 4.7: the legacy (pre-Q2RTX) render path was removed; the Q2RTX-style core
@@ -361,7 +365,7 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
     static_assert(
         RG_MEDIA_TYPE_VACUUM == MEDIA_TYPE_VACUUM &&
         RG_MEDIA_TYPE_WATER == MEDIA_TYPE_WATER &&
-        RG_MEDIA_TYPE_GLASS == MEDIA_TYPE_GLASS && 
+        RG_MEDIA_TYPE_GLASS == MEDIA_TYPE_GLASS &&
         RG_MEDIA_TYPE_ACID == MEDIA_TYPE_ACID,
         "Interface and GLSL constants must be identical" );
 
@@ -655,7 +659,7 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
 
     const uint32_t frameIndex = currentFrameState.GetFrameIndex();
 
-    
+
     bool mipLodBiasUpdated = worldSamplerManager->TryChangeMipLodBias(frameIndex, renderResolution.GetMipLodBias());
     const RgFloat2D jitter = { uniform->GetData()->jitterX, uniform->GetData()->jitterY };
 
@@ -664,14 +668,14 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
 
 
     // submit geometry and upload uniform after getting data from a scene
-    scene->SubmitForFrame(cmd, frameIndex, uniform, 
-                          uniform->GetData()->rayCullMaskWorld, 
+    scene->SubmitForFrame(cmd, frameIndex, uniform,
+                          uniform->GetData()->rayCullMaskWorld,
                           allowGeometryWithSkyFlag,
                           drawInfo.disableRayTracedGeometry);
 
 
     framebuffers->PrepareForSize(renderResolution.GetResolutionState());
-    
+
 
     if (!drawInfo.disableRasterization)
     {
@@ -790,7 +794,8 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
                                               cubemapManager.get(),
                                               rasterizer->GetRenderCubemap().get(),
                                               portalList.get(),
-                                              volumetric.get() );
+                                              volumetric.get(),
+                                              rayStats.get() );
 
         pathTracer->TracePrimaryRays(params);
 
@@ -877,12 +882,8 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
         if (godRaysActive)
         {
             godRays->Trace(cmd, frameIndex, gr, 1);
-        }
-
-        // Bilateral upscale of the half-res god rays to full resolution
-        // (Q2RTX god_rays_filter.comp); runs after all trace passes.
-        if (godRaysActive)
-        {
+            // Bilateral upscale of the half-res god rays to full resolution
+            // (Q2RTX god_rays_filter.comp); runs after all trace passes.
             godRays->Filter(cmd, frameIndex);
         }
 
@@ -927,7 +928,8 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
         cmd, frameIndex, uniform.get(), tonemapping.get(), volumetric.get() );
 
 
-    bool enableBloom = drawInfo.pBloomParams == nullptr || (drawInfo.pBloomParams != nullptr && drawInfo.pBloomParams->bloomIntensity > 0.0f);
+    const bool enableBloom = drawInfo.pBloomParams == nullptr ||
+        (drawInfo.pBloomParams != nullptr && drawInfo.pBloomParams->bloomIntensity > 0.0f);
 
     if (enableBloom)
     {
@@ -935,26 +937,26 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
     }
 
 
-    FramebufferImageIndex accum = FramebufferImageIndex::FB_IMAGE_INDEX_FINAL;
+    FramebufferImageIndex accum = FB_IMAGE_INDEX_FINAL;
     {
         // upscale the finalized (Q2RTX) image. FSR/DLSS remain available as
         // upscalers; the Q2RTX TAAU is the default fallback.
         if (renderResolution.IsNvDlssEnabled())
         {
-            accum = nvDlss->Apply(cmd, frameIndex, 
-                                               framebuffers, 
-                                               renderResolution, 
+            accum = nvDlss->Apply(cmd, frameIndex,
+                                               framebuffers,
+                                               renderResolution,
                                                jitter);
         }
         else if (renderResolution.IsAmdFsr2Enabled() || renderResolution.IsAmdFsr3Enabled())
         {
-            accum = amdFsr->Apply(cmd, frameIndex, 
-                                                framebuffers, 
-                                                renderResolution, 
-                                                jitter, 
-                                                uniform->GetData()->timeDelta, 
-                                                drawInfo.cameraNear, 
-                                                drawInfo.cameraFar, 
+            accum = amdFsr->Apply(cmd, frameIndex,
+                                                framebuffers,
+                                                renderResolution,
+                                                jitter,
+                                                uniform->GetData()->timeDelta,
+                                                drawInfo.cameraNear,
+                                                drawInfo.cameraFar,
                                                 drawInfo.fovYRadians );
         }
         else
@@ -1029,20 +1031,19 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
     }
 
     // post-effect that work on swapchain geometry too
+    if (effectWipe->Setup(args, drawInfo.postEffectParams.pWipe, swapchain, frameId))
     {
-        if (effectWipe->Setup(args, drawInfo.postEffectParams.pWipe, swapchain, frameId))
-        {
-            accum = effectWipe->Apply(args, blueNoise, accum);
-        }
-        if (drawInfo.postEffectParams.pCRT != nullptr && drawInfo.postEffectParams.pCRT->isActive)
-        {
-            effectCrtDemodulateEncode->Setup(args);
-            accum = effectCrtDemodulateEncode->Apply(args, accum);
-
-            effectCrtDecode->Setup(args);
-            accum = effectCrtDecode->Apply(args, accum);
-        }
+        accum = effectWipe->Apply(args, blueNoise, accum);
     }
+    if (drawInfo.postEffectParams.pCRT != nullptr && drawInfo.postEffectParams.pCRT->isActive)
+    {
+        effectCrtDemodulateEncode->Setup(args);
+        accum = effectCrtDemodulateEncode->Apply(args, accum);
+
+        effectCrtDecode->Setup(args);
+        accum = effectCrtDecode->Apply(args, accum);
+    }
+
 
     // blit result image to present on a surface
     framebuffers->PresentToSwapchain( cmd, frameIndex, swapchain, accum, VK_FILTER_NEAREST );
@@ -1055,9 +1056,9 @@ void VulkanDevice::EndFrame(VkCommandBuffer cmd)
 
     // submit command buffer, but wait until presentation engine has completed using image
     cmdManager->Submit(
-        cmd, 
+        cmd,
         semaphoreToWait,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         renderFinishedSemaphores[frameIndex],
         frameFences[frameIndex]);
 
@@ -1100,9 +1101,27 @@ void VulkanDevice::DrawFrame(const RgDrawFrameInfo *drawInfo)
     }
 
     VkCommandBuffer cmd = currentFrameState.GetCmdBuffer();
+    const uint32_t frameIndex = currentFrameState.GetFrameIndex();
 
     previousFrameTime = currentFrameTime;
     currentFrameTime = drawInfo->currentTime;
+
+    // stats overlay: read back the ray count accumulated by the last frame that
+    // used this frame index (BeginFrame waited on its fence), then reset the
+    // counters for the upcoming frame. MAX_FRAMES_IN_FLIGHT frames of latency.
+    if (rayStats)
+    {
+        statsRays = rayStats->GetRays(frameIndex);
+        rayStats->Reset(frameIndex);
+    }
+
+    // smoothed FPS (fixed point x10, one decimal) for the stats overlay
+    {
+        const double dt = std::max(currentFrameTime - previousFrameTime, 0.0001);
+        const float fps = static_cast<float>(1.0 / dt);
+        statsSmoothedFps = statsSmoothedFps <= 0.0f ? fps : statsSmoothedFps * 0.92f + fps * 0.08f;
+        statsFpsX10 = static_cast<uint32_t>(std::clamp(statsSmoothedFps * 10.0f, 0.0f, 99999.0f));
+    }
 
     renderResolution.Setup(drawInfo->pRenderResolutionParams,
                            swapchain->GetWidth(), swapchain->GetHeight(), nvDlss);
@@ -1160,6 +1179,18 @@ void VulkanDevice::Print(const char *pMessage) const
     userPrint->Print(pMessage);
 }
 
+void VulkanDevice::GetFrameStats(uint32_t *pRays, uint32_t *pFpsX10) const
+{
+    if (pRays != nullptr)
+    {
+        *pRays = statsRays;
+    }
+    if (pFpsX10 != nullptr)
+    {
+        *pFpsX10 = statsFpsX10;
+    }
+}
+
 
 void VulkanDevice::UploadGeometry(const RgGeometryUploadInfo *uploadInfo)
 {
@@ -1198,7 +1229,7 @@ void VulkanDevice::UploadGeometry(const RgGeometryUploadInfo *uploadInfo)
         uploadInfo->visibilityType != RG_GEOMETRY_VISIBILITY_TYPE_WORLD_1 &&
         uploadInfo->visibilityType != RG_GEOMETRY_VISIBILITY_TYPE_WORLD_2 &&
         uploadInfo->visibilityType != RG_GEOMETRY_VISIBILITY_TYPE_FIRST_PERSON &&
-        uploadInfo->visibilityType != RG_GEOMETRY_VISIBILITY_TYPE_FIRST_PERSON_VIEWER && 
+        uploadInfo->visibilityType != RG_GEOMETRY_VISIBILITY_TYPE_FIRST_PERSON_VIEWER &&
         uploadInfo->visibilityType != RG_GEOMETRY_VISIBILITY_TYPE_SKY)
     {
         throw RgException(RG_WRONG_ARGUMENT, "Incorrect type of ray traced geometry");
@@ -1492,5 +1523,5 @@ void VulkanDevice::DestroyCubemap(RgCubemap cubemap)
 {
     cubemapManager->DestroyCubemap(currentFrameState.GetFrameIndex(), cubemap);
 }
-#pragma endregion 
+#pragma endregion
 

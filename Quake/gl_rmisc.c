@@ -504,6 +504,50 @@ uint64_t RT_GetSpriteModelUniqueId (int entuniqueid)
 		entuniqueid; // entity
 }
 
+/*
+====================
+RT_GetEntityUniqueId
+
+Returns a stable per-entity ID for RT. The cl_visedicts array index varies
+frame-to-frame (static entities only enter the list when their efrags are in
+the visible leaf set, and temp entities spawn/expire constantly), which makes
+the denoiser temporal accumulation (FillMatchPrev) lose track of geometry and
+causes emissive light flicker. Instead, derive the ID from the stable entity
+pool the pointer belongs to:
+  - cl.static_entities[i]  -> i
+  - cl.entities[i]         -> num_statics + i
+  - cl_temp_entities[i]    -> num_statics + max_edicts + i
+
+All pools are disjoint allocations, so pointer-range checks are unambiguous.
+Values stay well below ENT_UNIQUEID_WORLD (65535) so they never collide with
+world / viewmodel surfaces.
+====================
+*/
+int RT_GetEntityUniqueId (const entity_t *ent)
+{
+	// cl.entities pool (networked entities, index 0 = world entity)
+	if (cl.entities && ent >= cl.entities && ent < cl.entities + cl.max_edicts)
+		return cl.num_statics + (int)(ent - cl.entities);
+
+	// temp entities pool (cl_temp_entities is a static global array)
+	if (ent >= cl_temp_entities && ent < cl_temp_entities + MAX_TEMP_ENTITIES)
+		return cl.num_statics + cl.max_edicts + (int)(ent - cl_temp_entities);
+
+	// static entities pool (efrags only exist for static entities in GLQuake)
+	if (cl.static_entities)
+	{
+		for (int i = 0; i < cl.num_statics; i++)
+		{
+			if (cl.static_entities[i] == ent)
+				return i;
+		}
+	}
+
+	// Fallback: should never be reached for entities in cl_visedicts.
+	assert (0);
+	return 0;
+}
+
 RgFloat3D RT_AnglesToDir (vec3_t angles)
 {
 	vec3_t f, r, u;

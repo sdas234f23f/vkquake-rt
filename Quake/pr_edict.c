@@ -1072,6 +1072,11 @@ void ED_LoadFromFile (const char *data)
 		}
 
 		pr_global_struct->self = EDICT_TO_PROG (ent);
+		{
+			const char *cn = PR_GetString (ent->v.classname);
+			if (cn && (strstr (cn, "flame") || strstr (cn, "torch")))
+				Con_Printf ("DIAG: spawning classname=\"%s\"\n", cn);
+		}
 		PR_ExecuteProgram (func - qcvm->functions);
 	}
 

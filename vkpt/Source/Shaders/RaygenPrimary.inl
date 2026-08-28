@@ -50,6 +50,7 @@
 #define DESC_SET_CUBEMAPS 7
 #define DESC_SET_RENDER_CUBEMAP 8
 #define DESC_SET_PORTALS 9
+#define DESC_SET_RAY_STATS 11
 #define LIGHT_SAMPLE_METHOD (LIGHT_SAMPLE_METHOD_NONE)
 #include "RaygenCommon.h"
 #include "Q2Fog.h"
@@ -312,6 +313,7 @@ void main()
     
     
     const ShPayload primaryPayload = tracePrimaryRay(cameraOrigin, cameraRayDir);
+    rayStatsAdd(RAY_STATS_CATEGORY_PRIMARY, 1);
 
 
     const uint currentRayMedia = globalUniform.cameraMediaType;
@@ -593,6 +595,7 @@ void main()
 
 
         currentPayload = traceReflectionRefractionRay(rayOrigin, rayDir, instIndex, h.geometryInstanceFlags, doRefraction);
+        rayStatsAdd(RAY_STATS_CATEGORY_REFLECTION_REFRACTION, 1);
 
         
         if (!doesPayloadContainHitInfo(currentPayload))
@@ -935,13 +938,16 @@ void main()
         }
 
         currentPayload = traceReflectionRefractionRay(rayOrigin, rayDir, instIndex, h.geometryInstanceFlags, doRefraction);
+        rayStatsAdd(RAY_STATS_CATEGORY_REFLECTION_REFRACTION, 1);
 
         if (!doesPayloadContainHitInfo(currentPayload))
         {
             // Reflection/refraction ray hit the sky: store an empty surface,
             // blend the environment into the accumulated transparency and use
-            // negative depth (Q2RTX convention).
-            const vec3 env = getSkyPrimary(rayDir);
+            // negative depth (Q2RTX convention). Prefilter the env by the
+            // surface roughness so rough reflections can't catch the sun disc
+            // as a firefly; sharp surfaces (chrome/glass) keep LOD ~0.
+            const vec3 env = getSkyFiltered(rayDir, h.roughness * (SKY_MIP_COUNT - 1.0));
             q2Transparent = q2AlphaBlendPremultiplied(vec4(env * throughput, 1.0), q2Transparent);
 
             uvec4 q2SegFog1, q2SegFog2;
