@@ -168,11 +168,11 @@ materials:
   - name: textures/+0basebtn
     texture_emissive: textures/+0basebtn_luma.png
     light_color: d70000
-    light_brightness: 1
+    light_brightness: 0.5
     is_light: true
   - name: textures/+abasebtn
     light_color: dbcb13
-    light_brightness: 0.1
+    light_brightness: 0.5
     is_light: true
   - name: textures/basebutn3
     light_color: b30000
@@ -222,8 +222,9 @@ materials:
     light_brightness: 1.0
     is_light: true
   - name: textures/tlight11
+    texture_emissive: textures/tlight11_luma.png
     light_color: ffffdd
-    light_brightness: 1
+    light_brightness: 1.0
     is_light: true
   - name: textures/+0slip
     is_light: true

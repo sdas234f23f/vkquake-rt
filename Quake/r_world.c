@@ -999,6 +999,13 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 				else
 				{
 					// overflow: skip (don't assert - large maps may exceed the cap)
+					static qboolean warned = false;
+					if (!warned)
+					{
+						warned = true;
+						Con_DWarning ("RT: polygon world lights exceeded MAX_WORLDLIGHTS_COUNT (%i)\n",
+						              MAX_WORLDLIGHTS_COUNT);
+					}
 				}
 			}
 		}
@@ -1009,77 +1016,6 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 			PolyToSphericalLights (rt_tempbuffer, num_surf_indices / 3, true);
 		}
 #endif
-	}
-
-	// Emissive material surfaces (lava, glowing buttons/runes/panels) emit light
-	// but are not registered as poly lights, so they are never sampled via
-	// next-event estimation -- only when a random bounce happens to hit them.
-	// Generate true TRIANGLE (area) lights for them so they illuminate their
-	// surroundings directly. The shader samples a random point on the triangle
-	// (sampleTriangleLight), so the light emanates from the whole luma surface,
-	// not from a single centroid point.
-	// Only materials explicitly marked with "is_light: true" in materials.yaml
-	// generate these lights (rtislight); plain luma-emissive surfaces without
-	// the flag keep the previous bounce-only behaviour. A material qualifies
-	// when it has a real texture_emissive (rtemissivetex) AND a usable color --
-	// either a hand-authored light_color or a non-zero average luma emission.
-	const qboolean is_emissive = !is_poly_light && light_tex && light_tex->rtemissivetex &&
-	                             light_tex->rtislight &&
-	                             (light_tex->rthaslightcolor ||
-	                              VectorLength (light_tex->rtemissivecolor) > 0.01f);
-
-	if (is_emissive)
-	{
-		const RgTransform transf = RT_GetBrushModelMatrix (s->ent);
-
-		// Prefer the hand-authored light_color when present (materials.yaml),
-		// falling back to the average luma emission color. The light still
-		// emanates from the whole luma TRIANGLE surface, but with the curated
-		// tint applied so e.g. tlight07 (light_color: ffff00) stays yellow.
-		vec3_t color;
-		if (light_tex->rthaslightcolor)
-			VectorCopy (light_tex->rtlightcolor, color);
-		else
-			VectorCopy (light_tex->rtemissivecolor, color);
-		VectorScale (color, CVAR_TO_FLOAT (rt_emis_light_intensity), color);
-		RT_FIXUP_LIGHT_INTENSITY (color, true);
-
-		for (int tri = 0; tri < num_surf_indices / 3; tri++)
-		{
-			const vec_t *a0 = vertices[indices[tri * 3 + 0]].position;
-			const vec_t *a1 = vertices[indices[tri * 3 + 1]].position;
-			const vec_t *a2 = vertices[indices[tri * 3 + 2]].position;
-
-			const RgFloat3D p0 = ApplyTransform (&transf, a0);
-			const RgFloat3D p1 = ApplyTransform (&transf, a1);
-			const RgFloat3D p2 = ApplyTransform (&transf, a2);
-
-			RgPolygonalLightUploadInfo light_info = {
-				.uniqueID = RT_GetBrushSurfUniqueId (s->entuniqueid, s->model, s->surf, tri),
-				.color = RT_VEC3 (color),
-				.positions = { p0, p1, p2 },
-			};
-
-			if (!is_static_geom)
-			{
-				RgResult r = rgUploadPolygonalLight (vulkan_globals.instance, &light_info);
-				RG_CHECK (r);
-
-				vec3_t center;
-				VectorAdd (p0.data, p1.data, center);
-				VectorAdd (center, p2.data, center);
-				VectorScale (center, 1.0f / 3.0f, center);
-				RT_ClusterLightAdd (light_info.uniqueID, center);
-
-				if (CVAR_TO_BOOL (rt_debugemissive))
-					RT_EmitEmissiveWireTriangle (&p0, &p1, &p2);
-			}
-			else if (rt_wldlights_emissive_count < MAX_WORLDLIGHTS_COUNT)
-			{
-				rt_wldlights_emissive[rt_wldlights_emissive_count++] = light_info;
-			}
-			// else: overflow, skip (large maps may exceed the cap)
-		}
 	}
 
 	if (s->is_teleport && !CVAR_TO_BOOL (rt_classic_render) && CVAR_TO_INT32 (rt_reflrefr_depth) > 0)
@@ -1199,10 +1135,153 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 	++(*brushpasses);
 }
 
+/*
+================
+RT_AddEmissiveLight
+
+Called once per surface from RT_BatchSurface. For surfaces whose material is
+an emissive light source (texture_emissive + is_light, with a usable color),
+this merges all fan triangles of the surface into ONE synthetic TRIANGLE area
+light, preserving the total emitted light (flux). The shader decodes the
+light's area from the unnormalized face normal stored in the .w components, so
+a canonical triangle with the same centroid, orientation and total area is an
+exact replacement for the previous per-triangle flood of lights.
+================
+*/
+static void RT_AddEmissiveLight (const rt_uploadsurf_state_t *s)
+{
+	gltexture_t *light_tex = s->light_tex ? s->light_tex : s->diffuse_tex;
+
+	// Mirror of the is_emissive predicate previously inlined in RT_FlushBatch.
+	if (!light_tex || !light_tex->rtislight || !light_tex->rtemissivetex)
+		return;
+	if (!light_tex->rthaslightcolor && VectorLength (light_tex->rtemissivecolor) <= 0.01f)
+		return;
+
+	// Prefer the hand-authored light_color when present (materials.yaml),
+	// falling back to the average luma emission color.
+	vec3_t color;
+	if (light_tex->rthaslightcolor)
+		VectorCopy (light_tex->rtlightcolor, color);
+	else
+		VectorCopy (light_tex->rtemissivecolor, color);
+	VectorScale (color, CVAR_TO_FLOAT (rt_emis_light_intensity), color);
+	RT_FIXUP_LIGHT_INTENSITY (color, true);
+
+	const RgTransform transf = RT_GetBrushModelMatrix (s->ent);
+	const int        vertcount = s->surf->numedges;
+	const RgVertex  *verts = rtallbrushvertices + s->surf->vbo_firstvert;
+
+	vec3_t accum_center = {0, 0, 0};
+	vec3_t accum_normal = {0, 0, 0};
+	float  total_area = 0.0f;
+	int    num_tris = 0;
+
+	// Merge the surface's fan triangles (v0, v_{i-1}, v_i), the same
+	// triangulation as R_TriangleIndicesForSurf, into one area-weighted light.
+	for (int i = 2; i < vertcount; i++)
+	{
+		const RgFloat3D p0 = ApplyTransform (&transf, verts[0].position);
+		const RgFloat3D p1 = ApplyTransform (&transf, verts[i - 1].position);
+		const RgFloat3D p2 = ApplyTransform (&transf, verts[i].position);
+
+		vec3_t e1, e2, cross;
+		VectorSubtract (p1.data, p0.data, e1);
+		VectorSubtract (p2.data, p0.data, e2);
+		CrossProduct (e1, e2, cross);
+
+		const float area = 0.5f * VectorLength (cross);
+		if (area <= 0.0f)
+			continue;
+
+		vec3_t tri_center;
+		VectorAdd (p0.data, p1.data, tri_center);
+		VectorAdd (tri_center, p2.data, tri_center);
+		VectorScale (tri_center, 1.0f / 3.0f, tri_center);
+
+		VectorMA (accum_center, area, tri_center, accum_center);
+		VectorAdd (accum_normal, cross, accum_normal);
+		total_area += area;
+		num_tris++;
+	}
+
+	if (num_tris == 0 || total_area <= 0.0f)
+		return;
+
+	// Area-weighted centroid; face normal with magnitude 2*total_area, which is
+	// how the shader recovers the light's area from the unnormalized normal.
+	VectorScale (accum_center, 1.0f / total_area, accum_center);
+
+	vec3_t normal;
+	VectorCopy (accum_normal, normal);
+	VectorNormalize (normal);
+
+	// Build a canonical right triangle with the same centroid, face normal and
+	// total area: |(V1-V0)x(V2-V0)| = L^2 = 2 * total_area, so L = sqrt(2*area).
+	const float L = sqrt (2.0f * total_area);
+
+	vec3_t axis = {0, 0, 1};
+	if (fabs (normal[2]) > 0.9f)
+		RT_VEC3_SET (axis, 1, 0, 0);
+
+	vec3_t u, v, v0, v1, v2;
+	CrossProduct (axis, normal, u);
+	VectorNormalize (u);
+	CrossProduct (normal, u, v);
+	VectorMA (accum_center, -(L / 3.0f), u, v0);
+	VectorMA (v0, -(L / 3.0f), v, v0);
+	VectorMA (accum_center, (2.0f * L) / 3.0f, u, v1);
+	VectorMA (v1, -(L / 3.0f), v, v1);
+	VectorMA (accum_center, -(L / 3.0f), u, v2);
+	VectorMA (v2, (2.0f * L) / 3.0f, v, v2);
+
+	RgPolygonalLightUploadInfo light_info = {
+		.uniqueID = RT_GetBrushSurfUniqueId (s->entuniqueid, s->model, s->surf, 0),
+		.color = RT_VEC3 (color),
+		.positions = { RT_VEC3 (v0), RT_VEC3 (v1), RT_VEC3 (v2) },
+	};
+
+	// The old per-triangle lights each carried this color, so the merged light
+	// carries num_tris times it to preserve the total emitted light: the NEE
+	// estimate scales with color (the decoded area cancels out).
+	VectorScale (light_info.color.data, (float) num_tris, light_info.color.data);
+
+	const qboolean is_static_geom = (s->model == cl.worldmodel) && !s->is_warp;
+
+	if (!is_static_geom)
+	{
+		RgResult r = rgUploadPolygonalLight (vulkan_globals.instance, &light_info);
+		RG_CHECK (r);
+
+		RT_ClusterLightAdd (light_info.uniqueID, accum_center);
+
+		if (CVAR_TO_BOOL (rt_debugemissive))
+			RT_EmitEmissiveWireTriangle (&light_info.positions[0], &light_info.positions[1], &light_info.positions[2]);
+	}
+	else if (rt_wldlights_emissive_count < MAX_WORLDLIGHTS_COUNT)
+	{
+		rt_wldlights_emissive[rt_wldlights_emissive_count++] = light_info;
+	}
+	else
+	{
+		static qboolean warned = false;
+		if (!warned)
+		{
+			warned = true;
+			Con_DWarning ("RT: emissive world lights exceeded MAX_WORLDLIGHTS_COUNT (%i)\n",
+			              MAX_WORLDLIGHTS_COUNT);
+		}
+	}
+}
+
 static void RT_BatchSurface (cb_context_t *cbx, const rt_uploadsurf_state_t *s, uint32_t *brushpasses)
 {
 	int num_surf_verts = s->surf->numedges;
 	int num_surf_indices = R_NumTriangleIndicesForSurf (num_surf_verts);
+
+	// Emissive material surfaces generate ONE triangle area light per surface
+	// (merged from the fan), so large luma surfaces don't blow the light budget.
+	RT_AddEmissiveLight (s);
 
 	if (cbx->batch_indices_count + num_surf_indices > MAX_BATCH_INDICES ||
 		cbx->batch_verts_count + num_surf_verts > MAX_BATCH_VERTS)

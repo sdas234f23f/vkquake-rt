@@ -22,6 +22,7 @@
 
 #include <cmath>
 #include <array>
+#include <cstdio>
 
 #include "Generated/ShaderCommonC.h"
 #include "CmdLabel.h"
@@ -313,6 +314,8 @@ void vkpt::LightManager::AddLight(uint32_t frameIndex, uint64_t uniqueId, const 
 {
     if (GetLightArrayEnd(regLightCount, dirLightCount) >= LIGHT_ARRAY_MAX_SIZE)
     {
+        fprintf(stderr, "vkpt: light array overflow (regLightCount=%u dirLightCount=%u LIGHT_ARRAY_MAX_SIZE=%u) - dropping light(s)\n",
+                regLightCount, dirLightCount, LIGHT_ARRAY_MAX_SIZE);
         assert(0);
         return;
     }
