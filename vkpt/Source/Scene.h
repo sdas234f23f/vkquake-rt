@@ -56,6 +56,7 @@ public:
 
     void UploadLight(uint32_t frameIndex, const RgSphericalLightUploadInfo &lightInfo);
     void UploadLight(uint32_t frameIndex, const RgPolygonalLightUploadInfo &lightInfo);
+    void UploadLight(uint32_t frameIndex, const RgTexturedAreaLightUploadInfo &lightInfo, uint32_t textureIndex);
     void UploadLight(uint32_t frameIndex, const RgDirectionalLightUploadInfo &lightInfo);
     void UploadLight(uint32_t frameIndex, const RgSpotLightUploadInfo &lightInfo);
 

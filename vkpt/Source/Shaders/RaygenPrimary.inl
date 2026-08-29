@@ -355,7 +355,7 @@ void main()
 
     imageStore(framebufIsSky,               pix, ivec4(0));
     imageStore(framebufAlbedo,              getRegularPixFromCheckerboardPix(pix), vec4(h.albedo, 0.0));
-    imageStore(framebufScreenEmisRT,        getRegularPixFromCheckerboardPix(pix), vec4(h.albedo * screenEmission * throughput , 0.0));
+    imageStore(framebufScreenEmisRT,        getRegularPixFromCheckerboardPix(pix), vec4((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_LUMA) != 0 ? vec3(screenEmission) : h.albedo * screenEmission * throughput , 0.0));
     imageStore(framebufAcidFogRT,           getRegularPixFromCheckerboardPix(pix), vec4(getGlowingMediaFog(currentRayMedia, firstHitDepthLinear), 0));
     imageStoreNormal(                       pix, h.normal);
     imageStoreNormalGeometry(               pix, h.normalGeom);

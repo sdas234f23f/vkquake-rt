@@ -195,7 +195,7 @@ def main():
 
                 with open(filename, "r") as dpd:
                     for line in dpd:
-                        if "#include" in line:
+                        if "#include" in line and '"' in line:
                             dpdFile = line.split("\"")[1]
                             for dpdFolder in DEPENDENCY_FOLDERS:
                                 dpd = abspath(dpdFolder + dpdFile)
@@ -225,7 +225,7 @@ def main():
 
             with open(filename, "r") as dpd:
                 for line in dpd:
-                    if "#include" in line:
+                    if "#include" in line and '"' in line:
                         dpdFile = line.split("\"")[1]
                         for dpdFolder in DEPENDENCY_FOLDERS:
                             dpd = abspath(dpdFolder + dpdFile)

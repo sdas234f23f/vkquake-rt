@@ -344,6 +344,11 @@ void vkpt::Scene::UploadLight(uint32_t frameIndex, const RgPolygonalLightUploadI
     lightManager->AddPolygonalLight(frameIndex, lightInfo);
 }
 
+void vkpt::Scene::UploadLight(uint32_t frameIndex, const RgTexturedAreaLightUploadInfo &lightInfo, uint32_t textureIndex)
+{
+    lightManager->AddTexturedAreaLight(frameIndex, lightInfo, textureIndex);
+}
+
 void Scene::UploadLight(uint32_t frameIndex,const RgSpotLightUploadInfo &lightInfo)
 {
     lightManager->AddSpotlight(frameIndex, lightInfo);

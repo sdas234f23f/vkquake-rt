@@ -57,6 +57,10 @@ public:
 
     void AddSphericalLight(uint32_t frameIndex, const RgSphericalLightUploadInfo &info);
     void AddPolygonalLight(uint32_t frameIndex, const RgPolygonalLightUploadInfo &info);
+    // textureIndex is the resolved RME (emission) texture index, packed into
+    // data_0.w as float bits. The caller (VulkanDevice) resolves it from the
+    // light's material; EMPTY_TEXTURE_INDEX means "no mask" (full brightness).
+    void AddTexturedAreaLight(uint32_t frameIndex, const RgTexturedAreaLightUploadInfo &info, uint32_t textureIndex);
     void AddDirectionalLight(uint32_t frameIndex, const RgDirectionalLightUploadInfo &info);
     void AddSpotlight(uint32_t frameIndex, const RgSpotLightUploadInfo &info);
 

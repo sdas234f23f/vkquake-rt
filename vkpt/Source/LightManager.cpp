@@ -21,6 +21,7 @@
 #include "LightManager.h"
 
 #include <cmath>
+#include <cstring>
 #include <array>
 #include <cstdio>
 
@@ -186,6 +187,71 @@ static vkpt::ShLightEncoded EncodeAsTriangleLight(const RgPolygonalLightUploadIn
     return lt;
 }
 
+// Phase 2 textured area light: the emitting surface is a CONVEX POLYGON in
+// texture space (the face's own texcoords, up to MAX_TEXTURED_AREA_LIGHT_VERTS
+// verts) mapped to world through the affine map world = A*s + B*t + C recovered
+// from the face vertices. The polygon's world footprint therefore lies exactly
+// on the brush face geometry. The shader samples the UV polygon uniformly
+// (constant Jacobian -> uniform area sample in world) and modulates the color
+// by the luma mask at the sampled UV, so light comes from the actual luma
+// footprint (lamp body, medkit diodes) instead of the whole quad. The color is
+// NOT divided by area (unlike triangle lights): the uniform area-sampling pdf
+// (1/area) is folded into the shader's dw = area * G, so the encoded radiance
+// is simply the per-unit-area radiance at full mask brightness.
+//
+// Packing:
+//   data_0.xyz = A (affine S axis), data_0.w = RME texture index (as float)
+//   data_1.xyz = B (affine T axis), data_1.w = mean emissivity
+//   data_2.xyz = C (affine offset), data_2.w = numVerts (as float)
+//   data_3..data_6 = uvVerts, two (s,t) pairs per vec4 (verts 0..7)
+//   data_7.xyz = outward normal, data_7.w = exact world-space polygon area
+static vkpt::ShLightEncoded EncodeAsTexturedAreaLight(const RgTexturedAreaLightUploadInfo &info, uint32_t textureIndex)
+{
+    vkpt::ShLightEncoded lt = {};
+    lt.lightType = LIGHT_TYPE_TEXTURED_AREA;
+
+    // Radiance at full mask brightness. NOT divided by area: the shader folds
+    // the polygon's area into dw = area * G (solid angle), so the encoded
+    // radiance is the per-unit-area radiance and the contribution scales with
+    // the lit footprint.
+    lt.color[0] = info.color.data[0];
+    lt.color[1] = info.color.data[1];
+    lt.color[2] = info.color.data[2];
+
+    lt.data_0[0] = info.A.data[0];
+    lt.data_0[1] = info.A.data[1];
+    lt.data_0[2] = info.A.data[2];
+    // texture index as float bits
+    memcpy(&lt.data_0[3], &textureIndex, sizeof(uint32_t));
+
+    lt.data_1[0] = info.B.data[0];
+    lt.data_1[1] = info.B.data[1];
+    lt.data_1[2] = info.B.data[2];
+    lt.data_1[3] = info.meanEmiss;
+
+    lt.data_2[0] = info.C.data[0];
+    lt.data_2[1] = info.C.data[1];
+    lt.data_2[2] = info.C.data[2];
+    lt.data_2[3] = static_cast<float>(info.numVerts);
+
+    const int n = std::max(0, std::min(static_cast<int>(info.numVerts), static_cast<int>(MAX_TEXTURED_AREA_LIGHT_VERTS)));
+    float *slots[4] = { lt.data_3, lt.data_4, lt.data_5, lt.data_6 };
+    for (int i = 0; i < n; i++)
+    {
+        float *slot = slots[i >> 1];
+        const int k = (i & 1) * 2;
+        slot[k]     = info.uvVerts[i].data[0];
+        slot[k + 1] = info.uvVerts[i].data[1];
+    }
+
+    lt.data_7[0] = info.normal.data[0];
+    lt.data_7[1] = info.normal.data[1];
+    lt.data_7[2] = info.normal.data[2];
+    lt.data_7[3] = info.area;
+
+    return lt;
+}
+
 static vkpt::ShLightEncoded EncodeAsSpotLight(const RgSpotLightUploadInfo &info)
 {
     RgFloat3D direction = info.direction;
@@ -286,6 +352,7 @@ vkpt::LightArrayIndex vkpt::LightManager::GetIndex(const vkpt::ShLightEncoded &e
     case LIGHT_TYPE_SPHERE:
     case LIGHT_TYPE_TRIANGLE:
     case LIGHT_TYPE_SPOT:
+    case LIGHT_TYPE_TEXTURED_AREA:
         return LightArrayIndex{ LIGHT_ARRAY_REGULAR_LIGHTS_OFFSET + regLightCount };
     default:
         assert(0);
@@ -303,6 +370,7 @@ void vkpt::LightManager::IncrementCount(const ShLightEncoded& encodedLight)
         case LIGHT_TYPE_SPHERE:
         case LIGHT_TYPE_TRIANGLE:
         case LIGHT_TYPE_SPOT:
+        case LIGHT_TYPE_TEXTURED_AREA:
             regLightCount++;
             break;
         default:
@@ -358,6 +426,16 @@ void vkpt::LightManager::AddPolygonalLight(uint32_t frameIndex, const RgPolygona
     }
 
     AddLight(frameIndex, info.uniqueID, EncodeAsTriangleLight(info, unnormalizedNormal));
+}
+
+void vkpt::LightManager::AddTexturedAreaLight(uint32_t frameIndex, const RgTexturedAreaLightUploadInfo &info, uint32_t textureIndex)
+{
+    if (IsColorTooDim(info.color.data))
+    {
+        return;
+    }
+
+    AddLight(frameIndex, info.uniqueID, EncodeAsTexturedAreaLight(info, textureIndex));
 }
 
 void vkpt::LightManager::AddSpotlight(uint32_t frameIndex, const RgSpotLightUploadInfo &info)

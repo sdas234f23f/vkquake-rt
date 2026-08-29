@@ -94,6 +94,7 @@ public:
     void UploadSphericalLight(const RgSphericalLightUploadInfo *pLightInfo);
     void UploadSpotlight(const RgSpotLightUploadInfo *pLightInfo);
     void UploadPolygonalLight(const RgPolygonalLightUploadInfo *pLightInfo);
+    void UploadTexturedAreaLight(const RgTexturedAreaLightUploadInfo *pLightInfo);
 
     // Q2RTX per-BSP-cluster light lists (uploaded by the game each frame).
     void UploadClusterLightLists(const RgClusterLightListsUploadInfo *pInfo);

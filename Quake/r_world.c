@@ -68,13 +68,13 @@ static int                        rt_wldlights_tri_count = 0;
 static RgSphericalLightUploadInfo rt_wldlights_sph[MAX_WORLDLIGHTS_COUNT];
 static int                        rt_wldlights_sph_count = 0;
 
-// Emissive material surfaces (lava, buttons, runes, light panels) become true
-// TRIANGLE (area) lights so they are sampled via next-event estimation, instead
-// of only contributing when a random bounce happens to hit them. The light
-// emanates from the whole surface (random point on the triangle per sample),
-// not from a single centroid point - so nothing "hangs in the air".
-static RgPolygonalLightUploadInfo rt_wldlights_emissive[MAX_WORLDLIGHTS_COUNT];
-static int                        rt_wldlights_emissive_count = 0;
+// Emissive material surfaces (lava, buttons, runes, light panels) become
+// textured area lights (Phase 2): the emission follows the luma mask of the
+// material's RME texture, so the light comes from the actual luma footprint
+// (lamp body, medkit diodes) and is sampled via next-event estimation instead
+// of only contributing when a random bounce happens to hit them.
+static RgTexturedAreaLightUploadInfo rt_wldlights_emissive[MAX_WORLDLIGHTS_COUNT];
+static int                           rt_wldlights_emissive_count = 0;
 
 #if RT_USE_SPHERE_INSTEAD_OF_POLY
 static RgPolygonalLightUploadInfo rt_tempbuffer[512]; 
@@ -1137,15 +1137,123 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 
 /*
 ================
+RT_TexturedAreaLightCenter
+
+World-space center of a textured area light's UV polygon (average of the UV
+verts mapped through the affine map world = A*s + B*t + C).
+================
+*/
+static void RT_TexturedAreaLightCenter (const RgTexturedAreaLightUploadInfo *lt, vec3_t out)
+{
+	float s = 0.0f, t = 0.0f;
+	const int n = lt->numVerts;
+
+	for (int i = 0; i < n; i++)
+	{
+		s += lt->uvVerts[i].data[0];
+		t += lt->uvVerts[i].data[1];
+	}
+
+	const float inv = n > 0 ? 1.0f / (float) n : 0.0f;
+	s *= inv;
+	t *= inv;
+
+	out[0] = lt->A.data[0] * s + lt->B.data[0] * t + lt->C.data[0];
+	out[1] = lt->A.data[1] * s + lt->B.data[1] * t + lt->C.data[1];
+	out[2] = lt->A.data[2] * s + lt->B.data[2] * t + lt->C.data[2];
+}
+
+/*
+================
+RT_EmitEmissiveWirePolygon
+
+rt_debugemissive overlay: draw the light's UV polygon mapped to world (fanned
+from vertex 0) so it visibly coincides with the brush face geometry.
+================
+*/
+static void RT_EmitEmissiveWirePolygon (const RgTexturedAreaLightUploadInfo *lt)
+{
+	RgFloat3D wv[MAX_TEXTURED_AREA_LIGHT_VERTS];
+	const int n = lt->numVerts;
+
+	if (n < 3)
+		return;
+
+	for (int i = 0; i < n; i++)
+	{
+		const float s = lt->uvVerts[i].data[0];
+		const float t = lt->uvVerts[i].data[1];
+		wv[i].data[0] = lt->A.data[0] * s + lt->B.data[0] * t + lt->C.data[0];
+		wv[i].data[1] = lt->A.data[1] * s + lt->B.data[1] * t + lt->C.data[1];
+		wv[i].data[2] = lt->A.data[2] * s + lt->B.data[2] * t + lt->C.data[2];
+	}
+
+	for (int i = 1; i < n - 1; i++)
+		RT_EmitEmissiveWireTriangle (&wv[0], &wv[i], &wv[i + 1]);
+}
+
+/*
+================
+RT_UploadEmissiveLight
+
+Route one generated textured area light to its destination: immediate GPU
+upload for dynamic geometry (with per-cluster registration and the
+rt_debugemissive wireframe overlay), or the static per-frame upload list for
+world geometry.
+================
+*/
+static void RT_UploadEmissiveLight (const RgTexturedAreaLightUploadInfo *light_info, qboolean is_static_geom)
+{
+	if (!is_static_geom)
+	{
+		RgResult r = rgUploadTexturedAreaLight (vulkan_globals.instance, light_info);
+		RG_CHECK (r);
+
+		vec3_t center;
+		RT_TexturedAreaLightCenter (light_info, center);
+		RT_ClusterLightAdd (light_info->uniqueID, center);
+
+		if (CVAR_TO_BOOL (rt_debugemissive))
+		{
+			RT_EmitEmissiveWirePolygon (light_info);
+		}
+	}
+	else if (rt_wldlights_emissive_count < MAX_WORLDLIGHTS_COUNT)
+	{
+		rt_wldlights_emissive[rt_wldlights_emissive_count++] = *light_info;
+	}
+	else
+	{
+		static qboolean warned = false;
+		if (!warned)
+		{
+			warned = true;
+			Con_DWarning ("RT: emissive world lights exceeded MAX_WORLDLIGHTS_COUNT (%i)\n",
+			              MAX_WORLDLIGHTS_COUNT);
+		}
+	}
+}
+
+/*
+================
 RT_AddEmissiveLight
 
 Called once per surface from RT_BatchSurface. For surfaces whose material is
 an emissive light source (texture_emissive + is_light, with a usable color),
-this merges all fan triangles of the surface into ONE synthetic TRIANGLE area
-light, preserving the total emitted light (flux). The shader decodes the
-light's area from the unnormalized face normal stored in the .w components, so
-a canonical triangle with the same centroid, orientation and total area is an
-exact replacement for the previous per-triangle flood of lights.
+this emits ONE textured area light covering the surface's actual texture area
+(Phase 2).
+
+The emitting surface is the parallelogram spanned by the surface's texcoord
+bounding rectangle, mapped to world through the affine map world = A*s + B*t + C
+recovered by a least-squares fit of the surface's own vertices. The renderer
+samples this parallelogram uniformly and modulates the radiance by the material's
+luma mask (RME .b), so the light comes from the actual luma footprint (lamp
+body, medkit diodes) — noise-free NEE, no generated triangle geometry, and every
+face of an emissive box is lit, not just one.
+
+The color is the radiance at full mask brightness; the shader samples the luma
+mask inside the polygon and multiplies the polygon's area into dw (solid
+angle), so the emitted light scales with the lit footprint.
 ================
 */
 static void RT_AddEmissiveLight (const rt_uploadsurf_state_t *s)
@@ -1172,106 +1280,297 @@ static void RT_AddEmissiveLight (const rt_uploadsurf_state_t *s)
 	const int        vertcount = s->surf->numedges;
 	const RgVertex  *verts = rtallbrushvertices + s->surf->vbo_firstvert;
 
+	if (vertcount < 3)
+		return;
+
+	// Accumulate the surface's fan triangles (v0, v_{i-1}, v_i), the same
+	// triangulation as R_TriangleIndicesForSurf, into an area-weighted
+	// centroid/normal, the total area and the fan triangle count. num_tris
+	// drives the flux: the old per-triangle lights each emitted "color", so
+	// the footprint light must carry color * num_tris of total flux to stay
+	// equally bright.
 	vec3_t accum_center = {0, 0, 0};
 	vec3_t accum_normal = {0, 0, 0};
 	float  total_area = 0.0f;
 	int    num_tris = 0;
 
-	// Merge the surface's fan triangles (v0, v_{i-1}, v_i), the same
-	// triangulation as R_TriangleIndicesForSurf, into one area-weighted light.
-	for (int i = 2; i < vertcount; i++)
+	// Texcoord moments for the affine fit world = A*s + B*t + C.
+	float ss = 0.0f, st = 0.0f, tt = 0.0f, ssum = 0.0f, tsum = 0.0f;
+	vec3_t sx = {0, 0, 0}, tx = {0, 0, 0}, psum = {0, 0, 0};
+
+	for (int i = 0; i < vertcount; i++)
 	{
-		const RgFloat3D p0 = ApplyTransform (&transf, verts[0].position);
-		const RgFloat3D p1 = ApplyTransform (&transf, verts[i - 1].position);
-		const RgFloat3D p2 = ApplyTransform (&transf, verts[i].position);
+		RgFloat3D    p = ApplyTransform (&transf, verts[i].position);
+		const float  su = verts[i].texCoord[0];
+		const float  tv = verts[i].texCoord[1];
 
-		vec3_t e1, e2, cross;
-		VectorSubtract (p1.data, p0.data, e1);
-		VectorSubtract (p2.data, p0.data, e2);
-		CrossProduct (e1, e2, cross);
+		ss += su * su;
+		st += su * tv;
+		tt += tv * tv;
+		ssum += su;
+		tsum += tv;
 
-		const float area = 0.5f * VectorLength (cross);
-		if (area <= 0.0f)
-			continue;
+		VectorMA (sx, su, p.data, sx);
+		VectorMA (tx, tv, p.data, tx);
+		VectorAdd (psum, p.data, psum);
 
-		vec3_t tri_center;
-		VectorAdd (p0.data, p1.data, tri_center);
-		VectorAdd (tri_center, p2.data, tri_center);
-		VectorScale (tri_center, 1.0f / 3.0f, tri_center);
+		if (i >= 2)
+		{
+			const RgFloat3D p0 = ApplyTransform (&transf, verts[0].position);
+			const RgFloat3D p1 = ApplyTransform (&transf, verts[i - 1].position);
+			const RgFloat3D p2 = p;
 
-		VectorMA (accum_center, area, tri_center, accum_center);
-		VectorAdd (accum_normal, cross, accum_normal);
-		total_area += area;
-		num_tris++;
+			vec3_t e1, e2, cross;
+			VectorSubtract (p1.data, p0.data, e1);
+			VectorSubtract (p2.data, p0.data, e2);
+			CrossProduct (e1, e2, cross);
+
+			const float area = 0.5f * VectorLength (cross);
+			if (area <= 0.0f)
+				continue;
+
+			vec3_t tri_center;
+			VectorAdd (p0.data, p1.data, tri_center);
+			VectorAdd (tri_center, p2.data, tri_center);
+			VectorScale (tri_center, 1.0f / 3.0f, tri_center);
+
+			VectorMA (accum_center, area, tri_center, accum_center);
+			VectorAdd (accum_normal, cross, accum_normal);
+			total_area += area;
+			num_tris++;
+		}
 	}
 
 	if (num_tris == 0 || total_area <= 0.0f)
 		return;
 
-	// Area-weighted centroid; face normal with magnitude 2*total_area, which is
-	// how the shader recovers the light's area from the unnormalized normal.
-	VectorScale (accum_center, 1.0f / total_area, accum_center);
-
 	vec3_t normal;
-	VectorCopy (accum_normal, normal);
-	VectorNormalize (normal);
+	{
+		vec3_t accum_normal_dir;
+		VectorCopy (accum_normal, accum_normal_dir);
+		VectorNormalize (accum_normal_dir);
 
-	// Build a canonical right triangle with the same centroid, face normal and
-	// total area: |(V1-V0)x(V2-V0)| = L^2 = 2 * total_area, so L = sqrt(2*area).
-	const float L = sqrt (2.0f * total_area);
-
-	vec3_t axis = {0, 0, 1};
-	if (fabs (normal[2]) > 0.9f)
-		RT_VEC3_SET (axis, 1, 0, 0);
-
-	vec3_t u, v, v0, v1, v2;
-	CrossProduct (axis, normal, u);
-	VectorNormalize (u);
-	CrossProduct (normal, u, v);
-	VectorMA (accum_center, -(L / 3.0f), u, v0);
-	VectorMA (v0, -(L / 3.0f), v, v0);
-	VectorMA (accum_center, (2.0f * L) / 3.0f, u, v1);
-	VectorMA (v1, -(L / 3.0f), v, v1);
-	VectorMA (accum_center, -(L / 3.0f), u, v2);
-	VectorMA (v2, (2.0f * L) / 3.0f, v, v2);
-
-	RgPolygonalLightUploadInfo light_info = {
-		.uniqueID = RT_GetBrushSurfUniqueId (s->entuniqueid, s->model, s->surf, 0),
-		.color = RT_VEC3 (color),
-		.positions = { RT_VEC3 (v0), RT_VEC3 (v1), RT_VEC3 (v2) },
-	};
-
-	// The old per-triangle lights each carried this color, so the merged light
-	// carries num_tris times it to preserve the total emitted light: the NEE
-	// estimate scales with color (the decoded area cancels out).
-	VectorScale (light_info.color.data, (float) num_tris, light_info.color.data);
+		// The fan-winding normal (accum_normal) depends on the vertex winding
+		// order, which is NOT consistent across brush surfaces - half of the
+		// emissive quads can end up pointing INTO the wall, so their one-sided
+		// light (max(0, dot(normal, lightToSurf))) never reaches the room. Use
+		// the BSP plane normal instead, corrected for SURF_PLANEBACK: for a
+		// backface surface the visible face normal is -plane->normal (see
+		// pr_ext.c / r_brush.c). Fall back to the winding normal if unavailable.
+		if (s->surf->plane != NULL)
+		{
+			vec3_t pn;
+			VectorCopy (s->surf->plane->normal, pn);
+			if (s->surf->flags & SURF_PLANEBACK)
+			{
+				pn[0] = -pn[0];
+				pn[1] = -pn[1];
+				pn[2] = -pn[2];
+			}
+			normal[0] = transf.matrix[0][0] * pn[0] + transf.matrix[0][1] * pn[1] + transf.matrix[0][2] * pn[2];
+			normal[1] = transf.matrix[1][0] * pn[0] + transf.matrix[1][1] * pn[1] + transf.matrix[1][2] * pn[2];
+			normal[2] = transf.matrix[2][0] * pn[0] + transf.matrix[2][1] * pn[1] + transf.matrix[2][2] * pn[2];
+			VectorNormalize (normal);
+		}
+		else
+		{
+			VectorCopy (accum_normal_dir, normal);
+		}
+	}
 
 	const qboolean is_static_geom = (s->model == cl.worldmodel) && !s->is_warp;
 
-	if (!is_static_geom)
-	{
-		RgResult r = rgUploadPolygonalLight (vulkan_globals.instance, &light_info);
-		RG_CHECK (r);
+	// --- Recover the affine map world = A*s + B*t + C from the surface's own
+	// vertices by solving the 3x3 normal equations with partial pivoting. For
+	// planar brush faces this reproduces the exact texture projection, so the
+	// parallelogram below lies exactly on the rendered surface.
+	qboolean fit_ok = false;
+	vec3_t   A = {0, 0, 0}, B = {0, 0, 0}, C = {0, 0, 0};
 
-		RT_ClusterLightAdd (light_info.uniqueID, accum_center);
+	{
+		float m[3][3] = {
+			{ ss, st, ssum },
+			{ st, tt, tsum },
+			{ ssum, tsum, (float) vertcount },
+		};
+		float rhs[3][3] = {
+			{ sx[0], sx[1], sx[2] },
+			{ tx[0], tx[1], tx[2] },
+			{ psum[0], psum[1], psum[2] },
+		};
 
-		if (CVAR_TO_BOOL (rt_debugemissive))
-			RT_EmitEmissiveWireTriangle (&light_info.positions[0], &light_info.positions[1], &light_info.positions[2]);
-	}
-	else if (rt_wldlights_emissive_count < MAX_WORLDLIGHTS_COUNT)
-	{
-		rt_wldlights_emissive[rt_wldlights_emissive_count++] = light_info;
-	}
-	else
-	{
-		static qboolean warned = false;
-		if (!warned)
+		fit_ok = true;
+		for (int col = 0; col < 3 && fit_ok; col++)
 		{
-			warned = true;
-			Con_DWarning ("RT: emissive world lights exceeded MAX_WORLDLIGHTS_COUNT (%i)\n",
-			              MAX_WORLDLIGHTS_COUNT);
+			int piv = col;
+			for (int row = col + 1; row < 3; row++)
+			{
+				if (fabs (m[row][col]) > fabs (m[piv][col]))
+					piv = row;
+			}
+			if (fabs (m[piv][col]) < 1e-9f)
+			{
+				fit_ok = false;
+				break;
+			}
+			if (piv != col)
+			{
+				for (int k = 0; k < 3; k++)
+				{
+					float tmp = m[col][k];
+					m[col][k] = m[piv][k];
+					m[piv][k] = tmp;
+					tmp = rhs[col][k];
+					rhs[col][k] = rhs[piv][k];
+					rhs[piv][k] = tmp;
+				}
+			}
+			const float inv = 1.0f / m[col][col];
+			for (int k = 0; k < 3; k++)
+			{
+				m[col][k] *= inv;
+				rhs[col][k] *= inv;
+			}
+			for (int row = 0; row < 3; row++)
+			{
+				if (row == col)
+					continue;
+				const float factor = m[row][col];
+				if (fabs (factor) < 1e-10f)
+					continue;
+				for (int k = 0; k < 3; k++)
+				{
+					m[row][k] -= factor * m[col][k];
+					rhs[row][k] -= factor * rhs[col][k];
+				}
+			}
+		}
+
+		if (fit_ok)
+		{
+			A[0] = rhs[0][0]; A[1] = rhs[0][1]; A[2] = rhs[0][2];
+			B[0] = rhs[1][0]; B[1] = rhs[1][1]; B[2] = rhs[1][2];
+			C[0] = rhs[2][0]; C[1] = rhs[2][1]; C[2] = rhs[2][2];
 		}
 	}
+
+	// --- Build the light's convex polygon. The face's own texcoords form a
+	// convex polygon in texture space; mapping it through the affine fit
+	// world = A*s + B*t + C reproduces the exact texture projection, so the
+	// world polygon lies EXACTLY on the brush face (no parallelogram
+	// overshoot on >4-vertex or skewed faces). The shader samples the UV
+	// polygon uniformly and looks the luma mask up at the same UV, so the
+	// mask aligns perfectly with the surface texture.
+	RgTexturedAreaLightUploadInfo light_info = {0};
+	light_info.uniqueID  = RT_GetBrushSurfUniqueId (s->entuniqueid, s->model, s->surf, 0);
+	light_info.material  = light_tex->rtmaterial;
+	light_info.meanEmiss = light_tex->rtemissivemean;
+	light_info.area      = total_area;
+	light_info.fit       = 0;      // set below after the affine fit
+	light_info.isStatic  = is_static_geom ? 1 : 0;
+	VectorCopy (normal, light_info.normal.data);
+
+	qboolean poly_ok = false;
+	if (fit_ok && vertcount <= MAX_TEXTURED_AREA_LIGHT_VERTS)
+	{
+		// Actual face footprint: the surface's own vertices in texture space.
+		for (int i = 0; i < vertcount; i++)
+		{
+			light_info.uvVerts[i].data[0] = verts[i].texCoord[0];
+			light_info.uvVerts[i].data[1] = verts[i].texCoord[1];
+		}
+		light_info.numVerts = vertcount;
+		VectorCopy (A, light_info.A.data);
+		VectorCopy (B, light_info.B.data);
+		VectorCopy (C, light_info.C.data);
+		poly_ok = true;
+	}
+
+	if (!poly_ok)
+	{
+		// --- Fallback: degenerate texcoords / too many verts. Emit a canonical
+		// unit square at the area-weighted centroid with the same normal and
+		// total area (side sqrt(total_area)); the mask is sampled over the
+		// whole texture. A = u*L, B = v*L, C = lower-left corner, UV verts =
+		// unit square, area = L^2 = total_area.
+		VectorScale (accum_center, 1.0f / total_area, accum_center);
+
+		const float L = sqrt (total_area);
+
+		vec3_t axis = {0, 0, 1};
+		if (fabs (normal[2]) > 0.9f)
+			RT_VEC3_SET (axis, 1, 0, 0);
+
+		vec3_t u, v;
+		CrossProduct (axis, normal, u);
+		VectorNormalize (u);
+		CrossProduct (normal, u, v);
+
+		vec3_t corner;
+		VectorMA (accum_center, -0.5f * L, u, corner);
+		VectorMA (corner, -0.5f * L, v, corner);
+
+		light_info.numVerts = 4;
+		light_info.uvVerts[0].data[0] = 0.0f; light_info.uvVerts[0].data[1] = 0.0f;
+		light_info.uvVerts[1].data[0] = 1.0f; light_info.uvVerts[1].data[1] = 0.0f;
+		light_info.uvVerts[2].data[0] = 1.0f; light_info.uvVerts[2].data[1] = 1.0f;
+		light_info.uvVerts[3].data[0] = 0.0f; light_info.uvVerts[3].data[1] = 1.0f;
+
+		VectorScale (u, L, light_info.A.data);
+		VectorScale (v, L, light_info.B.data);
+		VectorCopy (corner, light_info.C.data);
+	}
+
+	light_info.fit = fit_ok ? 1 : 0;
+
+	// Radiance at full mask brightness. The shader modulates it by the luma
+	// mask sample (r.color = color * mask) and folds the polygon's area into
+	// dw = area * G (solid angle), so the light contribution scales with the
+	// lit footprint's area. No flux-concentration multiplier here.
+	VectorCopy (color, light_info.color.data);
+
+	// TEMP DIAG
+	{
+		static int diag_shown = 0;
+		if (diag_shown < 60 && (strstr (light_tex->name, "tlight") || strstr (light_tex->name, "basebtn")))
+		{
+			// Affine-fit sanity: max |world_vertex - (C + A*s + B*t)| over the
+			// surface's own vertices. Near 0 => the light polygon lies exactly
+			// on the brush face (mask/geometry aligned); large => mapping bug.
+			float fit_max_err = -1.0f;
+			if (fit_ok)
+			{
+				for (int i = 0; i < vertcount; i++)
+				{
+					const RgFloat3D p = ApplyTransform (&transf, verts[i].position);
+					const float su2 = verts[i].texCoord[0];
+					const float tv2 = verts[i].texCoord[1];
+					vec3_t f;
+					f[0] = A[0] * su2 + B[0] * tv2 + C[0];
+					f[1] = A[1] * su2 + B[1] * tv2 + C[1];
+					f[2] = A[2] * su2 + B[2] * tv2 + C[2];
+					const float err = sqrtf ((p.data[0]-f[0]) * (p.data[0]-f[0]) +
+					                          (p.data[1]-f[1]) * (p.data[1]-f[1]) +
+					                          (p.data[2]-f[2]) * (p.data[2]-f[2]));
+					if (err > fit_max_err)
+						fit_max_err = err;
+				}
+			}
+			vec3_t accum_normal_dir;
+			VectorCopy (accum_normal, accum_normal_dir);
+			VectorNormalize (accum_normal_dir);
+			Con_Printf ("TAL: tex=%s meanEmiss=%.4f color=(%.3f,%.3f,%.3f) area=%.2f numVerts=%d fit=%d fiterr=%.4f static=%d material=%u uid=%llx n=(%.2f,%.2f,%.2f) an=(%.2f,%.2f,%.2f)\n",
+			            light_tex->name, light_tex->rtemissivemean,
+			            light_info.color.data[0], light_info.color.data[1], light_info.color.data[2],
+			            total_area, light_info.numVerts, fit_ok, fit_max_err, is_static_geom,
+			            (unsigned) light_info.material, (unsigned long long) light_info.uniqueID,
+			            normal[0], normal[1], normal[2],
+			            accum_normal_dir[0], accum_normal_dir[1], accum_normal_dir[2]);
+			diag_shown++;
+		}
+	}
+
+	RT_UploadEmissiveLight (&light_info, is_static_geom);
 }
 
 static void RT_BatchSurface (cb_context_t *cbx, const rt_uploadsurf_state_t *s, uint32_t *brushpasses)
@@ -1656,24 +1955,34 @@ void RT_UploadAllWorldModelLights (void)
 	}
 #endif
 
-	// Emissive material surfaces (static world geometry) become triangle area
+	// Emissive material surfaces (static world geometry) become textured area
 	// lights and are registered for per-cluster next-event estimation, so the
 	// luma surface illuminates its surroundings directly (noise-free, NEE).
+	// TEMP DIAG
+	{
+		static int diagTALUP = 0;
+		if (diagTALUP < 3)
+		{
+			diagTALUP++;
+			Con_Printf ("TALUP: frame upload emis=%d tri=%d sph=%d\n",
+			            rt_wldlights_emissive_count, rt_wldlights_tri_count, rt_wldlights_sph_count);
+		}
+	}
 	for (int i = 0; i < rt_wldlights_emissive_count; i++)
 	{
-		const RgPolygonalLightUploadInfo *lt = &rt_wldlights_emissive[i];
+		const RgTexturedAreaLightUploadInfo *lt = &rt_wldlights_emissive[i];
 
-		RgResult r = rgUploadPolygonalLight (vulkan_globals.instance, lt);
+		RgResult r = rgUploadTexturedAreaLight (vulkan_globals.instance, lt);
 		RG_CHECK (r);
 
 		vec3_t center;
-		VectorAdd (lt->positions[0].data, lt->positions[1].data, center);
-		VectorAdd (center, lt->positions[2].data, center);
-		VectorScale (center, 1.0f / 3.0f, center);
+		RT_TexturedAreaLightCenter (lt, center);
 		RT_ClusterLightAdd (lt->uniqueID, center);
 
 		if (CVAR_TO_BOOL (rt_debugemissive))
-			RT_EmitEmissiveWireTriangle (&lt->positions[0], &lt->positions[1], &lt->positions[2]);
+		{
+			RT_EmitEmissiveWirePolygon (lt);
+		}
 	}
 
 	// Debug visualization for poly lights (light_color + is_light). These are

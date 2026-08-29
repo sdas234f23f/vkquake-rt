@@ -263,14 +263,21 @@ vec3 processDebug(const ivec2 pix, const vec3 fallback)
     }
     else if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_UNFILTERED_DIFFUSE) != 0)
     {
+        // The Q2 direct pass writes this buffer in the checkerboard layout
+        // (imageStore at the checkerboard pix, see RtRaygenDirect.rgen), so a
+        // full-res debug read must go through getCheckerboardPix.
         return texelFetchUnfilteredDirect(getCheckerboardPix(pix));
     }
     else if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_UNFILTERED_SPECULAR) != 0)
     {
+        // Checkerboard layout, same as framebufUnfilteredDirect.
         return texelFetchUnfilteredSpecular(getCheckerboardPix(pix));
     }
     else if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_UNFILTERED_INDIRECT) != 0)
     {
+        // The indirect SH buffer keeps the checkerboard layout too (written at
+        // the checkerboard pix by RtQ2Indirect.rgen); the normal gbuffer is
+        // checkerboard as well.
         const SH sh = imageLoadUnfilteredIndirectSH(getCheckerboardPix(pix));
         const vec3 normal = texelFetchNormal(getCheckerboardPix(pix));
         return SHToIrradiance(sh, normal);
@@ -302,6 +309,16 @@ vec3 processDebug(const ivec2 pix, const vec3 fallback)
         return SHToIrradiance(indirSH, normal);
     }
 #endif
+
+    if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_LUMA) != 0)
+    {
+        // Show the raw luma emission mask (pure monochrome, written by the
+        // primary ray pass when this flag is on) over a dimmed albedo, so the
+        // luma-to-surface alignment can be checked visually.
+        const vec3 luma = texelFetch(framebufScreenEmission_Sampler, pix, 0).rgb;
+        const vec3 albedo = texelFetch(framebufAlbedo_Sampler, pix, 0).rgb;
+        return luma * 8.0 + albedo * 0.15;
+    }
 
     return fallback;
 }

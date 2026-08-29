@@ -659,6 +659,52 @@ typedef struct RgPolygonalLightUploadInfo
     RgFloat3D       positions[3];
 } RgPolygonalLightUploadInfo;
 
+// Phase 2: a textured area light. The emitting surface is a CONVEX POLYGON in
+// texture space (the face's own texcoords, up to MAX_TEXTURED_AREA_LIGHT_VERTS
+// verts) mapped to world through the affine map world = A*s + B*t + C recovered
+// from the face vertices, so the light polygon lies EXACTLY on the brush face
+// geometry. The shader samples the polygon uniformly and modulates the color by
+// the luma mask of the material's emission (RME .b) texture at the sampled UV,
+// so light comes from the actual luma footprint (lamp body, medkit diodes, ...)
+// instead of the whole quad. `color` is the radiance of the polygon when the
+// whole footprint is lit (per unit area, same convention as
+// RgPolygonalLightUploadInfo). The shader multiplies it by the luma mask
+// sample and folds the polygon's area into dw (solid angle), so the emitted
+// flux scales with the lit footprint. `meanEmiss` is used for light-selection
+// weighting. `material` is resolved by
+// the renderer to its emission (RME) texture index; its luma mask is sampled in
+// the shader.
+#define MAX_TEXTURED_AREA_LIGHT_VERTS 8
+typedef struct RgTexturedAreaLightUploadInfo
+{
+    // Used to match the same light source from the previous frame.
+    uint64_t        uniqueID;
+    RgFloat3D       color;
+    // Affine map world = A*s + B*t + C (s,t = raw texture coords).
+    RgFloat3D       A;
+    RgFloat3D       B;
+    RgFloat3D       C;
+    // Outward surface normal (normalized).
+    RgFloat3D       normal;
+    // Exact world-space area of the polygon (the face's area).
+    float           area;
+    // Convex polygon vertices in texture (S,T) space, in face vertex order.
+    // numVerts must be in [3, MAX_TEXTURED_AREA_LIGHT_VERTS].
+    int             numVerts;
+    RgFloat2D       uvVerts[MAX_TEXTURED_AREA_LIGHT_VERTS];
+    // Material whose emission (RME) texture carries the luma mask.
+    RgMaterial      material;
+    // Average emission (RME .b, 0..1) of the mask inside the UV polygon.
+    float           meanEmiss;
+    // Diagnostic: 1 if the affine fit from the surface's own texcoords
+    // succeeded (the UV polygon reproduces the exact texture projection),
+    // 0 if the fallback unit square at the centroid was used instead.
+    int             fit;
+    // Diagnostic: 1 for static world geometry, 0 for dynamic brush models
+    // (doors, items) / warp surfaces.
+    int             isStatic;
+} RgTexturedAreaLightUploadInfo;
+
 // Only one spotlight is available in a scene.
 typedef struct RgSpotLightUploadInfo
 {
@@ -690,6 +736,10 @@ RGAPI RgResult RGCONV rgUploadSpotLight(
 RGAPI RgResult RGCONV rgUploadPolygonalLight(
     RgInstance                          rgInstance,
     const RgPolygonalLightUploadInfo    *pUploadInfo);
+
+RGAPI RgResult RGCONV rgUploadTexturedAreaLight(
+    RgInstance                          rgInstance,
+    const RgTexturedAreaLightUploadInfo *pUploadInfo);
 
 
 // Q2RTX per-BSP-cluster light lists, uploaded by the game every frame.
@@ -949,6 +999,9 @@ typedef enum RgDebugDrawFlagBits
     // Internal: enables the in-game ray stats / FPS overlay (host reads the
     // GPU ray counters and draws the overlay via the "rt_stats" cvar).
     RG_DEBUG_DRAW_STATS_BIT = 4096,
+    // Debug: shows the raw luma emission mask (monochrome RME ".b" channel)
+    // on surfaces, over a dimmed albedo, to check luma-to-surface alignment.
+    RG_DEBUG_DRAW_LUMA_BIT = 8192,
 } RgDebugDrawFlagBits;
 typedef RgFlags RgDebugDrawFlags;
 

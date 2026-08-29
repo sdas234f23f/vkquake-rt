@@ -131,7 +131,8 @@ void main()
                 // surfaces), so hit/miss counters never get mixed up with a
                 // neighbouring light's (the flicker cause). Sphere/spot lights
                 // are picked purely by solid angle x luminance.
-                if (lightSources[lightIndex].lightType == LIGHT_TYPE_TRIANGLE)
+                if (lightSources[lightIndex].lightType == LIGHT_TYPE_TRIANGLE ||
+                    lightSources[lightIndex].lightType == LIGHT_TYPE_TEXTURED_AREA)
                 {
                     q2AccumulateLightStats(cluster, lightSlot, surf.normal, vis);
                 }

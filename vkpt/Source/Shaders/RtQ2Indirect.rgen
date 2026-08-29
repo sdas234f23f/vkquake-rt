@@ -92,10 +92,16 @@ Surface traceBounce(const vec3 originPosition, float originRoughness, uint origi
 
 // Mirrors the original RtRaygenIndirectInit processSecondDiffuseBounce: a
 // second diffuse bounce off the first bounce hit, gathering
-// (emission + directIllumination) * albedo at the second hit and weighting by
+// directIllumination * albedo at the second hit and weighting by
 // the diffuse-bounce pdf. This is what makes emissive surfaces (lava) spread
 // their color through the scene: a ray that misses the lava on the first
 // bounce gets a second chance to hit it.
+//
+// Note: the bounce-hit emission term (boostEmissionChroma(hitSurf.emission *
+// hitSurf.albedo)) is intentionally dropped: luma-emissive surfaces now have
+// dedicated NEE (textured area) lights, so returning the raw emission again on
+// a bounce-hit double-counts that light. The surface's self-brightness is
+// still added on the screen via screenEmission (RaygenPrimary).
 vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 bounceDir,
                                 float oneOverPdf)
 {
@@ -157,10 +163,12 @@ vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 
                 rayStatsAdd( RAY_STATS_CATEGORY_SHADOW, 1 );
 
                 // Adaptive shadow statistics for the next frames' CDF. Only
-                // triangle (polygonal) lights accumulate, like Q2RTX; their
-                // per-cluster slots are the stable ones (static luma-emissive
-                // surfaces), so the counters stay attributed to the right light.
-                if ( lightSources[ lightIndex ].lightType == LIGHT_TYPE_TRIANGLE )
+                // triangle / textured-area (polygonal) lights accumulate, like
+                // Q2RTX; their per-cluster slots are the stable ones (static
+                // luma-emissive surfaces), so the counters stay attributed to
+                // the right light.
+                if ( lightSources[ lightIndex ].lightType == LIGHT_TYPE_TRIANGLE ||
+                     lightSources[ lightIndex ].lightType == LIGHT_TYPE_TEXTURED_AREA )
                 {
                     q2AccumulateLightStats( cluster, lightSlot, hitSurf.normal, vis );
                 }
@@ -192,9 +200,8 @@ vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 
         }
     }
 
-    const vec3 emitted   = boostEmissionChroma( hitSurf.emission * hitSurf.albedo );
     const vec3 reflected = boostChroma( directDiffuse * hitSurf.albedo );
-    return ( emitted + reflected ) * oneOverPdf;
+    return reflected * oneOverPdf;
 }
 
 // Shade the primary surface with the radiance gathered at the bounce hit.
@@ -313,10 +320,12 @@ void main()
                     rayStatsAdd( RAY_STATS_CATEGORY_SHADOW, 1 );
 
                     // Adaptive shadow statistics for the next frames' CDF. Only
-                    // triangle (polygonal) lights accumulate, like Q2RTX; their
-                    // per-cluster slots are the stable ones (static luma-emissive
-                    // surfaces), so the counters stay attributed to the right light.
-                    if ( lightSources[ lightIndex ].lightType == LIGHT_TYPE_TRIANGLE )
+                    // triangle / textured-area (polygonal) lights accumulate, like
+                    // Q2RTX; their per-cluster slots are the stable ones (static
+                    // luma-emissive surfaces), so the counters stay attributed to
+                    // the right light.
+                    if ( lightSources[ lightIndex ].lightType == LIGHT_TYPE_TRIANGLE ||
+                         lightSources[ lightIndex ].lightType == LIGHT_TYPE_TEXTURED_AREA )
                     {
                         q2AccumulateLightStats( cluster, lightSlot, hitSurf.normal, vis );
                     }
@@ -365,8 +374,7 @@ void main()
         directDiffuse = clamp( directDiffuse, vec3( 0.0 ), vec3( 50.0 ) );
 
         hitPos = hitSurf.position;
-        hitRadiance = boostEmissionChroma( hitSurf.emission * hitSurf.albedo ) +
-                      boostChroma( directDiffuse * hitSurf.albedo );
+        hitRadiance = boostChroma( directDiffuse * hitSurf.albedo );
     }
 
     // 3) Shade the primary surface with the gathered radiance.

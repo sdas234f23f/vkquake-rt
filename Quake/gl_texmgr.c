@@ -1161,8 +1161,10 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	glt->rtemissivecolor[0] = 0.0f;
 	glt->rtemissivecolor[1] = 0.0f;
 	glt->rtemissivecolor[2] = 0.0f;
+	glt->rtemissivemean = 0.0f;
 	glt->rtislight = false;
 	float emissR = 0.0f, emissG = 0.0f, emissB = 0.0f;
+	double emissMean = 0.0;
 
 	for (int i = 0; i < npix; i++)
 	{
@@ -1225,6 +1227,7 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 			emissG += albedo[i * 4 + 1] * emiss;
 			emissB += albedo[i * 4 + 2] * emiss;
 		}
+		emissMean += emiss;
 
 		rme[i * 4 + 0] = CLAMP (0, (int)(rough * 255), 255);
 		rme[i * 4 + 1] = CLAMP (0, (int)(metal * 255), 255);
@@ -1260,6 +1263,7 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		glt->rtemissivecolor[0] = emissR / (npix * 255.0f);
 		glt->rtemissivecolor[1] = emissG / (npix * 255.0f);
 		glt->rtemissivecolor[2] = emissB / (npix * 255.0f);
+		glt->rtemissivemean = (float)(emissMean / npix);
 
 		// Apply the material's light_brightness multiplier so emissive lights
 		// (is_light: true without light_color, e.g. flame skins) scale exactly
@@ -1482,6 +1486,7 @@ gltexture_t *TexMgr_LoadImage (
 	glt->rtforcerasterize = false;
 	glt->rtemissive = false;
 	glt->rtemissivecolor[0] = glt->rtemissivecolor[1] = glt->rtemissivecolor[2] = 0.0f;
+	glt->rtemissivemean = 0.0f;
 	glt->rtemissivetex = false;
 	glt->rtislight = false;
 

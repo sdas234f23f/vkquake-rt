@@ -85,6 +85,7 @@ typedef struct gltexture_s
 	qboolean             rtforcerasterize;       // material force_rasterize: no shadows
 	qboolean             rtemissive;             // texture emits light (material emissive / fullbright mask)
 	vec3_t               rtemissivecolor;        // average emitted color (albedo * emissive) in [0,1]
+	float                rtemissivemean;         // average emissive mask (.b of RME) over the texture in [0,1]
 	qboolean             rtemissivetex;          // material has a real texture_emissive (luma) loaded
 	qboolean             rtislight;              // material is_light: may generate static emissive area lights
 } gltexture_t;

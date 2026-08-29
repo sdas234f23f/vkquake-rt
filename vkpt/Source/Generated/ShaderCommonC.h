@@ -152,6 +152,7 @@ namespace vkpt
 #define DEBUG_SHOW_FLAG_ALBEDO_WHITE (1 << 8)
 #define DEBUG_SHOW_FLAG_GOD_RAYS (1 << 9)
 #define DEBUG_SHOW_FLAG_RAY_STATS (1 << 10)
+#define DEBUG_SHOW_FLAG_LUMA (1 << 11)
 #define RAY_STATS_CATEGORY_COUNT (4)
 #define MAX_RAY_LENGTH (10000.0)
 #define MEDIA_TYPE_VACUUM (0)
@@ -165,6 +166,7 @@ namespace vkpt
 #define LIGHT_TYPE_SPHERE (2)
 #define LIGHT_TYPE_TRIANGLE (3)
 #define LIGHT_TYPE_SPOT (4)
+#define LIGHT_TYPE_TEXTURED_AREA (5)
 #define LIGHT_ARRAY_DIRECTIONAL_LIGHT_OFFSET (0)
 #define LIGHT_ARRAY_REGULAR_LIGHTS_OFFSET (1)
 #define LIGHT_INDEX_NONE (32767)
@@ -360,6 +362,11 @@ struct ShLightEncoded
     float data_0[4];
     float data_1[4];
     float data_2[4];
+    float data_3[4];
+    float data_4[4];
+    float data_5[4];
+    float data_6[4];
+    float data_7[4];
 };
 
 struct ShVertPreprocessing

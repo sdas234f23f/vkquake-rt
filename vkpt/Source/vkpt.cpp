@@ -221,6 +221,11 @@ RgResult rgUploadPolygonalLight(RgInstance rgInstance, const RgPolygonalLightUpl
     return Call(rgInstance, &VulkanDevice::UploadPolygonalLight, pUploadInfo);
 }
 
+RgResult rgUploadTexturedAreaLight(RgInstance rgInstance, const RgTexturedAreaLightUploadInfo *pUploadInfo)
+{
+    return Call(rgInstance, &VulkanDevice::UploadTexturedAreaLight, pUploadInfo);
+}
+
 RgResult rgUploadClusterLightLists(RgInstance rgInstance, const RgClusterLightListsUploadInfo *pUploadInfo)
 {
     return Call(rgInstance, &VulkanDevice::UploadClusterLightLists, pUploadInfo);

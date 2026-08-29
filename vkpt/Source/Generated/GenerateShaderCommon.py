@@ -398,6 +398,7 @@ CONST = {
     "DEBUG_SHOW_FLAG_ALBEDO_WHITE"          : "1 << 8",
     "DEBUG_SHOW_FLAG_GOD_RAYS"              : "1 << 9",
     "DEBUG_SHOW_FLAG_RAY_STATS"             : "1 << 10",
+    "DEBUG_SHOW_FLAG_LUMA"                  : "1 << 11",
 
     # Number of ray categories the RT shaders atomically accumulate per frame
     # (see vkpt/Source/RayStats.h).
@@ -418,6 +419,7 @@ CONST = {
     "LIGHT_TYPE_SPHERE"                     : 2,
     "LIGHT_TYPE_TRIANGLE"                   : 3,
     "LIGHT_TYPE_SPOT"                       : 4,
+    "LIGHT_TYPE_TEXTURED_AREA"              : 5,
 
     "LIGHT_ARRAY_DIRECTIONAL_LIGHT_OFFSET"  : 0,
     "LIGHT_ARRAY_REGULAR_LIGHTS_OFFSET"     : 1,
@@ -676,6 +678,20 @@ LIGHT_ENCODED_STRUCT = [
     (TYPE_FLOAT32,      4,      "data_0",               1),
     (TYPE_FLOAT32,      4,      "data_1",               1),
     (TYPE_FLOAT32,      4,      "data_2",               1),
+    (TYPE_FLOAT32,      4,      "data_3",               1),
+    (TYPE_FLOAT32,      4,      "data_4",               1),
+    (TYPE_FLOAT32,      4,      "data_5",               1),
+    (TYPE_FLOAT32,      4,      "data_6",               1),
+    (TYPE_FLOAT32,      4,      "data_7",               1),
+    # LIGHT_TYPE_TEXTURED_AREA only: convex-polygon area light. The emitting
+    # surface is a convex polygon in texture space (the face's own texcoords,
+    # up to MAX_TEXTURED_AREA_LIGHT_VERTS verts), mapped to world through the
+    # affine map world = A*s + B*t + C so it lies exactly on the brush face.
+    #   data_0.xyz = A (affine S axis), data_0.w = RME texture index (as float)
+    #   data_1.xyz = B (affine T axis), data_1.w = mean emissivity
+    #   data_2.xyz = C (affine offset), data_2.w = numVerts (as float, 3..8)
+    #   data_3..data_6 = uvVerts, two (s,t) pairs per vec4 (verts 0..7)
+    #   data_7.xyz = outward normal, data_7.w = exact world-space polygon area
 ]
 
 # Q2RTX-style noise-aware tone mapper (Eilertsen, Mantiuk, Unger + NVIDIA mods).

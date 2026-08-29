@@ -165,6 +165,20 @@ float q2LightSelectionMass(const ShLightEncoded encoded, const vec3 p, const vec
         positions[2] = l.position[2];
         return q2SphericalTriArea(positions, p, n, V, phongExp, phongScale, phongWeight);
     }
+    else if (encoded.lightType == LIGHT_TYPE_TEXTURED_AREA)
+    {
+        const TexturedAreaLight l = decodeAsTexturedAreaLight(encoded);
+        const vec3 center = getTexturedAreaLightCenter(l);
+        // One-sided projected solid angle of the polygon, matching
+        // sampleTexturedAreaLight's r.dw (getGeometryFactorClamped). Surfaces
+        // behind the light's plane get zero mass -> never selected -> no wasted
+        // CDF mass and no shadow-ray misses that would pollute the adaptive
+        // (cluster, slot, side) statistics of surfaces in front of the light.
+        const DirectionAndLength centerToSurf = calcDirectionAndLength(center, p);
+        float sa = safeSolidAngle(l.area * getGeometryFactorClamped(l.normal, centerToSurf.dir, centerToSurf.len));
+        // Dim luma surfaces should be selected proportionally less often.
+        return sa * max(l.meanEmiss, 0.0);
+    }
     else
     {
         const float dist = max(length(p - encoded.data_0.xyz), encoded.data_0.w);
