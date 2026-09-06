@@ -1977,6 +1977,19 @@ void RT_UploadAllWorldModelLights (void)
 
 		vec3_t center;
 		RT_TexturedAreaLightCenter (lt, center);
+
+		// The center lies exactly on the emitting face, i.e. on the boundary
+		// between the solid brush and open air. Mod_PointInLeaf() resolves a
+		// point that is exactly on a BSP plane to the back child, which puts
+		// the PVS lookup inside the brush and gives the light the solid leaf's
+		// "visible from everywhere" PVS. Nudge the lookup point along the
+		// emission normal so it lands on the side the light actually lights.
+		// Only the PVS query point moves; the light geometry is untouched.
+		const float nudge = 2.0f;
+		center[0] += nudge * lt->normal.data[0];
+		center[1] += nudge * lt->normal.data[1];
+		center[2] += nudge * lt->normal.data[2];
+
 		RT_ClusterLightAdd (lt->uniqueID, center);
 
 		if (CVAR_TO_BOOL (rt_debugemissive))

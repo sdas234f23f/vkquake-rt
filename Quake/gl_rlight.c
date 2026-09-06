@@ -933,6 +933,45 @@ void RT_ClusterLightAdd (uint64_t uniqueID, const vec3_t origin)
 	rt_cluster_light_count++;
 }
 
+/*
+A light origin that lands in the solid leaf has no PVS of its own, and
+Mod_LeafPVS() answers "visible from every cluster" for it (Mod_NoVisPVS).
+Registering such a light would insert it into every cluster of the map and
+exhaust the RT_CLUSTER_MAX_PER_LIST budget everywhere, permanently starving
+every light that happens to be registered later. Emissive surface centers and
+light-fixture centroids routinely land exactly on, or just inside, world
+geometry, so probe a small neighbourhood for an open leaf before giving up.
+Returns NULL when the light is genuinely buried in solid and illuminates
+nothing.
+*/
+static mleaf_t *RT_ResolveLightLeaf (const vec3_t origin, qmodel_t *wm)
+{
+	static const vec3_t probeDirs[6] = {
+		{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1},
+	};
+	static const float probeDists[3] = {2.0f, 8.0f, 24.0f};
+
+	mleaf_t *leaf = Mod_PointInLeaf ((float *)origin, wm);
+	if (leaf && leaf != wm->leafs && leaf->contents != CONTENTS_SOLID)
+		return leaf;
+
+	for (int d = 0; d < 3; d++)
+	{
+		for (int i = 0; i < 6; i++)
+		{
+			vec3_t probe;
+			probe[0] = origin[0] + probeDists[d] * probeDirs[i][0];
+			probe[1] = origin[1] + probeDists[d] * probeDirs[i][1];
+			probe[2] = origin[2] + probeDists[d] * probeDirs[i][2];
+			leaf = Mod_PointInLeaf (probe, wm);
+			if (leaf && leaf != wm->leafs && leaf->contents != CONTENTS_SOLID)
+				return leaf;
+		}
+	}
+
+	return NULL;
+}
+
 void RT_ClusterLightListsUpload (void)
 {
 	qmodel_t *wm = cl.worldmodel;
@@ -995,7 +1034,11 @@ void RT_ClusterLightListsUpload (void)
 	// cluster it illuminates (via the PVS) and stamp it as present this frame.
 	for (int li = 0; li < rt_cluster_light_count; li++)
 	{
-		mleaf_t *leaf = Mod_PointInLeaf (rt_cluster_lights[li].origin, wm);
+		// Never register a light from the solid leaf: it has no PVS of its
+		// own, and Mod_LeafPVS() answers "visible from every cluster" for it,
+		// which would exhaust the RT_CLUSTER_MAX_PER_LIST budget everywhere
+		// and starve the lights registered later.
+		mleaf_t *leaf = RT_ResolveLightLeaf (rt_cluster_lights[li].origin, wm);
 		if (!leaf)
 			continue;
 

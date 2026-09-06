@@ -1642,7 +1642,7 @@ static void Mod_ProcessLeafs_S (qmodel_t *mod, byte *in, int filelen)
 		out->nummarksurfaces = (unsigned short)ReadShortUnaligned (in + offsetof (dsleaf_t, nummarksurfaces));   // johnfitz -- unsigned short
 
 		p = ReadLongUnaligned (in + offsetof (dsleaf_t, visofs));
-		if (p == -1 || !CVAR_TO_BOOL (rt_enable_pvs))
+		if (p == -1)
 			out->compressed_vis = NULL;
 		else
 			out->compressed_vis = (mod->visdata != NULL) ? (mod->visdata + p) : NULL;
