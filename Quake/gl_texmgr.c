@@ -1332,9 +1332,11 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		            rMin / 255.0f * 100.0f, npix ? rSum / npix / 255.0f * 100.0f : 0.0, rMax / 255.0f * 100.0f,
 		            mMin / 255.0f * 100.0f, npix ? mSum / npix / 255.0f * 100.0f : 0.0, mMax / 255.0f * 100.0f,
 		            eMin / 255.0f, npix ? eSum / npix / 255.0f : 0.0, eMax / 255.0f);
-		Con_Printf ("RT:   flags is_light=%d light_styles=%d light_brightness=%.3f rtemissive=%d rtemissivecolor=(%.4f, %.4f, %.4f) rtemissivemean=%.4f\n",
+		Con_Printf ("RT:   flags is_light=%d light_styles=%d light_brightness=%.3f has_light_color=%d rtlightcolor=(%.3f, %.3f, %.3f) rtemissive=%d rtemissivecolor=(%.4f, %.4f, %.4f) rtemissivemean=%.4f\n",
 		            glt->rtislight ? 1 : 0, glt->rtlightstyles ? 1 : 0,
 		            mat->light_brightness,
+		            glt->rthaslightcolor ? 1 : 0,
+		            glt->rtlightcolor[0], glt->rtlightcolor[1], glt->rtlightcolor[2],
 		            glt->rtemissive ? 1 : 0,
 		            glt->rtemissivecolor[0], glt->rtemissivecolor[1], glt->rtemissivecolor[2],
 		            glt->rtemissivemean);
