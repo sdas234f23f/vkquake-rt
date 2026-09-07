@@ -6,8 +6,9 @@ materials:
   - name: textures/#lava1
     texture_gloss: textures/#lava1_gloss.png
     texture_emissive: textures/#lava1_luma.png
-    is_light: true
     light_brightness: 1.0
+    light_upoffset: 8.0
+    is_light: false
   - name: textures/#teleport
     texture_gloss: textures/#teleport_gloss.png
     texture_emissive: textures/#teleport_luma.png
@@ -111,6 +112,8 @@ materials:
     is_light: false
   - name: textures/dem5_3
     texture_emissive: textures/dem5_3_luma.png
+    light_color: ffffdd
+    light_brightness: 1.0
     is_light: true
   - name: textures/med100
     texture_normals: textures/med100_n.png
@@ -161,70 +164,85 @@ materials:
     texture_gloss: textures/rock1sid_gloss.png
     metalness_factor: 1.0
     is_light: false
+  - name: textures/rune2_3
+    texture_emissive: textures/rune2_3_luma.png
+    light_brightness: 1.0
+    light_color: ff0000
+    is_light: true
   - name: textures/sfloor4_4
     texture_gloss: textures/sfloor4_4_gloss.png
     light_color: bdf1ff
     is_light: false
+  # basebtn: +0 is the ON frame of the idle plate (bright red lamp diamond,
+  # ~d70000) and emits a red TAL; +1 is the OFF frame (dark lamp) and emits
+  # nothing. The +0/+1 chain is a 0.2s blink, so the light follows the texture
+  # animation per frame. +abasebtn is the pressed alternate (yellow key lamp)
+  # shown via alternate_anims when the brush entity's frame flips; its luma
+  # restricts the NEE area light to the lamp footprint.
   - name: textures/+0basebtn
     texture_emissive: textures/+0basebtn_luma.png
     light_color: d70000
-    light_brightness: 0.5
+    light_brightness: 1.0
     is_light: true
+  - name: textures/+1basebtn
+    is_light: false
   - name: textures/+abasebtn
+    texture_emissive: textures/+abasebtn_luma.png
     light_color: dbcb13
-    light_brightness: 0.5
+    light_brightness: 1.0
     is_light: true
   - name: textures/basebutn3
     light_color: b30000
-    light_brightness: 1
+    light_brightness: 1.0
     is_light: false
   - name: textures/tlight01
-    light_color: ffffdd
-    light_brightness: 1
+    texture_emissive: textures/tlight01_luma.png
+    light_color: fff393
+    light_brightness: 1.0
     is_light: true
   - name: textures/tlight02
     texture_emissive: textures/tlight10_luma.png
     light_color: ffffdd
-    light_brightness: 1
+    light_brightness: 1.0
     is_light: true
   - name: textures/tlight03
     light_color: ffffdd
-    light_brightness: 1
+    light_brightness: 1.0
     is_light: true
   - name: textures/tlight04
     light_color: ffffdd
-    light_brightness: 1
+    light_brightness: 1.0
     is_light: true
   - name: textures/tlight05
     light_color: ffffdd
-    light_brightness: 1
+    light_brightness: 1.0
     is_light: true
   - name: textures/tlight06
     light_color: ffffdd
-    light_brightness: 1
+    light_brightness: 1.0
     is_light: true
   - name: textures/tlight07
     texture_emissive: textures/tlight07_luma.png
-    light_color: ffffdd
-    light_brightness: 1
+    light_color: bfaf50
+    light_brightness: 0.6
     is_light: true
   - name: textures/tlight08
     light_color: ffffdd
-    light_brightness: 1
+    light_brightness: 1.0
     is_light: true
   - name: textures/tlight09
     light_color: ffffdd
-    light_brightness: 1
+    light_brightness: 1.0
     is_light: true
   - name: textures/tlight10
     texture_emissive: textures/tlight10_luma.png
-    light_color: fff31b
-    light_brightness: 1
+    light_color: c8c14c
+    light_brightness: 0.9
     is_light: true
   - name: textures/tlight11
     texture_emissive: textures/tlight11_luma.png
-    light_color: ffffdd
-    light_brightness: 1
+    light_color: ffffff
+    light_brightness: 0.7
     is_light: true
   - name: textures/+0slip
     is_light: false
@@ -572,12 +590,15 @@ materials:
     is_light: false
   - name: progs/flame.mdl:frame0
     texture_emissive: mdl_skins/flame_skin0_luma.png
-    is_light: true
+    light_color: ffffdd
     light_brightness: 1.0
+    is_light: true
   - name: progs/flame2.mdl:frame0
     texture_emissive: mdl_skins/flame2_skin0_luma.png
-    is_light: true
+    light_color: ffffdd
     light_brightness: 1.0
+    light_upoffset: 16.0
+    is_light: true
   - name: progs/g_light.mdl:frame0
     is_light: false
   - name: progs/g_nail.mdl:frame0

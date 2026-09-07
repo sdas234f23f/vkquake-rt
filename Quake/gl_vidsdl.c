@@ -100,9 +100,10 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 // RT
 // Master emissive-luma knob rt_emis_light_intensity is a unit multiplier with a
 // default of 1.0, calibrated to reproduce the reference lamp look (see
-// RT_EMIS_LIGHT_INTENSITY_REFERENCE / RT_EMIS_MAPBOOST_REF_RAW in glquake.h).
-// The emissive-surface display boost below follows the same raw scale so the
-// surface glow and the light-source radiance stay in lockstep.
+// RT_EMIS_LIGHT_INTENSITY_REFERENCE in glquake.h). The emissive-surface display
+// boost below follows the same relative scale (rt_emis_mapboost *
+// rt_emis_light_intensity) so the surface glow and the light-source radiance
+// stay in lockstep.
 //
 // Light-source modes:
 //   rt_truelight      0 = legacy: fake lights everywhere (incl. legacy map
@@ -150,6 +151,7 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_light_reach, "25") \
 	CVAR_DEF_T (rt_truelight, "1") \
 	CVAR_DEF_T (rt_materials_only, "0") \
+	CVAR_DEF_T (rt_light_styles, "1") \
 	\
 	CVAR_DEF_T (rt_poi_distthresh, "2") \
 	CVAR_DEF_T (rt_poi_distthresh_super, "3") \
@@ -1272,7 +1274,7 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	RgDrawFrameTexturesParams texture_params = {
 		.dynamicSamplerFilter = CVAR_TO_INT32 (vid_filter) == 1 ? RG_SAMPLER_FILTER_NEAREST : RG_SAMPLER_FILTER_LINEAR,
 		.normalMapStrength = CVAR_TO_FLOAT (rt_normalmap_stren),
-		.emissionMapBoost = CVAR_TO_FLOAT (rt_emis_mapboost) * (RT_EMIS_INTENSITY_TO_RAW (CVAR_TO_FLOAT (rt_emis_light_intensity)) / RT_EMIS_MAPBOOST_REF_RAW),
+		.emissionMapBoost = CVAR_TO_FLOAT (rt_emis_mapboost) * CVAR_TO_FLOAT (rt_emis_light_intensity),
 		.emissionMaxScreenColor = CVAR_TO_FLOAT (rt_emis_maxscrcolor),
 		.minRoughness = CVAR_TO_FLOAT (rt_roughmin),
 	};

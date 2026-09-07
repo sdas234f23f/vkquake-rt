@@ -1054,12 +1054,22 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	if (!mat)
 		return false;
 
+	// A materials.yaml / .mat entry exists for this texture: the animated
+	// frame selection (R_DrawTextureChains_Multitexture) uses this flag to
+	// prefer the current animated frame as the light source when it carries
+	// its own material (e.g. +0basebtn off-state vs +abasebtn pressed glow).
+	glt->rthasmaterial = true;
+
 	// Apply the explicit "is_light" flag up front: materials.yaml entries that
 	// only carry "is_light: true" (no PBR textures -- e.g. model skins like
 	// "progs/flame2.mdl:frame0") hit the early-return below, so the flag must
 	// be set before it, otherwise r_alias.c never generates their emissive
 	// spherical lights.
 	glt->rtislight = mat->is_light;
+	// Surface lightstyle animation opt-out: a material with "light_styles:
+	// false" (e.g. a flickering lamp you want always-on full intensity) is
+	// immune to the surface lightstyle dimming applied in RT_AddEmissiveLight.
+	glt->rtlightstyles = mat->light_styles;
 
 	// Migrated texture_custom_info.txt flags (authored in materials.yaml).
 	// These must also be applied before the early-return below: many of the
@@ -1122,8 +1132,11 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		}
 	}
 
-	// same for the normal map: metalness is packed in its alpha (Q2RTX
-	// convention), but such PNGs have no alpha -> stay non-metallic.
+	// same for the normal map: Q2RTX-style packs metalness in its alpha. Many
+	// HD normal maps (progs/*, some textures) carry real (non-opaque) alpha
+	// that has NOTHING to do with metalness, so this only reports whether the
+	// alpha channel is usable at all -- it is consumed only when the material
+	// opts in via "metalness_from_normal_alpha: true".
 	qboolean normHasAlpha = false;
 	if (normBuf)
 	{
@@ -1178,8 +1191,9 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		albedo[i * 4 + 2] = CLAMP (0, b, 255);
 		albedo[i * 4 + 3] = 255;
 
-		// roughness: roughness_override > gloss map (1 - gloss) > base alpha
-		// (Q2RTX packing) > default
+		// roughness priority: roughness_override: (explicit) beats the gloss
+		// map (1 - gloss) beats base alpha (Q2RTX packing) beats the model-type
+		// default (rt_brush_rough / rt_model_rough).
 		float rough;
 		if (roughOverride > 0.0f)
 			rough = roughOverride;
@@ -1190,11 +1204,22 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		else
 			rough = defaultRough;
 
-		// metallic: from the normal map alpha (if it has one), or the
-		// metalness_factor from the .mat
-		float metal = mat->metalness_factor;
-		if (normBuf && normHasAlpha)
-			metal = (normBuf[i * 4 + 3] / 255.0f) * mat->metalness_factor;
+		// metallic. An authored "metalness_factor:" value is the ABSOLUTE
+		// metallic value and wins over the normal map. The old Q2RTX-style
+		// packing (metal = normal.alpha/255 * factor) is opt-in per material
+		// via "metalness_from_normal_alpha: true" -- needed because many HD
+		// normal maps (e.g. progs/v_axe.mdl) carry real alpha data that is NOT
+		// metalness, which made a mirror out of every skin that had one. With
+		// no factor authored the packing uses factor = 1.0 (raw alpha).
+		float metal = 0.0f;
+		if (mat->has_metalness_factor || mat->metalness_from_normal_alpha)
+		{
+			const float factor = mat->has_metalness_factor ? mat->metalness_factor : 1.0f;
+			if (mat->metalness_from_normal_alpha && normBuf)
+				metal = (normBuf[i * 4 + 3] / 255.0f) * factor;
+			else
+				metal = factor;
+		}
 
 		// emissive: from the emissive texture, synthesized from the base, or
 		// merged from the classic fullbright mask (fullbrightOverride)
@@ -1279,26 +1304,40 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	// area lights (gated on rtislight in r_world.c)
 	glt->rtislight = mat->is_light;
 
-	// 4.6 debug: report which material was applied and the average emissive
+	// 4.6 debug: report which material was applied, which inputs loaded, and
+	// the min/avg/max of the synthesized RME channels (rough/metal/emis).
 	extern cvar_t rt_mat_debug;
 	if (CVAR_TO_BOOL (rt_mat_debug))
 	{
-		double emSum = 0.0;
+		double rSum = 0.0, mSum = 0.0, eSum = 0.0;
+		int    rMin = 255, rMax = 0, mMin = 255, mMax = 0, eMin = 255, eMax = 0;
 		for (int i = 0; i < npix; i++)
 		{
-			emSum += rme[i * 4 + 2];
+			const int rv = rme[i * 4 + 0];
+			const int mv = rme[i * 4 + 1];
+			const int ev = rme[i * 4 + 2];
+			rSum += rv; mSum += mv; eSum += ev;
+			if (rv < rMin) rMin = rv; if (rv > rMax) rMax = rv;
+			if (mv < mMin) mMin = mv; if (mv > mMax) mMax = mv;
+			if (ev < eMin) eMin = ev; if (ev > eMax) eMax = ev;
 		}
-		Con_Printf ("RT: applied material '%s' (glt='%s') base=%s norm=%s emis=%s gloss=%s avg_emis=%.1f/255 light_brightness=%.3f is_light=%d rtemissive=%d rtemissivecolor=(%.4f, %.4f, %.4f)\n",
+		Con_Printf ("RT: applied material '%s' (glt='%s') base=%s norm=%s emis=%s gloss=%s (%ix%i) baseAlpha=%d normAlpha=%d defRough=%.2f\n",
 		            mat->name, glt->name,
 		            mat->filename_base[0] ? mat->filename_base : "-",
 		            mat->filename_normals[0] ? mat->filename_normals : "-",
 		            mat->filename_emissive[0] ? mat->filename_emissive : "-",
 		            mat->filename_gloss[0] ? mat->filename_gloss : "-",
-		            npix > 0 ? emSum / npix : 0.0,
+		            tw, th, baseHasAlpha ? 1 : 0, normHasAlpha ? 1 : 0, defaultRough);
+		Con_Printf ("RT:   rme rough[min=%.0f avg=%.2f max=%.0f] metal[min=%.0f avg=%.2f max=%.0f] emis[min=%.0f avg=%.2f max=%.0f]\n",
+		            rMin / 255.0f * 100.0f, npix ? rSum / npix / 255.0f * 100.0f : 0.0, rMax / 255.0f * 100.0f,
+		            mMin / 255.0f * 100.0f, npix ? mSum / npix / 255.0f * 100.0f : 0.0, mMax / 255.0f * 100.0f,
+		            eMin / 255.0f, npix ? eSum / npix / 255.0f : 0.0, eMax / 255.0f);
+		Con_Printf ("RT:   flags is_light=%d light_styles=%d light_brightness=%.3f rtemissive=%d rtemissivecolor=(%.4f, %.4f, %.4f) rtemissivemean=%.4f\n",
+		            glt->rtislight ? 1 : 0, glt->rtlightstyles ? 1 : 0,
 		            mat->light_brightness,
-		            glt->rtislight ? 1 : 0,
 		            glt->rtemissive ? 1 : 0,
-		            glt->rtemissivecolor[0], glt->rtemissivecolor[1], glt->rtemissivecolor[2]);
+		            glt->rtemissivecolor[0], glt->rtemissivecolor[1], glt->rtemissivecolor[2],
+		            glt->rtemissivemean);
 	}
 
 	RgMaterialCreateInfo info = {
@@ -1489,6 +1528,8 @@ gltexture_t *TexMgr_LoadImage (
 	glt->rtemissivemean = 0.0f;
 	glt->rtemissivetex = false;
 	glt->rtislight = false;
+	glt->rtlightstyles = true;   // default: honor lightstyle animation unless the material opts out
+	glt->rthasmaterial = false;  // TexMgr_ApplyMaterialFromMat sets this when a material applies
 
 	// upload it
 	switch (glt->source_format)

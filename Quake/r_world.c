@@ -41,6 +41,7 @@ extern cvar_t rt_enable_pvs;
 extern cvar_t rt_reflrefr_depth;
 extern cvar_t rt_wlight_intensity, rt_wlight_radius;
 extern cvar_t rt_emis_light_intensity;
+extern cvar_t rt_light_styles;
 extern cvar_t rt_debugemissive;
 
 cvar_t r_parallelmark = {"r_parallelmark", "1", CVAR_NONE};
@@ -748,12 +749,14 @@ typedef struct rt_uploadsurf_state_t
 	qmodel_t    *model;
 	msurface_t  *surf;
 	gltexture_t *diffuse_tex;
-	// Light source material (is_light / light_color / emissive) of the BASE
-	// texture, NOT the current animated frame. Animated chains (e.g.
-	// +0basebtn -> +1basebtn -> +abasebtn) share the same surfaces, but only the
-	// base frame is usually authored in materials.yaml, so R_TextureAnimation
-	// would hand us a frame without a material and the light would blink on/off
-	// every animation tick (~0.2s).
+	// Light source material (is_light / light_color / emissive) driving the
+	// surface's textured area light. The caller picks it per texture chain:
+	// R_DrawTextureChains_Multitexture prefers the CURRENT animated frame when
+	// that frame carries its own authored material (e.g. a pressed button
+	// switching to +abasebtn's lit frame, or a pulsing medkit panel), falling
+	// back to the base frame's material when the frame has none, so partially
+	// authored chains do not blink on/off every animation tick (~0.2s).
+	// R_DrawTextureChains_Water always uses the base texture (never a light).
 	gltexture_t *light_tex;
 	gltexture_t *lightmap_tex;
 	qboolean     alpha_test;
@@ -1099,12 +1102,53 @@ static void RT_UploadEmissiveLight (const RgTexturedAreaLightUploadInfo *light_i
 
 /*
 ================
+RT_SurfaceLightStyleScale
+
+Classic lightstyle animation folded into the light-source radiance. Map
+fixtures lit by an animated lightstyle (flickering flame/fluorescent lamps,
+pulsing lights) write the animated style index into the receiving surfaces'
+styles[] (style 255 terminates the list); d_lightstylevalue[] then holds the
+8.8 fixed-point brightness for each style index (256 == full, R_AnimateLight
+recomputes it every frame). Non-animated styles sit at 256, so unaffected
+surfaces scale by 1.0 (no change).
+
+For light-source materials we take the most-restrictive animated style found on
+the surface, so a flickering lamp actually flickers instead of radiating at
+constant full power. A material can opt out with "light_styles: false" (always
+full brightness), and rt_light_styles 0 disables the whole feature.
+================
+*/
+static float RT_SurfaceLightStyleScale (const msurface_t *surf)
+{
+	float    scale = 1.0f;
+	qboolean dims  = false;
+
+	for (int i = 0; i < MAXLIGHTMAPS && surf->styles[i] != 255; i++)
+	{
+		const float value = (float)d_lightstylevalue[surf->styles[i]];
+		if (value >= 255.5f)
+			continue; // full (256 = unset/constant) or brighter ('z')
+		if (!dims || value < scale)
+			scale = value * (1.0f / 256.0f);
+		dims = true;
+	}
+
+	return dims ? scale : 1.0f;
+}
+
+/*
+================
 RT_AddEmissiveLight
 
-Called once per surface from RT_BatchSurface. For surfaces whose material is
-an emissive light source (texture_emissive + is_light, with a usable color),
-this emits ONE textured area light covering the surface's actual texture area
-(Phase 2).
+Called once per surface from RT_BatchSurface. For surfaces whose material is a
+light source ("is_light: true" in materials.yaml -- either a luma texture
+texture_emissive or a hand-authored light_color), this emits ONE textured
+area light covering the surface's actual texture area (Phase 2).
+
+IMPORTANT semantics: is_light ONLY gates this NEE light source. A material's
+emissive/luma still makes the surface itself glow (RME emission display,
+rt_emis_mapboost) regardless of is_light, so is_light: false materials (lava,
+idle button frames) keep their surface glow but cast no light.
 
 The emitting surface is the parallelogram spanned by the surface's texcoord
 bounding rectangle, mapped to world through the affine map world = A*s + B*t + C
@@ -1148,6 +1192,20 @@ static void RT_AddEmissiveLight (const rt_uploadsurf_state_t *s)
 	// rt_emis_light_intensity knob and the shared area fixup: those are applied
 	// live at upload time (RT_ScaleEmissiveLightColor), so changing the cvar
 	// takes effect immediately instead of only at map load.
+
+	// Fold the classic lightstyle animation of this surface into the radiance
+	// (flicker / pulse fixtures actually flicker instead of glowing at constant
+	// full power). The material can opt out with "light_styles: false";
+	// rt_light_styles 0 disables the feature globally. When the style is fully
+	// off this frame, skip the light entirely so it neither uploads nor eats a
+	// per-cluster slot / world list entry (it returns next frame when lit).
+	if (light_tex->rtlightstyles && CVAR_TO_BOOL (rt_light_styles))
+	{
+		const float style_scale = RT_SurfaceLightStyleScale (s->surf);
+		VectorScale (color, style_scale, color);
+		if (style_scale <= 0.0f)
+			return;
+	}
 
 	const RgTransform transf = RT_GetBrushModelMatrix (s->ent);
 	const int        vertcount = s->surf->numedges;
@@ -1574,6 +1632,17 @@ void R_DrawTextureChains_Multitexture (
 		qboolean alpha_test = (t->texturechains[chain]->flags & SURF_DRAWFENCE) != 0;
 		gltexture_t *diffuse_tex = R_TextureAnimation (t, ent_frame)->gltexture;
 
+		// The surface is DRAWN with the animated frame above, and its LIGHT
+		// source material follows that frame too -- but only when the frame
+		// carries its own materials.yaml / .mat entry, so a pressed button
+		// switches to +abasebtn's lit material and pulsing panels switch their
+		// light per frame. Frames WITHOUT a material fall back to the base
+		// frame's material (or none), so partially-authored chains do not
+		// blink on/off every animation tick (~0.2s).
+		gltexture_t *light_tex = t->gltexture;
+		if (diffuse_tex->rthasmaterial)
+			light_tex = diffuse_tex;
+
 		for (s = t->texturechains[chain]; s; s = s->texturechains[chain])
 		{
 			// Sky surfaces are not ray-traced geometry: the sky is drawn to the
@@ -1591,7 +1660,7 @@ void R_DrawTextureChains_Multitexture (
 				.model = model,
 				.surf = s,
 				.diffuse_tex = diffuse_tex,
-				.light_tex = t->gltexture,
+				.light_tex = light_tex,
 				.lightmap_tex = (s->lightmaptexturenum >= 0) ? lightmaps[s->lightmaptexturenum].texture : greytexture,
 				.alpha_test = alpha_test,
 				.alpha = alpha,

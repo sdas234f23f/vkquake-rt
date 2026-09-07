@@ -482,10 +482,10 @@ static inline uint32_t RT_PackColorToUint32_FromFloat01(float r, float g, float 
 // emission entirely).
 #define RT_EMIS_LIGHT_INTENSITY_REFERENCE 0.01f
 #define RT_EMIS_INTENSITY_TO_RAW(x)        ((x) * RT_EMIS_LIGHT_INTENSITY_REFERENCE)
-// Raw intensity at which the emissive-surface display boost (emissionMapBoost)
-// equals rt_emis_mapboost. Kept from the pre-unit-scale calibration so behavior
-// is unchanged at equal raw intensities.
-#define RT_EMIS_MAPBOOST_REF_RAW 10.0f
+// The emissive-surface display boost (emissionMapBoost) is rt_emis_mapboost
+// times the live rt_emis_light_intensity, so luma surfaces brighten exactly in
+// step with the light sources. (The old RT_EMIS_MAPBOOST_REF_RAW 10.0 divisor
+// made the default boost 1000x too dim after the unit-scale change; it is gone.)
 // RGB tint applied to every light source (sun, dynamic, world, ambient).
 // rt_brightness is handled separately where scalar scaling is enough.
 #define RT_APPLY_LIGHT_TINT(color)                                              \

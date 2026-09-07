@@ -310,6 +310,7 @@ static void rt_mat_reset(rt_material_t *mat)
     mat->base_factor = 1.0f;
     mat->light_brightness = 1.0f;
     mat->kind = RT_MAT_KIND_REGULAR;
+    mat->light_styles = true;    // surfaces honor lightstyle animation unless light_styles: false
 }
 
 static int rt_mat_parse_kind(const char *kindname)
@@ -375,7 +376,16 @@ static void rt_mat_set_attribute(rt_material_t *mat, const char *key, const char
     else if (!q_strcasecmp(key, "roughness_override"))
         mat->roughness_override = (float)atof(value);
     else if (!q_strcasecmp(key, "metalness_factor"))
+    {
         mat->metalness_factor = (float)atof(value);
+        mat->has_metalness_factor = true; // authored value is authoritative (absolute metallic)
+    }
+    else if (!q_strcasecmp(key, "metalness_from_normal_alpha"))
+    {
+        // Opt-in Q2RTX-style packing: metal = normal.alpha/255 * metalness_factor.
+        // Off by default so "metalness_factor:" keeps its absolute meaning.
+        mat->metalness_from_normal_alpha = rt_mat_parse_bool(value);
+    }
     else if (!q_strcasecmp(key, "emissive_factor"))
         mat->emissive_factor = (float)atof(value);
     else if (!q_strcasecmp(key, "specular_factor"))

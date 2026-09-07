@@ -30,19 +30,21 @@ typedef struct rt_material_s {
     char filename_base[MAX_QPATH];     // base texture path (without .tga)
     char filename_normals[MAX_QPATH];
     char filename_emissive[MAX_QPATH];
-    char filename_mask[MAX_QPATH];
+    char filename_mask[MAX_QPATH];     // NOT IMPLEMENTED (parsed for .mat compat only)
     char filename_gloss[MAX_QPATH];    // gloss map (HD packs: _gloss) -> roughness = 1 - gloss
     float bump_scale;
     float roughness_override;          // 0 = unset
-    float metalness_factor;
+    float metalness_factor;            // metallic: absolute when metalness_factor: is authored
     float emissive_factor;
-    float specular_factor;
+    float specular_factor;             // NOT IMPLEMENTED (parsed for .mat compatibility only)
     float base_factor;
-    int kind;
+    int kind;                          // NOT IMPLEMENTED (parsed for .mat compatibility only)
     qboolean is_light;
-    qboolean light_styles;
-    qboolean bsp_radiance;
-    float default_radiance;
+    qboolean light_styles;             // surface honors lightstyle animation (default true)
+    qboolean has_metalness_factor;     // "metalness_factor:" key present -> factor is authoritative
+    qboolean metalness_from_normal_alpha; // opt-in: metal = normal.alpha/255 * factor (Q2RTX packing)
+    qboolean bsp_radiance;             // NOT IMPLEMENTED (parsed for .mat compatibility only)
+    float default_radiance;            // NOT IMPLEMENTED (parsed for .mat compatibility only)
     qboolean synth_emissive;
     int emissive_threshold;
     // legacy texture_custom_info.txt migrations (now authored in materials.yaml)

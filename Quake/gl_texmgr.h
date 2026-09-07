@@ -88,6 +88,8 @@ typedef struct gltexture_s
 	float                rtemissivemean;         // average emissive mask (.b of RME) over the texture in [0,1]
 	qboolean             rtemissivetex;          // material has a real texture_emissive (luma) loaded
 	qboolean             rtislight;              // material is_light: may generate static emissive area lights
+	qboolean             rtlightstyles;          // material light_styles: surface honors lightstyle animation
+	qboolean             rthasmaterial;          // a materials.yaml / .mat entry was applied to this texture
 } gltexture_t;
 
 extern gltexture_t *notexture;
