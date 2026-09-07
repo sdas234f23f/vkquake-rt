@@ -357,16 +357,21 @@ static void R_SetupContext (cb_context_t *cbx)
 
 static void RT_UploadAllDlights ()
 {
-	// materials-only mode: only light sources defined in materials.yaml are
-	// active (world poly/emissive lights, model/sprite light_color spheres,
-	// luma emission). Classic dlights (muzzle flash, explosions), the
-	// flashlight and the sun are all skipped; with the sun missing,
-	// directionalLightExists = 0 in the shaders, which also disables the sun NEE.
+	// Materials-only mode (rt_materials_only): only light sources defined in
+	// materials.yaml are active - world emissive/light_color surfaces and
+	// model/sprite light_color spheres. The classic dlights (muzzle flash /
+	// explosions), the flashlight and the sun are all skipped; with the sun
+	// missing, directionalLightExists = 0 in the shaders, which also disables
+	// the sun NEE.
 	if (CVAR_TO_BOOL (rt_materials_only))
 	{
 		return;
 	}
 
+	// rt_truelight 2 drops the classic fake point lights too
+	// (RT_AllowFakeLights == false), but keeps the flashlight and sky/sun below.
+	if (RT_AllowFakeLights ())
+	{
 	for (int i = 0; i < MAX_DLIGHTS; i++)
 	{
 		const dlight_t *l = &cl_dlights[i];
@@ -383,19 +388,6 @@ static void RT_UploadAllDlights ()
 		// for those entities so luma is the sole light source and
 		// rt_emis_light_intensity 0 fully extinguishes them (torches etc.).
 		// The classic render path (R_PushDlights) is unaffected.
-		{
-			static int dl_diag = 0;
-			const qboolean isflame = l->key > 0 && l->key < cl.num_entities && cl.entities[l->key].model &&
-			                        strstr (cl.entities[l->key].model->name, "flame") != NULL;
-			if (isflame && dl_diag++ < 10)
-				Con_Printf ("DIAG: dlight key=%d model=%s flags=0x%X skip=%d\n",
-				            l->key,
-				            cl.entities[l->key].model ? cl.entities[l->key].model->name : "NULL",
-				            cl.entities[l->key].model ? cl.entities[l->key].model->flags : 0,
-				            (!CVAR_TO_BOOL (rt_classic_render) && cl.entities[l->key].model &&
-				             (cl.entities[l->key].model->flags & MF_RT_LUMA)) ? 1 : 0);
-		}
-
 		if (!CVAR_TO_BOOL (rt_classic_render) && l->key > 0 && l->key < cl.num_entities)
 		{
 			entity_t *src = &cl.entities[l->key];
@@ -429,6 +421,7 @@ static void RT_UploadAllDlights ()
 		// register for the per-cluster light lists
 		RT_ClusterLightAdd (info.uniqueID, l->origin);
 	}
+	} // RT_AllowFakeLights()
 
 	if (CVAR_TO_FLOAT (rt_flashlight) > 0.1f)
 	{

@@ -212,11 +212,13 @@ static void GL_DrawAliasFrame(
     if (tx && tx->rtforcerasterize)
         rasterize = true;
 
-    if (tx && tx->rthaslightcolor)
+    if (tx && tx->rthaslightcolor && RT_AllowFakeLights ())
     {
         // Explicit spherical light with a hand-authored color (materials.yaml
         // "light_color:"), migrated from the legacy @RASTER_LIGHT entries:
         // projectiles, teleporter, lava balls, explosion sprites, etc.
+        // Suppressed in strict light-source modes (materials_only / rt_truelight 2):
+        // these are "fake" in-air points, not physically-emissive materials.
         vec3_t color = {tx->rtlightcolor[0], tx->rtlightcolor[1], tx->rtlightcolor[2]};
         VectorScale(color, CVAR_TO_FLOAT(rt_dlight_intensity), color);
         RT_FIXUP_LIGHT_INTENSITY(color, true);
@@ -638,29 +640,6 @@ void R_DrawAliasModel(cb_context_t* cbx, entity_t* e, int entuniqueid)
     //
     // draw it
     //
-    if (tx && strstr(tx->name, "flame"))
-    {
-        static int flame_diag = 0;
-        if (flame_diag++ < 6)
-        {
-            gltexture_t* fb = paliashdr->fbtextures[skinnum][anim];
-            Con_Printf("DIAG: R_DrawAliasModel '%s' skinnum=%d anim=%d\n", e->model->name, skinnum, anim);
-            Con_Printf(
-                "DIAG:   gltextures tx=%s rthaslightcolor=%d rtislight=%d rtemissive=%d rtemissivecolor=(%.3f,%.3f,%.3f) rtlightcolor=(%.3f,%.3f,%.3f)\n",
-                tx->name, tx->rthaslightcolor, tx->rtislight, tx->rtemissive,
-                tx->rtemissivecolor[0], tx->rtemissivecolor[1], tx->rtemissivecolor[2],
-                tx->rtlightcolor[0], tx->rtlightcolor[1], tx->rtlightcolor[2]);
-            if (fb)
-                Con_Printf(
-                    "DIAG:   fbtextures fb=%s rthaslightcolor=%d rtislight=%d rtemissive=%d rtemissivecolor=(%.3f,%.3f,%.3f) rtlightcolor=(%.3f,%.3f,%.3f)\n",
-                    fb->name, fb->rthaslightcolor, fb->rtislight, fb->rtemissive,
-                    fb->rtemissivecolor[0], fb->rtemissivecolor[1], fb->rtemissivecolor[2],
-                    fb->rtlightcolor[0], fb->rtlightcolor[1], fb->rtlightcolor[2]);
-            else
-                Con_Printf("DIAG:   fbtextures[%d][%d] = NULL\n", skinnum, anim);
-        }
-    }
-
     GL_DrawAliasFrame(cbx, e, paliashdr, lerpdata, tx, entalpha, alphatest, shadevector, lightcolor, entuniqueid);
 }
 

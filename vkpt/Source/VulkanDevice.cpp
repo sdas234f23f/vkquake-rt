@@ -1433,44 +1433,13 @@ void vkpt::VulkanDevice::UploadTexturedAreaLight(const RgTexturedAreaLightUpload
     // Resolve the RME (emission/luma) texture index from the light's material.
     // The material's textures live in textureManager; LightManager doesn't have
     // access to it, so the index is resolved here and passed down.
+    // EMPTY_TEXTURE_INDEX (material == RG_NO_MATERIAL, or a material with no
+    // emission texture) means "no mask": the caller then sets meanEmiss = 1.0
+    // and the whole polygon emits uniformly at lightInfo.color. The shader
+    // already handles textureIndex == 0 as mask = 1.0 (see Light.h), so unlike
+    // the rasterized-geometry path there is nothing to reject here.
     const MaterialTextures textures = textureManager->GetMaterialTextures(pLightInfo->material);
     const uint32_t textureIndex = textures.indices[MATERIAL_ROUGHNESS_METALLIC_EMISSION_INDEX];
-
-    // No emission texture -> no luma mask to modulate against. The caller
-    // shouldn't upload a textured area light without an RME, but guard anyway.
-    // TEMP DIAG
-    {
-        static FILE *f = nullptr;
-        static int diagN = 0;
-        if (f == nullptr)
-        {
-            f = fopen("tal_vkpt.log", "w");
-        }
-        if (f != nullptr && diagN < 300)
-        {
-            diagN++;
-            if (textureIndex == EMPTY_TEXTURE_INDEX)
-            {
-                fprintf(f, "SKIP mat=%u\n", pLightInfo->material);
-            }
-            else
-            {
-                fprintf(f, "OK   mat=%u rme=%u mean=%.4f color=(%.3f,%.3f,%.3f) numVerts=%d area=%.2f C=(%.1f,%.1f,%.1f) n=(%.3f,%.3f,%.3f) fit=%d static=%d\n",
-                        pLightInfo->material, textureIndex, pLightInfo->meanEmiss,
-                        pLightInfo->color.data[0], pLightInfo->color.data[1], pLightInfo->color.data[2],
-                        pLightInfo->numVerts, pLightInfo->area,
-                        pLightInfo->C.data[0], pLightInfo->C.data[1], pLightInfo->C.data[2],
-                        pLightInfo->normal.data[0], pLightInfo->normal.data[1], pLightInfo->normal.data[2],
-                        pLightInfo->fit, pLightInfo->isStatic);
-            }
-            fflush(f);
-        }
-    }
-
-    if (textureIndex == EMPTY_TEXTURE_INDEX)
-    {
-        return;
-    }
 
     scene->UploadLight(currentFrameState.GetFrameIndex(), *pLightInfo, textureIndex);
 }

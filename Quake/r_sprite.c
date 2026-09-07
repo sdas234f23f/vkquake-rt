@@ -199,11 +199,15 @@ void R_DrawSpriteModel (cb_context_t *cbx, entity_t *e, int entuniqueid)
 	if (tx && tx->rtforcerasterize)
 		is_rasterized = true;
 
-	if (tx && tx->rthaslightcolor)
+	if (tx && tx->rthaslightcolor && RT_AllowFakeLights ())
 	{
 		vec3_t color = {tx->rtlightcolor[0], tx->rtlightcolor[1], tx->rtlightcolor[2]};
 		VectorScale (color, CVAR_TO_FLOAT (rt_dlight_intensity), color);
 		RT_FIXUP_LIGHT_INTENSITY (color, true);
+
+		// The sprite's hand-authored light_color sphere is a "fake" in-air
+		// point (projectile glows, explosion flashes); strict light-source
+		// modes (materials_only / rt_truelight 2) drop it.
 
 		RgSphericalLightUploadInfo light_info = {
 			.uniqueID = RT_GetAliasModelUniqueId (entuniqueid),

@@ -383,6 +383,7 @@ extern cvar_t rt_truelight;
 extern cvar_t rt_materials_only;
 extern cvar_t rt_poi_trigger, rt_poi_func, rt_poi_weapon, rt_poi_pwrup, rt_poi_armor, rt_poi_key, rt_poi_health, rt_poi_ammo;
 extern cvar_t rt_poi_distthresh, rt_poi_distthresh_super;
+extern cvar_t rt_light_reach;
 
 
 static qboolean StartsWith (const char *val, const char *begin)
@@ -778,12 +779,41 @@ void RT_ParseElights ()
 	}
 }
 
+// ============================================================================
+// Strict light-source modes
+// ----------------------------------------------------------------------------
+// The two strict-mode cvars (rt_materials_only / rt_truelight) tell the light
+// uploaders which categories of light may exist in a frame. Everything funnels
+// through RT_AllowFakeLights() below so the condition lives in one place:
+//
+//                         rt_truelight  0   1   2   |  rt_materials_only 1
+//   textured-area lights (luma / light_color)      on   on   on   |  on
+//   sky / sun                                      on   on   on   |  off
+//   flashlight                                     on   on   on   |  off
+//   classic dlights (muzzle flash / explosions)    on   on   off  |  off
+//   world light_color spheres (removed)            -    -    -    |  -
+//   model/sprite light_color spheres               on   on   off  |  off
+//   legacy entity "light" points                   on   off  off  |  off
+//
+// rt_truelight 0 is the legacy "everything glows" look, 1 is the physical
+// default (luma/emissive materials + real dynamic events like flashes), and 2
+// restricts to physically-plausible light sources only (no floating fake
+// points); rt_materials_only additionally drops the sky and the flashlight.
+// ============================================================================
+qboolean RT_AllowFakeLights (void)
+{
+	// Fake lights = classic point-light approximations that "hang in the air"
+	// (dlights, model/sprite light_color spheres). They are suppressed in
+	// materials-only mode and at rt_truelight 2.
+	return !CVAR_TO_BOOL (rt_materials_only) && CVAR_TO_FLOAT (rt_truelight) < 2;
+}
+
 void RT_UploadAllElights ()
 {
-	// rt_truelight 1 = only real light sources (emissive textures, lava,
-	// explosions, sky, etc.). Legacy entity lights that "hang in the air"
-	// are skipped.
-	if (CVAR_TO_BOOL (rt_truelight) || CVAR_TO_BOOL (rt_materials_only))
+	// Legacy entity lights (map "light" entities that hang in the air) are not
+	// physically-plausible sources: they exist only in legacy rt_truelight 0
+	// mode. Both strict modes (rt_truelight > 0, materials_only) skip them.
+	if (CVAR_TO_FLOAT (rt_truelight) > 0 || CVAR_TO_BOOL (rt_materials_only))
 	{
 		return;
 	}
@@ -972,6 +1002,58 @@ static mleaf_t *RT_ResolveLightLeaf (const vec3_t origin, qmodel_t *wm)
 	return NULL;
 }
 
+/*
+Assign a stable slot to uid in cluster c and stamp it as present this frame.
+The slot is reused if the light already owns one, recycled if a stale one is
+free, or freshly appended when the cluster still has room. If the cluster is
+full the light simply is not sampled there this frame (warned once globally).
+*/
+static void RT_ClusterAssignSlot (int c, uint64_t uid, uint64_t *slotUids,
+	uint32_t *slotStamp, uint8_t *slotFill, uint32_t frameStamp)
+{
+	uint64_t *cuids = slotUids + c * RT_CLUSTER_MAX_PER_LIST;
+	uint32_t *cstamp = slotStamp + c * RT_CLUSTER_MAX_PER_LIST;
+	const int cfill = slotFill[c];
+
+	// Already assigned slot for this unique ID?
+	for (int s = 0; s < cfill; s++)
+	{
+		if (cuids[s] == uid)
+		{
+			cstamp[s] = frameStamp;
+			return;
+		}
+	}
+
+	// Recycle a slot that has been unused for a while.
+	for (int s = 0; s < cfill; s++)
+	{
+		if (frameStamp - cstamp[s] > RT_CLUSTER_SLOT_RECYCLE_FRAMES)
+		{
+			cuids[s] = uid;
+			cstamp[s] = frameStamp;
+			return;
+		}
+	}
+
+	// Otherwise append a fresh slot.
+	if (slotFill[c] < RT_CLUSTER_MAX_PER_LIST)
+	{
+		const int s = slotFill[c]++;
+		cuids[s] = uid;
+		cstamp[s] = frameStamp;
+		return;
+	}
+
+	if (!rt_cluster_perlist_warned)
+	{
+		Con_DWarning ("RT: a cluster reached the %i distinct-light limit, "
+			"new lights are not sampled by the RT renderer.\n",
+			RT_CLUSTER_MAX_PER_LIST);
+		rt_cluster_perlist_warned = true;
+	}
+}
+
 void RT_ClusterLightListsUpload (void)
 {
 	qmodel_t *wm = cl.worldmodel;
@@ -1043,6 +1125,43 @@ void RT_ClusterLightListsUpload (void)
 			continue;
 
 		const uint64_t uid = rt_cluster_lights[li].uniqueID;
+
+		// A leaf with no compressed VIS row (a map that carries no visdata at
+		// all, or a leaf the compiler gave no row) makes Mod_LeafPVS() answer
+		// "visible from every cluster". Flooding all clusters again exhausts
+		// the per-cluster slot budget map-wide and starves lights registered
+		// later, so cap the fallback by distance instead: the light reaches
+		// only clusters whose leaf bounds lie within rt_light_reach of it.
+		if (!leaf->compressed_vis)
+		{
+			const float reach = METRIC_TO_QUAKEUNIT (CVAR_TO_FLOAT (rt_light_reach));
+			const float reachSq = reach * reach;
+			for (int c = 1; c < numClusters; c++)
+			{
+				const mleaf_t *cleaf = &wm->leafs[c];
+				if (cleaf->contents == CONTENTS_SOLID)
+					continue;
+
+				// squared distance from the light origin to the leaf AABB
+				const float *o = rt_cluster_lights[li].origin;
+				float         d2 = 0.0f;
+				for (int a = 0; a < 3; a++)
+				{
+					float d = 0.0f;
+					if (o[a] < cleaf->minmaxs[a])
+						d = cleaf->minmaxs[a] - o[a];
+					else if (o[a] > cleaf->minmaxs[3 + a])
+						d = o[a] - cleaf->minmaxs[3 + a];
+					d2 += d * d;
+				}
+				if (d2 > reachSq)
+					continue;
+
+				RT_ClusterAssignSlot (c, uid, slotUids, slotStamp, slotFill, frameStamp);
+			}
+			continue;
+		}
+
 		const byte *vis = Mod_LeafPVS (leaf, wm);
 		for (int j = 0; j < (numClusters + 7) / 8; j++)
 		{
@@ -1058,51 +1177,7 @@ void RT_ClusterLightListsUpload (void)
 				if (c >= numClusters)
 					continue;
 
-				uint64_t *cuids = slotUids + c * RT_CLUSTER_MAX_PER_LIST;
-				uint32_t *cstamp = slotStamp + c * RT_CLUSTER_MAX_PER_LIST;
-				const int cfill = slotFill[c];
-
-				// Already assigned slot for this unique ID?
-				int slot = -1;
-				for (int s = 0; s < cfill; s++)
-				{
-					if (cuids[s] == uid)
-					{
-						slot = s;
-						break;
-					}
-				}
-
-				if (slot < 0)
-				{
-					// Recycle a slot that has been unused for a while.
-					for (int s = 0; s < cfill; s++)
-					{
-						if (frameStamp - cstamp[s] > RT_CLUSTER_SLOT_RECYCLE_FRAMES)
-						{
-							slot = s;
-							break;
-						}
-					}
-					// Otherwise append a fresh slot.
-					if (slot < 0 && slotFill[c] < RT_CLUSTER_MAX_PER_LIST)
-						slot = slotFill[c]++;
-				}
-
-				if (slot < 0)
-				{
-					if (!rt_cluster_perlist_warned)
-					{
-						Con_DWarning ("RT: a cluster reached the %i distinct-light limit, "
-							"new lights are not sampled by the RT renderer.\n",
-							RT_CLUSTER_MAX_PER_LIST);
-						rt_cluster_perlist_warned = true;
-					}
-					continue;
-				}
-
-				cuids[slot] = uid;
-				cstamp[slot] = frameStamp;
+				RT_ClusterAssignSlot (c, uid, slotUids, slotStamp, slotFill, frameStamp);
 			}
 		}
 	}

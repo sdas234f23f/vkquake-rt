@@ -98,12 +98,29 @@ cvar_t                          r_usesops = {"r_usesops", "1", CVAR_ARCHIVE};   
 task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 
 // RT
-// Master emissive-luma brightness knob (must match rt_emis_light_intensity's
-// default above): luma surface emission is scaled by
-// rt_emis_mapboost * (rt_emis_light_intensity / RT_EMIS_LIGHT_INTENSITY_DEFAULT),
-// so at the default the effective boost equals rt_emis_mapboost and the cvar
-// acts as a relative multiplier (0 extinguishes luma glow entirely).
-#define RT_EMIS_LIGHT_INTENSITY_DEFAULT 10.0f
+// Master emissive-luma knob rt_emis_light_intensity is a unit multiplier with a
+// default of 1.0, calibrated to reproduce the reference lamp look (see
+// RT_EMIS_LIGHT_INTENSITY_REFERENCE / RT_EMIS_MAPBOOST_REF_RAW in glquake.h).
+// The emissive-surface display boost below follows the same raw scale so the
+// surface glow and the light-source radiance stay in lockstep.
+//
+// Light-source modes:
+//   rt_truelight      0 = legacy: fake lights everywhere (incl. legacy map
+//                         entity "light" points)
+//                     1 = physical default: luma/emissive materials + real
+//                         dynamic events (muzzle flash / explosions / rockets)
+//                     2 = strict: only textured-area lights (luma + light_color
+//                         materials) and the sky; no floating fake points and
+//                         no classic dlights (the flashlight stays on)
+//   rt_materials_only 1 = materials.yaml sources only; the sky/sun and the
+//                         flashlight are additionally dropped (for previewing
+//                         "what the map's own materials light up")
+//   rt_plight_intensity / rt_plight_radius / rt_wlight_intensity /
+//   rt_wlight_radius are kept for config.cfg compatibility only: the world
+//   poly/sphere light paths they scaled were removed and the renderer no
+//   longer reads them.
+// The authoritative source-by-mode table lives next to RT_AllowFakeLights()
+// in gl_rlight.c.
 #define CVAR_DEF_LIST( CVAR_DEF_T ) \
 	\
 	CVAR_DEF_T (rt_classic_render, "0") \
@@ -122,13 +139,15 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_wlight_intensity, "3.0") \
 	CVAR_DEF_T (rt_wlight_radius, "0.01") \
 	\
-	CVAR_DEF_T (rt_emis_light_intensity, "10.0") \
+	CVAR_DEF_T (rt_emis_light_intensity, "1.0") \
 	\
 	CVAR_DEF_T (rt_elight_normaliz, "100") \
 	CVAR_DEF_T (rt_elight_default, "200") \
 	CVAR_DEF_T (rt_elight_default_mdl, "1000") \
 	CVAR_DEF_T (rt_elight_threshold, "-1") \
     CVAR_DEF_T (rt_elight_radius, "0.01") \
+    \
+	CVAR_DEF_T (rt_light_reach, "25") \
 	CVAR_DEF_T (rt_truelight, "1") \
 	CVAR_DEF_T (rt_materials_only, "0") \
 	\
@@ -1253,7 +1272,7 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	RgDrawFrameTexturesParams texture_params = {
 		.dynamicSamplerFilter = CVAR_TO_INT32 (vid_filter) == 1 ? RG_SAMPLER_FILTER_NEAREST : RG_SAMPLER_FILTER_LINEAR,
 		.normalMapStrength = CVAR_TO_FLOAT (rt_normalmap_stren),
-		.emissionMapBoost = CVAR_TO_FLOAT (rt_emis_mapboost) * (CVAR_TO_FLOAT (rt_emis_light_intensity) / RT_EMIS_LIGHT_INTENSITY_DEFAULT),
+		.emissionMapBoost = CVAR_TO_FLOAT (rt_emis_mapboost) * (RT_EMIS_INTENSITY_TO_RAW (CVAR_TO_FLOAT (rt_emis_light_intensity)) / RT_EMIS_MAPBOOST_REF_RAW),
 		.emissionMaxScreenColor = CVAR_TO_FLOAT (rt_emis_maxscrcolor),
 		.minRoughness = CVAR_TO_FLOAT (rt_roughmin),
 	};

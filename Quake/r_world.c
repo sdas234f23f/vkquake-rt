@@ -39,7 +39,6 @@ extern cvar_t rt_brush_rough;
 extern cvar_t rt_classic_render;
 extern cvar_t rt_enable_pvs;
 extern cvar_t rt_reflrefr_depth;
-extern cvar_t rt_plight_intensity, rt_plight_radius;
 extern cvar_t rt_wlight_intensity, rt_wlight_radius;
 extern cvar_t rt_emis_light_intensity;
 extern cvar_t rt_debugemissive;
@@ -53,32 +52,20 @@ static int world_texend[NUM_WORLD_CBX];
 
 extern RgVertex *rtallbrushvertices;
 
-// Phase 1.5: world light surfaces can be uploaded as TRIANGLE (area) lights,
-// Q2RTX-style: light-textured surfaces (*light*, torch flames, signs) become
-// sphere lights. They carry their emission normal and only illuminate surfaces
-// IN FRONT of it (one-sided, Q2RTX spotlight factor) - so a torch does NOT
-// light the mounting wall behind it through the geometry (no "light cylinder"
-// parallelogram), and the patches are round point-light falloffs (no
-// quadrilateral area-light shapes on the floor/wall grid).
-#define RT_USE_SPHERE_INSTEAD_OF_POLY 1
-
 #define MAX_WORLDLIGHTS_COUNT 2048
-static RgPolygonalLightUploadInfo rt_wldlights_tri[MAX_WORLDLIGHTS_COUNT];
-static int                        rt_wldlights_tri_count = 0;
-static RgSphericalLightUploadInfo rt_wldlights_sph[MAX_WORLDLIGHTS_COUNT];
-static int                        rt_wldlights_sph_count = 0;
 
-// Emissive material surfaces (lava, buttons, runes, light panels) become
-// textured area lights (Phase 2): the emission follows the luma mask of the
-// material's RME texture, so the light comes from the actual luma footprint
-// (lamp body, medkit diodes) and is sampled via next-event estimation instead
-// of only contributing when a random bounce happens to hit them.
+// Emissive material surfaces (lava, buttons, runes, light panels, lamp
+// fixtures) become textured area lights: the emission follows the luma mask of
+// the material's RME texture, so the light comes from the actual luma
+// footprint (lamp body, medkit diodes) and is sampled via next-event
+// estimation instead of only contributing when a random bounce happens to hit
+// them. A maskless light source (materials.yaml "light_color:" + "is_light:
+// true" with no luma texture, e.g. *light* lamp textures) is emitted as a
+// UNIFORM textured area light over the whole surface (mask = 1.0), so it also
+// registers here. This textured-area path is the ONLY world-light source - the
+// old poly-to-sphere conversion (rt_plight_*) has been removed.
 static RgTexturedAreaLightUploadInfo rt_wldlights_emissive[MAX_WORLDLIGHTS_COUNT];
 static int                           rt_wldlights_emissive_count = 0;
-
-#if RT_USE_SPHERE_INSTEAD_OF_POLY
-static RgPolygonalLightUploadInfo rt_tempbuffer[512]; 
-#endif
 
 #define RT_CUSTOMPORTALS_PATH RT_OVERRIDEN_FOLDER "world_custom_portals.txt"
 
@@ -751,69 +738,8 @@ RgTransform RT_GetBrushModelMatrix (entity_t *e)
 	return RT_GetModelTransform (model_matrix);
 }
 
-static void AccumulateCenterAndNormal(const RgPolygonalLightUploadInfo *src, vec3_t inout_center, vec3_t inout_normal)
-{
-	vec3_t local_center = {0, 0, 0};
-
-	const float *a = src->positions[0].data;
-	const float *b = src->positions[1].data;
-	const float *c = src->positions[2].data;
-
-	VectorAdd (local_center, a, local_center);
-	VectorAdd (local_center, b, local_center);
-	VectorAdd (local_center, c, local_center);
-	VectorScale (local_center, 1.0f / 3.0f, local_center);
-
-	vec3_t e1, e2;
-	VectorSubtract (b, a, e1);
-	VectorSubtract (c, a, e2);
-	VectorNormalize (e1);
-	VectorNormalize (e2);
-
-	vec3_t local_normal;
-	CrossProduct (e1, e2, local_normal);
-
-	VectorAdd (inout_center, local_center, inout_center);
-	VectorAdd (inout_normal, local_normal, inout_normal);
-}
-
-static qboolean HaveSharedEdge (const RgPolygonalLightUploadInfo *poly_a, const RgPolygonalLightUploadInfo *poly_b)
-{
-	for (int e = 0; e < 3; e++)
-	{
-		const RgFloat3D *edge_cur[2] = {
-			&poly_a->positions[(e + 0) % 3],
-			&poly_a->positions[(e + 1) % 3],
-		};
-
-		for (int ek = 0; ek < 3; ek++)
-		{
-			const RgFloat3D *edge_prev[2] = {
-				&poly_b->positions[(ek + 0) % 3],
-				&poly_b->positions[(ek + 1) % 3],
-			};
-
-			const float threshold = 0.1f;
-
-			float l0 = VectorLengthSquared (edge_cur[0]->data, edge_prev[0]->data);
-			float l1 = VectorLengthSquared (edge_cur[1]->data, edge_prev[1]->data);
-
-			float r0 = VectorLengthSquared (edge_cur[0]->data, edge_prev[1]->data);
-			float r1 = VectorLengthSquared (edge_cur[1]->data, edge_prev[0]->data);
-
-			if ((l0 < threshold && l1 < threshold) || (r0 < threshold && r1 < threshold))
-			{
-				return true;
-			}
-		}
-	}
-
-	return false;
-}
-
 static qboolean  RT_FindNearestTeleport (const RgGeometryUploadInfo *info, uint8_t *result, qboolean *potentially_mirror);
 static RgFloat3D ApplyTransform (const RgTransform *transform, const vec3_t v);
-static void      PolyToSphericalLights (const RgPolygonalLightUploadInfo *polys, int count, qboolean upload);
 
 typedef struct rt_uploadsurf_state_t
 {
@@ -922,10 +848,6 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 
 	gltexture_t *diffuse_tex = r_lightmap_cheatsafe ? NULL : s->diffuse_tex;
 	gltexture_t *lightmap_tex = r_fullbright_cheatsafe ? NULL : s->lightmap_tex;
-	// Light source properties (is_light / light_color / emissive) come from the
-	// base texture's material so animated chains don't blink the light on/off
-	// (see rt_uploadsurf_state_t::light_tex).
-	gltexture_t *light_tex = r_lightmap_cheatsafe ? NULL : (s->light_tex ? s->light_tex : s->diffuse_tex);
 	// The classic lightmap (static baked light + dynamic dlight patches) is
 	// applied as a SHADE layer on top of the RT albedo. In the RT renderer the
 	// ray tracer produces ALL the lighting (Q2RTX model), so the classic
@@ -935,87 +857,6 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 	if (!CVAR_TO_BOOL (rt_classic_render))
 	{
 		lightmap_tex = NULL;
-	}
-
-	// Curated poly light textures (materials.yaml "light_color:" + "is_light: true",
-	// e.g. *light*) become light sources; with RT_USE_SPHERE_INSTEAD_OF_POLY they
-	// are converted to sphere lights. A material that ALSO has a real
-	// texture_emissive (luma) is NOT a poly light -- it generates an emissive
-	// TRIANGLE (area) light below so the light comes from the whole luma surface
-	// instead of a single sphere centered on the surface.
-	const qboolean is_poly_light = light_tex && light_tex->rthaslightcolor && light_tex->rtislight &&
-	                               !light_tex->rtemissivetex;
-
-	if (is_poly_light)
-	{
-		const RgTransform transf = RT_GetBrushModelMatrix (s->ent);
-
-		vec3_t color;
-		VectorCopy (light_tex->rtlightcolor, color);
-		VectorScale (color, CVAR_TO_FLOAT (rt_plight_intensity), color);
-		RT_FIXUP_LIGHT_INTENSITY (color, true);
-
-		for (int tri = 0; tri < num_surf_indices / 3; tri++)
-		{
-			const vec_t *a0 = vertices[indices[tri * 3 + 0]].position;
-			const vec_t *a1 = vertices[indices[tri * 3 + 1]].position;
-			const vec_t *a2 = vertices[indices[tri * 3 + 2]].position;
-			
-			RgPolygonalLightUploadInfo light_info = {
-				.uniqueID = RT_GetBrushSurfUniqueId (s->entuniqueid, s->model, s->surf, tri),
-				.color = RT_VEC3(color),
-				.positions =
-					{
-						ApplyTransform (&transf, a0),
-						ApplyTransform (&transf, a1),
-						ApplyTransform (&transf, a2),
-					},
-			};
-
-			if (!is_static_geom)
-			{
-#if RT_USE_SPHERE_INSTEAD_OF_POLY
-				if (tri < (int) countof (rt_tempbuffer))
-				{
-					rt_tempbuffer[tri] = light_info;
-				}
-				else
-				{
-					assert (false);
-				}
-#else
-				RgResult r = rgUploadPolygonalLight (vulkan_globals.instance, &light_info);
-				RG_CHECK (r);
-#endif
-			}
-			else
-			{
-				// if it's a static geometry, then save light data
-				// to upload it each frame
-				if (rt_wldlights_tri_count < MAX_WORLDLIGHTS_COUNT)
-				{
-					rt_wldlights_tri[rt_wldlights_tri_count++] = light_info;
-				}
-				else
-				{
-					// overflow: skip (don't assert - large maps may exceed the cap)
-					static qboolean warned = false;
-					if (!warned)
-					{
-						warned = true;
-						Con_DWarning ("RT: polygon world lights exceeded MAX_WORLDLIGHTS_COUNT (%i)\n",
-						              MAX_WORLDLIGHTS_COUNT);
-					}
-				}
-			}
-		}
-
-#if RT_USE_SPHERE_INSTEAD_OF_POLY
-		if (!is_static_geom)
-		{
-			PolyToSphericalLights (rt_tempbuffer, num_surf_indices / 3, true);
-		}
-#endif
 	}
 
 	if (s->is_teleport && !CVAR_TO_BOOL (rt_classic_render) && CVAR_TO_INT32 (rt_reflrefr_depth) > 0)
@@ -1194,28 +1035,50 @@ static void RT_EmitEmissiveWirePolygon (const RgTexturedAreaLightUploadInfo *lt)
 
 /*
 ================
+RT_ScaleEmissiveLightColor
+
+Apply the master rt_emis_light_intensity knob (unit multiplier; 1.0 == the
+calibrated reference look, see RT_EMIS_LIGHT_INTENSITY_REFERENCE) plus the
+shared light-intensity fixup to a radiance color. Called at every upload so the
+cvar is live even for static world lights whose geometry/area are baked only
+once per map.
+================
+*/
+static void RT_ScaleEmissiveLightColor (vec3_t color)
+{
+	VectorScale (color, RT_EMIS_INTENSITY_TO_RAW (CVAR_TO_FLOAT (rt_emis_light_intensity)), color);
+	RT_FIXUP_LIGHT_INTENSITY (color, true);
+}
+
+/*
+================
 RT_UploadEmissiveLight
 
 Route one generated textured area light to its destination: immediate GPU
 upload for dynamic geometry (with per-cluster registration and the
 rt_debugemissive wireframe overlay), or the static per-frame upload list for
-world geometry.
+world geometry. The light_info carries the BASE radiance (no intensity knob /
+area fixup); the intensity is applied here for dynamic lights and at each
+per-frame upload for static ones (RT_UploadAllWorldModelLights).
 ================
 */
 static void RT_UploadEmissiveLight (const RgTexturedAreaLightUploadInfo *light_info, qboolean is_static_geom)
 {
 	if (!is_static_geom)
 	{
-		RgResult r = rgUploadTexturedAreaLight (vulkan_globals.instance, light_info);
+		RgTexturedAreaLightUploadInfo li = *light_info;
+		RT_ScaleEmissiveLightColor (li.color.data);
+
+		RgResult r = rgUploadTexturedAreaLight (vulkan_globals.instance, &li);
 		RG_CHECK (r);
 
 		vec3_t center;
-		RT_TexturedAreaLightCenter (light_info, center);
-		RT_ClusterLightAdd (light_info->uniqueID, center);
+		RT_TexturedAreaLightCenter (&li, center);
+		RT_ClusterLightAdd (li.uniqueID, center);
 
 		if (CVAR_TO_BOOL (rt_debugemissive))
 		{
-			RT_EmitEmissiveWirePolygon (light_info);
+			RT_EmitEmissiveWirePolygon (&li);
 		}
 	}
 	else if (rt_wldlights_emissive_count < MAX_WORLDLIGHTS_COUNT)
@@ -1260,11 +1123,19 @@ static void RT_AddEmissiveLight (const rt_uploadsurf_state_t *s)
 {
 	gltexture_t *light_tex = s->light_tex ? s->light_tex : s->diffuse_tex;
 
-	// Mirror of the is_emissive predicate previously inlined in RT_FlushBatch.
-	if (!light_tex || !light_tex->rtislight || !light_tex->rtemissivetex)
+	// Light-source materials only: a material is a light source when it has a
+	// luma texture (texture_emissive -> MASKED area light following the luma
+	// footprint) OR a hand-authored light_color (is_light, e.g. the *light*
+	// lamp textures -> UNIFORM area light over the whole surface). Both are
+	// uploaded for NEE; in classic render they are skipped by the caller.
+	if (!light_tex || !light_tex->rtislight)
 		return;
 	if (!light_tex->rthaslightcolor && VectorLength (light_tex->rtemissivecolor) <= 0.01f)
 		return;
+
+	// Real luma mask present (texture_emissive with non-zero average luma)?
+	// Drives the material / meanEmiss pair below.
+	const qboolean has_mask = light_tex->rtemissivetex && light_tex->rtemissivemean > 0.0f;
 
 	// Prefer the hand-authored light_color when present (materials.yaml),
 	// falling back to the average luma emission color.
@@ -1273,8 +1144,10 @@ static void RT_AddEmissiveLight (const rt_uploadsurf_state_t *s)
 		VectorCopy (light_tex->rtlightcolor, color);
 	else
 		VectorCopy (light_tex->rtemissivecolor, color);
-	VectorScale (color, CVAR_TO_FLOAT (rt_emis_light_intensity), color);
-	RT_FIXUP_LIGHT_INTENSITY (color, true);
+	// color is the BASE radiance at full mask brightness, WITHOUT the master
+	// rt_emis_light_intensity knob and the shared area fixup: those are applied
+	// live at upload time (RT_ScaleEmissiveLightColor), so changing the cvar
+	// takes effect immediately instead of only at map load.
 
 	const RgTransform transf = RT_GetBrushModelMatrix (s->ent);
 	const int        vertcount = s->surf->numedges;
@@ -1463,8 +1336,13 @@ static void RT_AddEmissiveLight (const rt_uploadsurf_state_t *s)
 	// mask aligns perfectly with the surface texture.
 	RgTexturedAreaLightUploadInfo light_info = {0};
 	light_info.uniqueID  = RT_GetBrushSurfUniqueId (s->entuniqueid, s->model, s->surf, 0);
-	light_info.material  = light_tex->rtmaterial;
-	light_info.meanEmiss = light_tex->rtemissivemean;
+	// Masked lights resolve their luma (RME) texture through light_tex->rtmaterial
+	// and use the average luma (meanEmiss) so the shader can normalize the mask
+	// before sampling; maskless lights carry NO material and meanEmiss = 1.0, so
+	// the shader reads mask = 1.0 and the WHOLE surface emits uniformly at the
+	// hand-authored light color.
+	light_info.material  = has_mask ? light_tex->rtmaterial : RG_NO_MATERIAL;
+	light_info.meanEmiss = has_mask ? light_tex->rtemissivemean : 1.0f;
 	light_info.area      = total_area;
 	light_info.fit       = 0;      // set below after the affine fit
 	light_info.isStatic  = is_static_geom ? 1 : 0;
@@ -1528,47 +1406,6 @@ static void RT_AddEmissiveLight (const rt_uploadsurf_state_t *s)
 	// dw = area * G (solid angle), so the light contribution scales with the
 	// lit footprint's area. No flux-concentration multiplier here.
 	VectorCopy (color, light_info.color.data);
-
-	// TEMP DIAG
-	{
-		static int diag_shown = 0;
-		if (diag_shown < 60 && (strstr (light_tex->name, "tlight") || strstr (light_tex->name, "basebtn")))
-		{
-			// Affine-fit sanity: max |world_vertex - (C + A*s + B*t)| over the
-			// surface's own vertices. Near 0 => the light polygon lies exactly
-			// on the brush face (mask/geometry aligned); large => mapping bug.
-			float fit_max_err = -1.0f;
-			if (fit_ok)
-			{
-				for (int i = 0; i < vertcount; i++)
-				{
-					const RgFloat3D p = ApplyTransform (&transf, verts[i].position);
-					const float su2 = verts[i].texCoord[0];
-					const float tv2 = verts[i].texCoord[1];
-					vec3_t f;
-					f[0] = A[0] * su2 + B[0] * tv2 + C[0];
-					f[1] = A[1] * su2 + B[1] * tv2 + C[1];
-					f[2] = A[2] * su2 + B[2] * tv2 + C[2];
-					const float err = sqrtf ((p.data[0]-f[0]) * (p.data[0]-f[0]) +
-					                          (p.data[1]-f[1]) * (p.data[1]-f[1]) +
-					                          (p.data[2]-f[2]) * (p.data[2]-f[2]));
-					if (err > fit_max_err)
-						fit_max_err = err;
-				}
-			}
-			vec3_t accum_normal_dir;
-			VectorCopy (accum_normal, accum_normal_dir);
-			VectorNormalize (accum_normal_dir);
-			Con_Printf ("TAL: tex=%s meanEmiss=%.4f color=(%.3f,%.3f,%.3f) area=%.2f numVerts=%d fit=%d fiterr=%.4f static=%d material=%u uid=%llx n=(%.2f,%.2f,%.2f) an=(%.2f,%.2f,%.2f)\n",
-			            light_tex->name, light_tex->rtemissivemean,
-			            light_info.color.data[0], light_info.color.data[1], light_info.color.data[2],
-			            total_area, light_info.numVerts, fit_ok, fit_max_err, is_static_geom,
-			            (unsigned) light_info.material, (unsigned long long) light_info.uniqueID,
-			            normal[0], normal[1], normal[2],
-			            accum_normal_dir[0], accum_normal_dir[1], accum_normal_dir[2]);
-			diag_shown++;
-		}
-	}
 
 	RT_UploadEmissiveLight (&light_info, is_static_geom);
 }
@@ -1799,88 +1636,6 @@ void R_DrawTextureChains (cb_context_t *cbx, qmodel_t *model, entity_t *ent, tex
 	R_DrawTextureChains_Multitexture (cbx, model, ent, chain, entalpha, 0, model->numtextures, entuniqueid);
 }
 
-#if RT_USE_SPHERE_INSTEAD_OF_POLY
-static void AddSphericalLight (qboolean upload, const RgPolygonalLightUploadInfo *src, vec3_t accum_center, vec3_t accum_normal, int sharing)
-{
-	VectorScale (accum_center, 1.0f / (float)sharing, accum_center);
-
-	float radius = METRIC_TO_QUAKEUNIT (CVAR_TO_FLOAT (rt_plight_radius));
-
-	// The emission normal of the light surface. Degenerate (e.g. a box-like
-	// flame where opposite faces cancel) -> zero normal = full sphere.
-	RgFloat3D normal = { { 0, 0, 0 } };
-	if (VectorLength (accum_normal) > 0.001f)
-	{
-		VectorNormalize (accum_normal);
-		normal.data[0] = accum_normal[0];
-		normal.data[1] = accum_normal[1];
-		normal.data[2] = accum_normal[2];
-
-		VectorMA (accum_center, radius, accum_normal, accum_center);
-	}
-
-	RgSphericalLightUploadInfo light_info = {
-		.uniqueID = src->uniqueID,
-		.color = src->color,
-		.position = RT_VEC3 (accum_center),
-		.radius = radius,
-		.normal = normal,
-	};
-
-	if (upload)
-	{
-		RgResult r = rgUploadSphericalLight (vulkan_globals.instance, &light_info);
-		RG_CHECK (r);
-	}
-	else
-	{
-	    rt_wldlights_sph[rt_wldlights_sph_count++] = light_info;
-	}
-}
-
-static void PolyToSphericalLights (const RgPolygonalLightUploadInfo *polys, int count, qboolean upload)
-{
-	vec3_t accum_center = {0, 0, 0};
-	vec3_t accum_normal = {0, 0, 0};
-	int    sharing = 0;
-
-	for (int i = 1; i < count; i++)
-	{
-		const RgPolygonalLightUploadInfo *poly_prev = &polys[i - 1];
-		const RgPolygonalLightUploadInfo *poly_cur = &polys[i];
-
-		if (HaveSharedEdge (poly_prev, poly_cur))
-		{
-			if (sharing == 0)
-			{
-				AccumulateCenterAndNormal (poly_prev, accum_center, accum_normal);
-				sharing++;
-			}
-
-			AccumulateCenterAndNormal (poly_cur, accum_center, accum_normal);
-			sharing++;
-		}
-		else
-		{
-			if (sharing > 0)
-			{
-				AddSphericalLight (upload, poly_cur, accum_center, accum_normal, sharing);
-
-				RT_VEC3_SET (accum_center, 0, 0, 0);
-				RT_VEC3_SET (accum_normal, 0, 0, 0);
-			}
-
-			sharing = 0;
-		}
-	}
-
-	if (sharing > 0)
-	{
-		AddSphericalLight (upload, &polys[count - 1], accum_center, accum_normal, sharing);
-	}
-}
-#endif
-
 /*
 =============
 R_DrawWorld -- ericw -- moved from R_DrawTextureChains, which is no longer specific to the world.
@@ -1888,8 +1643,6 @@ R_DrawWorld -- ericw -- moved from R_DrawTextureChains, which is no longer speci
 */
 void R_DrawWorld (cb_context_t *cbx)
 {
-	rt_wldlights_sph_count = 0;
-	rt_wldlights_tri_count = 0;
 	rt_wldlights_emissive_count = 0;
 
 	if (!r_drawworld_cheatsafe)
@@ -1900,11 +1653,7 @@ void R_DrawWorld (cb_context_t *cbx)
 		R_UploadLightmaps ();
 	R_DrawTextureChains_Multitexture (cbx, cl.worldmodel, NULL, chain_world, 1, 0, cl.worldmodel->numtextures, ENT_UNIQUEID_WORLD);
 
-#if RT_USE_SPHERE_INSTEAD_OF_POLY
-	PolyToSphericalLights (rt_wldlights_tri, rt_wldlights_tri_count, false);
-#endif
-
-    R_EndDebugUtilsLabel (cbx);
+	R_EndDebugUtilsLabel (cbx);
 }
 
 /*
@@ -1939,38 +1688,20 @@ void R_DrawWorld_ShowTris (cb_context_t *cbx)
 
 void RT_UploadAllWorldModelLights (void)
 {
-#if RT_USE_SPHERE_INSTEAD_OF_POLY
-	for (int i = 0; i < rt_wldlights_sph_count; i++)
-	{
-		RgResult r = rgUploadSphericalLight(vulkan_globals.instance, &rt_wldlights_sph[i]);
-		RG_CHECK (r);
-
-		RT_ClusterLightAdd (rt_wldlights_sph[i].uniqueID, rt_wldlights_sph[i].position.data);
-    }
-#else
-	for (int i = 0; i < rt_wldlights_tri_count; i++)
-	{
-		RgResult r = rgUploadPolygonalLight (vulkan_globals.instance, &rt_wldlights_tri[i]);
-		RG_CHECK (r);
-	}
-#endif
-
-	// Emissive material surfaces (static world geometry) become textured area
-	// lights and are registered for per-cluster next-event estimation, so the
-	// luma surface illuminates its surroundings directly (noise-free, NEE).
-	// TEMP DIAG
-	{
-		static int diagTALUP = 0;
-		if (diagTALUP < 3)
-		{
-			diagTALUP++;
-			Con_Printf ("TALUP: frame upload emis=%d tri=%d sph=%d\n",
-			            rt_wldlights_emissive_count, rt_wldlights_tri_count, rt_wldlights_sph_count);
-		}
-	}
+	// Light-source material surfaces (static world geometry) become textured
+	// area lights - MASKED, following the luma footprint, or UNIFORM for
+	// maskless light colors (e.g. the *light* lamp textures) - and are
+	// registered for per-cluster next-event estimation, so they illuminate
+	// their surroundings directly (noise-free, NEE).
 	for (int i = 0; i < rt_wldlights_emissive_count; i++)
 	{
-		const RgTexturedAreaLightUploadInfo *lt = &rt_wldlights_emissive[i];
+		// Copy the baked BASE light and apply the live master-intensity knob at
+		// upload time so rt_emis_light_intensity changes take effect next frame
+		// without a map reload. Only .color is scaled; geometry/center/uniqueID
+		// are untouched.
+		RgTexturedAreaLightUploadInfo li = rt_wldlights_emissive[i];
+		RT_ScaleEmissiveLightColor (li.color.data);
+		const RgTexturedAreaLightUploadInfo *lt = &li;
 
 		RgResult r = rgUploadTexturedAreaLight (vulkan_globals.instance, lt);
 		RG_CHECK (r);
@@ -1996,17 +1727,6 @@ void RT_UploadAllWorldModelLights (void)
 		{
 			RT_EmitEmissiveWirePolygon (lt);
 		}
-	}
-
-	// Debug visualization for poly lights (light_color + is_light). These are
-	// converted to sphere lights above, but rt_wldlights_tri still holds the
-	// source triangles, so draw their cyan wireframe overlay.
-	if (CVAR_TO_BOOL (rt_debugemissive))
-	{
-		for (int i = 0; i < rt_wldlights_tri_count; i++)
-			RT_EmitEmissiveWireTriangle (&rt_wldlights_tri[i].positions[0],
-			                             &rt_wldlights_tri[i].positions[1],
-			                             &rt_wldlights_tri[i].positions[2]);
 	}
 }
 
