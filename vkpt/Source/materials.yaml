@@ -237,7 +237,7 @@ materials:
   - name: textures/tlight10
     texture_emissive: textures/tlight10_luma.png
     light_color: c8c14c
-    light_brightness: 0.3
+    light_brightness: 0.2
     is_light: true
   - name: textures/tlight11
     texture_emissive: textures/tlight11_luma.png

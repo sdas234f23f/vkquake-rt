@@ -1168,6 +1168,22 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	const qboolean isBrush = glt->owner && glt->owner->type == mod_brush;
 	const float defaultRough = isBrush ? CVAR_TO_FLOAT (rt_brush_rough) : CVAR_TO_FLOAT (rt_model_rough);
 
+	// light_brightness folding. Two distinct cases:
+	//
+	//  * MASKED brush TALs (brush surface with a real luma texture that is a
+	//    light source): the RME .b channel doubles as the visible emissive
+	//    AND the NEE luma mask sampled by r_world.c. Brightness is folded
+	//    into that stored emission (emissScale) so the lamp surface dims
+	//    together with the light it casts; the color is left authored and the
+	//    shader dims through meanEmiss = brightness * mean.
+	//  * Everything else (alias/sprite sources, uniform light_color-only
+	//    lamps): brightness scales the light COLOR only (rtlightcolor /
+	//    rtemissivecolor) and the emissive surface stays authored. Scaling
+	//    .b there would blow out e.g. explosion sprites that carry brightness
+	//    22 for their fake light.
+	const float emissScale = (isBrush && emisTex != NULL && mat->is_light) ? mat->light_brightness : 1.0f;
+	const qboolean maskedTAL = (emissScale != 1.0f);
+
 	// average emitted color (albedo * emissive), used to generate emissive
 	// area lights (Q2RTX-style triangle lights) in r_world.c
 	glt->rtemissive = false;
@@ -1245,18 +1261,30 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		}
 
 		// accumulate the average emitted color (albedo * emissive) for the
-		// emissive area-light generation
+		// emissive area-light generation. This always uses the authored
+		// (pre-brightness) emission: for masked TALs the brightness lives in
+		// the stored mask/mean (below), for everything else in the color.
 		if (emiss > 0.0f)
 		{
 			emissR += albedo[i * 4 + 0] * emiss;
 			emissG += albedo[i * 4 + 1] * emiss;
 			emissB += albedo[i * 4 + 2] * emiss;
 		}
-		emissMean += emiss;
+
+		// Masked TALs bake light_brightness into the stored RME emission so
+		// the visible surface glow AND the NEE luma mask scale together;
+		// clamped to 1 to match the byte storage (the mean below is computed
+		// from this same stored value, keeping the shader's mask
+		// normalization unbiased). All other materials store the authored
+		// emission unchanged (emissScale == 1).
+		float emissOut = emiss * emissScale;
+		if (maskedTAL && emissOut > 1.0f)
+			emissOut = 1.0f;
+		emissMean += emissOut;
 
 		rme[i * 4 + 0] = CLAMP (0, (int)(rough * 255), 255);
 		rme[i * 4 + 1] = CLAMP (0, (int)(metal * 255), 255);
-		rme[i * 4 + 2] = CLAMP (0, (int)(emiss * 255), 255);
+		rme[i * 4 + 2] = CLAMP (0, (int)(emissOut * 255), 255);
 		rme[i * 4 + 3] = 255;
 
 		// normal map (bump_scale applied around 128)
@@ -1296,7 +1324,19 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		// above). rtemissivecolor is only consumed by light generation
 		// (r_world.c / r_alias.c), so this does not brighten the surface
 		// emissive itself.
-		if (mat->light_brightness != 1.0f)
+		if (maskedTAL && mat->light_brightness != 1.0f)
+		{
+			// Masked TAL: brightness was already folded into the stored RME
+			// emission above (mask AND mean are both scaled), so the color
+			// must stay authored -- the shader's NEE = color * meanEmiss now
+			// dims through the mean. Undo the brightness the has_light_color
+			// path applied to rtlightcolor earlier (ModifyColorValue scales
+			// HSV value linearly, so 1/brightness restores the authored
+			// color); skipping this would double-dim the light (color * mean).
+			if (glt->rthaslightcolor)
+				ModifyColorValue (glt->rtlightcolor, 1.0f / mat->light_brightness);
+		}
+		else if (mat->light_brightness != 1.0f)
 			ModifyColorValue (glt->rtemissivecolor, mat->light_brightness);
 	}
 
