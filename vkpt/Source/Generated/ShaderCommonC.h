@@ -238,6 +238,10 @@ struct ShGlobalUniform
     float emissionMaxScreenColor;
     float normalMapStrength;
     float skyColorSaturation;
+    float emissionSharpMask;
+    float talSelfLitOffset;
+    float _padEmisA;
+    float _padEmisB;
     uint32_t maxBounceShadowsLights;
     float rayLength;
     uint32_t rayCullBackFaces;

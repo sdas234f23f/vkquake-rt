@@ -423,9 +423,15 @@ LightSample sampleTexturedAreaLight(const TexturedAreaLight l, const vec3 surfPo
 
     const uint textureIndex = floatBitsToUint(l.textureIndex);
 
-    // Cull receivers coplanar with the emitter (self-illumination noise); does
-    // not depend on the sampled point, so it runs before the sampling loop.
-    if (abs(dot(l.normal, surfPosition - getTexturedAreaLightCenter(l))) < TAL_SELF_ILLUMINATION_PLANE_EPS)
+    // Self-illumination: lift every sampled point along the light normal by
+    // talSelfLitOffset. A receiver that is (near) coplanar with the emitter --
+    // the lamp's own surface or the flush wall it is mounted on -- then sees a
+    // small but stable solid angle instead of being removed by the hard
+    // coplanar cull, so the lamp lights itself and its surroundings.
+    const float selfLitOffset = globalUniform.talSelfLitOffset;
+
+    if( selfLitOffset <= 0.0 &&
+        abs( dot( l.normal, surfPosition - getTexturedAreaLightCenter( l ) ) ) < TAL_SELF_ILLUMINATION_PLANE_EPS )
     {
         return emptyLightSample();
     }
@@ -474,7 +480,7 @@ LightSample sampleTexturedAreaLight(const TexturedAreaLight l, const vec3 surfPo
         }
     }
 
-    r.position = texturedAreaLightWorldPos(l, uv);
+    r.position = texturedAreaLightWorldPos(l, uv) + l.normal * selfLitOffset;
 
     const DirectionAndLength lightToSurf = calcDirectionAndLength(r.position, surfPosition);
 

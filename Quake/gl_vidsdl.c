@@ -105,6 +105,14 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 // rt_emis_light_intensity) so the surface glow and the light-source radiance
 // stay in lockstep.
 //
+// rt_emis_maxscrcolor scales the on-screen emissive add (albedo * luma coverage
+// * value) in CmPrepareFinal. It must stay small: above ~4 that product exceeds
+// 1.0 wherever a mask is non-zero, so every emissive clips to a flat saturated
+// colour and luma masks turn into solid colour plates instead of stencils. The
+// "320" default from v3.6.0 (commit 3489e87, "emissive chroma boost") was the
+// cause of the EXIT sign / lamp / button "solid plate + pale rim" regression;
+// upstream shipped "125", which clips as well. 4 was verified by eye on e1m1.
+//
 // Light-source modes:
 //   rt_truelight      0 = legacy: fake lights everywhere (incl. legacy map
 //                         entity "light" points)
@@ -203,8 +211,10 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
     \
 	CVAR_DEF_T (rt_normalmap_stren, "1") \
 	CVAR_DEF_T (rt_emis_mapboost, "30") \
-	CVAR_DEF_T (rt_emis_maxscrcolor, "320") \
+	CVAR_DEF_T (rt_emis_maxscrcolor, "4") \
 	CVAR_DEF_T (rt_emis_fullbright_dflt, "255") \
+	CVAR_DEF_T (rt_emis_sharpmask, "1") \
+	CVAR_DEF_T (rt_tal_selflit, "6") \
     \
 	CVAR_DEF_T (rt_reflrefr_depth, "2") \
 	CVAR_DEF_T (rt_refr_glass, "1.52") \
@@ -1276,6 +1286,8 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 		.normalMapStrength = CVAR_TO_FLOAT (rt_normalmap_stren),
 		.emissionMapBoost = CVAR_TO_FLOAT (rt_emis_mapboost) * CVAR_TO_FLOAT (rt_emis_light_intensity),
 		.emissionMaxScreenColor = CVAR_TO_FLOAT (rt_emis_maxscrcolor),
+		.emissionSharpMask = CVAR_TO_FLOAT (rt_emis_sharpmask),
+		.talSelfLitOffset = CVAR_TO_FLOAT (rt_tal_selflit),
 		.minRoughness = CVAR_TO_FLOAT (rt_roughmin),
 	};
 

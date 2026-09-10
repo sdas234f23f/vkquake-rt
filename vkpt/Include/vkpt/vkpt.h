@@ -972,6 +972,15 @@ typedef struct RgDrawFrameTexturesParams
     float           emissionMapBoost;
     // Upper bound for emissive materials in primary albedo channel (i.e. on screen).
     float           emissionMaxScreenColor;
+    // Snap the screen-emission luma read to texel centers while the texture is
+    // magnified, so the binary luma masks keep hard edges instead of a
+    // filtered pale rim. 1 = sharp, 0 = regular filtered read.
+    float           emissionSharpMask;
+    // Lift applied to a textured-area-light sample point along its normal when
+    // the receiver is (near) coplanar with the emitter, so the lamp surface and
+    // the flush wall around it receive light (self-illumination). In world
+    // units. 0 = disable (current hard coplanar cull).
+    float           talSelfLitOffset;
     // Set to true, if roughness should be more perceptually linear.
     // Default: true
     RgBool32        squareInputRoughness;

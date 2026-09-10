@@ -319,6 +319,8 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
         gu->normalMapStrength      = drawInfo.pTexturesParams->normalMapStrength;
         gu->emissionMapBoost       = std::max( drawInfo.pTexturesParams->emissionMapBoost, 0.0f );
         gu->emissionMaxScreenColor = std::max( drawInfo.pTexturesParams->emissionMaxScreenColor, 0.0f );
+        gu->emissionSharpMask      = std::max( drawInfo.pTexturesParams->emissionSharpMask, 0.0f );
+        gu->talSelfLitOffset       = std::max( drawInfo.pTexturesParams->talSelfLitOffset, 0.0f );
         gu->squareInputRoughness   = !!drawInfo.pTexturesParams->squareInputRoughness;
         gu->minRoughness           = std::clamp( drawInfo.pTexturesParams->minRoughness, 0.0f, 1.0f );
     }
@@ -327,6 +329,8 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
         gu->normalMapStrength      = 1.0f;
         gu->emissionMapBoost       = 100.0f;
         gu->emissionMaxScreenColor = 1.5f;
+        gu->emissionSharpMask      = true;
+        gu->talSelfLitOffset       = 0.0f;
         gu->squareInputRoughness   = 1;
         gu->minRoughness           = 0.0f;
     }

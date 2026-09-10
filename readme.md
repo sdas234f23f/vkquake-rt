@@ -58,17 +58,19 @@ Steps:
 3. Configure and build:
 
    ```
-   .\build_win.ps1 Debug build\Debug
+   .\build_win.ps1 Debug
    ```
 
-   (or with plain CMake: `cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release` + `cmake --build build`; for a debug build use `-DCMAKE_BUILD_TYPE=Debug`).
+   Debug builds go to `build\Debug` (the default build dir for the given configuration). Pass an explicit directory as a second argument only if you know you want a different one.
+
+   (or with plain CMake: `cmake -B build\Debug -G Ninja -DCMAKE_BUILD_TYPE=Debug` + `cmake --build build\Debug`; use `-DCMAKE_BUILD_TYPE=Release` and `build\Release` for a release build).
 
    The build also deploys the override-material pack `id1/ovrd_mat.pkz` (checked in) into the build's game dir, so the ray-traced material overrides (emissive lava, ...) are always present.
 
 4. Run the game:
 
    ```
-   build\vkquake.exe
+   build\Debug\vkquake.exe
    ```
 
    `SDL2.dll` and all codec DLLs are copied next to `vkquake.exe` automatically during the build. The renderer is compiled into the executable — no external renderer DLL is needed. The `.spv` shaders and the blue noise texture are loaded from the game data (`ovrd/shaders/`, `ovrd/BlueNoise_LDR_RGBA_128.ktx2`).

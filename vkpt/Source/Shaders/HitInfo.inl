@@ -341,13 +341,38 @@ ShHitInfo getHitInfoBounce(
 
     if (tr.materials[0][MATERIAL_ROUGHNESS_METALLIC_EMISSION_INDEX] != MATERIAL_NO_TEXTURE)
     {
-        const vec3 rme = 
+        vec3 rme = 
     #if defined(HITINFO_INL_PRIM)
             getTextureSampleGrad(tr.materials[0][MATERIAL_ROUGHNESS_METALLIC_EMISSION_INDEX], texCoords[0], dTdx[0], dTdy[0]).xyz;
     #elif defined(HITINFO_INL_RFL)
             getTextureSampleDerivSet(tr.materials[0][MATERIAL_ROUGHNESS_METALLIC_EMISSION_INDEX], texCoords[0], derivSet, 0).xyz;
     #elif defined(HITINFO_INL_INDIR)
             getTextureSampleLod(tr.materials[0][MATERIAL_ROUGHNESS_METALLIC_EMISSION_INDEX], texCoords[0], lod).xyz;
+    #endif
+
+    #if defined(HITINFO_INL_PRIM) || defined(HITINFO_INL_RFL)
+        // Snap the emission-channel (luma mask) read to texel centers while the
+        // texture is magnified, so binary luma masks keep hard edges instead of
+        // the filtered pale rim between lit and unlit texels.
+        if( globalUniform.emissionSharpMask != 0.0 )
+        {
+            const uint  rmeTexture = tr.materials[ 0 ][ MATERIAL_ROUGHNESS_METALLIC_EMISSION_INDEX ];
+        #if defined(HITINFO_INL_PRIM)
+            const vec2 rmeFootX    = dTdx[ 0 ];
+            const vec2 rmeFootY    = dTdy[ 0 ];
+        #else
+            const vec2 rmeFootX    = vec2( derivSet.u[ 0 ], 0.0 );
+            const vec2 rmeFootY    = vec2( 0.0, derivSet.u[ 0 ] );
+        #endif
+            const ivec2 rmeTexSize = textureSize( globalTextures[ nonuniformEXT( rmeTexture ) ], 0 );
+            const vec2  rmeFpx     = rmeFootX * vec2( rmeTexSize );
+            const vec2  rmeFpy     = rmeFootY * vec2( rmeTexSize );
+            if( max( dot( rmeFpx, rmeFpx ), dot( rmeFpy, rmeFpy ) ) < 1.0 )
+            {
+                const vec2 snappedUv = ( floor( texCoords[ 0 ] * vec2( rmeTexSize ) ) + vec2( 0.5 ) ) / vec2( rmeTexSize );
+                rme.b = getTextureSampleLod( rmeTexture, snappedUv, 0.0 ).b;
+            }
+        }
     #endif
 
         h.roughness = rme[ 0 ];

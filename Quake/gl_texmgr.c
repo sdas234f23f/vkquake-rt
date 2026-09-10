@@ -433,6 +433,60 @@ static void TexMgr_Imagelist_f (void)
 }
 
 /*
+===============
+TexMgr_RTMatDump_f -- report applied RT material state of loaded textures
+
+Usage: rt_mat_dump [substring]
+Prints, for every loaded texture whose name contains <substring> (or every
+texture that carries RT material/emissive state when no argument is given),
+the authored materials.yaml values alongside the state actually baked into
+the gltexture at synthesis time. This works on already-loaded textures,
+unlike rt_mat_debug (which only prints during texture creation).
+===============
+*/
+static void TexMgr_RTMatDump_f (void)
+{
+	const char *filter = Cmd_Argc () > 1 ? Cmd_Argv (1) : NULL;
+	gltexture_t *glt;
+	int          found = 0;
+
+	for (glt = active_gltextures; glt; glt = glt->next)
+	{
+		if (filter)
+		{
+			if (!strstr (glt->name, filter) && !strstr (glt->rtname, filter))
+				continue;
+		}
+		else if (!(glt->rthasmaterial || glt->rtemissive || glt->rthaslightcolor || glt->rtislight || glt->rtemissivetex))
+		{
+			continue;
+		}
+
+		rt_material_t *mat = RT_MAT_Find (glt->name);
+		Con_Printf ("RT dump: '%s' (rtname='%s') flags_emissive=%d\n",
+		            glt->name, glt->rtname, !!(glt->flags & TEXPREF_RT_IS_EMISSIVE));
+		if (mat)
+		{
+			Con_Printf ("RT dump:   authored: brightness=%.3f is_light=%d light_styles=%d has_light_color=%d light_color=(%.4f,%.4f,%.4f)\n",
+			            mat->light_brightness, mat->is_light, mat->light_styles, mat->has_light_color,
+			            mat->light_color[0], mat->light_color[1], mat->light_color[2]);
+		}
+		else
+		{
+			Con_Printf ("RT dump:   authored: <no materials.yaml entry>\n");
+		}
+		Con_Printf ("RT dump:   applied: is_light=%d lightstyles=%d emissivetex=%d emissive=%d haslightcolor=%d\n",
+		            glt->rtislight, glt->rtlightstyles, glt->rtemissivetex, glt->rtemissive, glt->rthaslightcolor);
+		Con_Printf ("RT dump:   applied: rtlightcolor=(%.4f,%.4f,%.4f) rtemissivecolor=(%.4f,%.4f,%.4f) rtemissivemean=%.4f\n",
+		            glt->rtlightcolor[0], glt->rtlightcolor[1], glt->rtlightcolor[2],
+		            glt->rtemissivecolor[0], glt->rtemissivecolor[1], glt->rtemissivecolor[2],
+		            glt->rtemissivemean);
+		found++;
+	}
+	Con_Printf ("RT dump: %d texture(s) matched\n", found);
+}
+
+/*
 ================================================================================
 
     TEXTURE MANAGER
@@ -722,6 +776,7 @@ void TexMgr_Init (void)
 	Cvar_RegisterVariable (&gl_max_size);
 	Cvar_RegisterVariable (&gl_picmip);
 	Cmd_AddCommand ("imagelist", &TexMgr_Imagelist_f);
+	Cmd_AddCommand ("rt_mat_dump", &TexMgr_RTMatDump_f);
 
 	// load notexture images
 	notexture = TexMgr_LoadImage (

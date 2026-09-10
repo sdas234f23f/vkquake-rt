@@ -79,6 +79,13 @@ vec3 reinhard(const vec3 c)
 
 // Q2RTX-style tone curve application (tone_mapping_apply.comp, SDR path).
 // Applies the noise-aware tone curve + auto-exposure + knee to the HDR image.
+//
+// The emissive luma textures are folded in as an additive term that carries the
+// base texture's own color: framebufScreenEmission stores albedo * lumaMask
+// (* throughput on transparency paths), so inside the mask the base texture
+// glows in its authored color and outside it keeps the regular lit shading.
+// The luma mask is only a shape/coverage source -- it has no color of its own
+// and is never displayed directly.
 vec3 finalizeColor( const vec3 hdr, const vec3 screenEmis )
 {
     if( globalUniform.lightmapEnable == 0 )
@@ -126,10 +133,25 @@ vec3 finalizeColor( const vec3 hdr, const vec3 screenEmis )
 }
 
 
-vec3 getBloomInput( const vec3 hdr, const vec3 screenEmis )
+vec3 getBloomInput( const vec3 hdr, const vec3 screenEmis, const ivec2 pix )
 {
-    float power = getLuminance( screenEmis );
-    vec3  emis  = power > 0.001 ? screenEmis / power : vec3( 0 );
+    const float power = getLuminance( screenEmis );
+
+    // framebufScreenEmission is premultiplied by the base albedo and by the luma
+    // mask coverage, so its magnitude already encodes how much of the texel
+    // actually emits. Normalizing it to unit luminance made every partially
+    // covered texel -- e.g. the filtered 1-texel edge of an emissive luma mask,
+    // or a mask that covers only a small part of its texture -- bloom at full
+    // strength, which shows up as a pale washed-out rim around the glow.
+    // Dividing by max( albedoLum, power ) instead keeps the emitted chroma
+    // intact and scales the bloom with the real coverage, while still never
+    // exceeding the previous full-coverage strength (and the power fallback
+    // keeps contributions that are not albedo-bound, such as the acid fog
+    // additive, at their original level).
+    // framebufAlbedo always uses the regular layout (see Surface.inl), so it is
+    // fetched with the full-resolution pixel position.
+    const float albedoLum = getLuminance( texelFetch( framebufAlbedo_Sampler, pix, 0 ).rgb );
+    const vec3  emis      = power > 0.001 ? screenEmis / max( albedoLum, power ) : vec3( 0 );
 
     float ec = power * globalUniform.bloomEmissionMultiplier;
 
@@ -231,7 +253,7 @@ void main()
     }
 
     vec3 color = finalizeColor( hdr, screenEmis );
-    vec3 bloom = getBloomInput( hdr, screenEmis );
+    vec3 bloom = getBloomInput( hdr, screenEmis, pix );
 
     color = applyVolumetrics( pix, color );
 #if SHIPPING_HACK
