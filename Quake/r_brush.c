@@ -862,6 +862,7 @@ surfaces from world + all brush models
 void GL_BuildBModelVertexBuffer (void)
 {
 	RT_BuildSurfaceClusterMap ();
+	RT_BrushClusterCacheReset ();
 
     // count all verts in all models
 	int numverts = 0;

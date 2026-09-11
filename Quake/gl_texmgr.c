@@ -1269,9 +1269,11 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	glt->rtemissivecolor[1] = 0.0f;
 	glt->rtemissivecolor[2] = 0.0f;
 	glt->rtemissivemean = 0.0f;
+	glt->rtemissivemeanbase = 0.0f;
 	glt->rtislight = false;
 	float emissR = 0.0f, emissG = 0.0f, emissB = 0.0f;
 	double emissMean = 0.0;
+	double emissMeanBase = 0.0;
 
 	for (int i = 0; i < npix; i++)
 	{
@@ -1381,6 +1383,18 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 			emissB += albedo[i * 4 + 2] * emiss;
 		}
 
+		// Average AUTHORED mask, before light_brightness folding and the byte
+		// clamp. It is the weight that rtemissivecolor was divided by: the
+		// average emitted color is a MEAN over every pixel of the texture, so
+		// a small bright mask (a 5%-coverage lamp) dilutes it towards black,
+		// while the NEE shader multiplies that diluted average by the mask's
+		// own mean (meanEmiss) -- emitting the square of the intended flux.
+		// Dividing the color by the authored mean puts the mask's coverage
+		// back into meanEmiss where it belongs, so a synthesized (color_
+		// emissive) light ends up as bright as an equivalent texture_emissive
+		// one with the same luma and light_brightness.
+		emissMeanBase += emiss;
+
 		// Masked TALs bake light_brightness into the stored RME emission so
 		// the visible surface glow AND the NEE luma mask scale together;
 		// clamped to 1 to match the byte storage (the mean below is computed
@@ -1427,6 +1441,7 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		glt->rtemissivecolor[1] = emissG / (npix * 255.0f);
 		glt->rtemissivecolor[2] = emissB / (npix * 255.0f);
 		glt->rtemissivemean = (float)(emissMean / npix);
+		glt->rtemissivemeanbase = (float)(emissMeanBase / npix);
 
 		// color_emissive synthesized a real per-pixel mask into the RME
 		// emissive channel, exactly like a texture_emissive (luma) file would.
@@ -1491,14 +1506,15 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		            rMin / 255.0f * 100.0f, npix ? rSum / npix / 255.0f * 100.0f : 0.0, rMax / 255.0f * 100.0f,
 		            mMin / 255.0f * 100.0f, npix ? mSum / npix / 255.0f * 100.0f : 0.0, mMax / 255.0f * 100.0f,
 		            eMin / 255.0f, npix ? eSum / npix / 255.0f : 0.0, eMax / 255.0f);
-		Con_Printf ("RT:   flags is_light=%d light_styles=%d light_brightness=%.3f has_light_color=%d rtlightcolor=(%.3f, %.3f, %.3f) rtemissive=%d rtemissivecolor=(%.4f, %.4f, %.4f) rtemissivemean=%.4f\n",
+		Con_Printf ("RT:   flags is_light=%d light_styles=%d light_brightness=%.3f has_light_color=%d rtlightcolor=(%.3f, %.3f, %.3f) rtemissive=%d rtemissivecolor=(%.4f, %.4f, %.4f) rtemissivemean=%.4f rtemissivemeanbase=%.4f\n",
 		            glt->rtislight ? 1 : 0, glt->rtlightstyles ? 1 : 0,
 		            mat->light_brightness,
 		            glt->rthaslightcolor ? 1 : 0,
 		            glt->rtlightcolor[0], glt->rtlightcolor[1], glt->rtlightcolor[2],
 		            glt->rtemissive ? 1 : 0,
 		            glt->rtemissivecolor[0], glt->rtemissivecolor[1], glt->rtemissivecolor[2],
-		            glt->rtemissivemean);
+		            glt->rtemissivemean,
+		            glt->rtemissivemeanbase);
 	}
 
 	RgMaterialCreateInfo info = {
@@ -1687,6 +1703,7 @@ gltexture_t *TexMgr_LoadImage (
 	glt->rtemissive = false;
 	glt->rtemissivecolor[0] = glt->rtemissivecolor[1] = glt->rtemissivecolor[2] = 0.0f;
 	glt->rtemissivemean = 0.0f;
+	glt->rtemissivemeanbase = 0.0f;
 	glt->rtemissivetex = false;
 	glt->rtislight = false;
 	glt->rtlightstyles = true;   // default: honor lightstyle animation unless the material opts out

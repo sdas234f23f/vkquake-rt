@@ -900,6 +900,7 @@ static void R_DrawSkyAndWaterTask (void *unused)
 	Fog_EnableGFog (&vulkan_globals.secondary_cb_contexts[CBX_SKY_AND_WATER]);
 	Sky_DrawSky (&vulkan_globals.secondary_cb_contexts[CBX_SKY_AND_WATER]);
 	R_DrawWorld_Water (&vulkan_globals.secondary_cb_contexts[CBX_SKY_AND_WATER]);
+	R_DrawWorld_Animated (&vulkan_globals.secondary_cb_contexts[CBX_SKY_AND_WATER]);
 }
 
 /*

@@ -256,12 +256,11 @@ assert(
 // is uploaded with cluster 0 in its base vertices, which points at the SOLID
 // leaf (empty light list -> unlit). Resolve the entity origin's leaf so the
 // model is lit by the same cluster light list as the surface it stands on.
-int cluster = 0;
-{
-    mleaf_t* leaf = Mod_PointInLeaf(lerpdata.origin, cl.worldmodel);
-    if (leaf && leaf->contents != CONTENTS_SOLID)
-        cluster = (int)(leaf - cl.worldmodel->leafs);
-}
+// RT_ResolvePointCluster also probes the neighbourhood, which is what makes
+// pickup items work at all: they rest with their bbox mins.z on the floor, so
+// their origin sits exactly on the shadowed side of the floor BSP plane and a
+// plain Mod_PointInLeaf answers "solid".
+int cluster = RT_ResolvePointCluster (lerpdata.origin);
 
 if
 (rasterize)

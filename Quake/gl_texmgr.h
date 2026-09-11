@@ -86,6 +86,7 @@ typedef struct gltexture_s
 	qboolean             rtemissive;             // texture emits light (material emissive / fullbright mask)
 	vec3_t               rtemissivecolor;        // average emitted color (albedo * emissive) in [0,1]
 	float                rtemissivemean;         // average emissive mask (.b of RME) over the texture in [0,1]
+	float                rtemissivemeanbase;     // average AUTHORED emissive (before light_brightness folding / clamp), [0,1]
 	qboolean             rtemissivetex;          // material has a per-pixel emissive mask (texture_emissive luma file or a color_emissive synthesis)
 	qboolean             rtislight;              // material is_light: may generate static emissive area lights
 	qboolean             rtlightstyles;          // material light_styles: surface honors lightstyle animation

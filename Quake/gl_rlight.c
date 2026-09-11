@@ -1047,6 +1047,32 @@ static mleaf_t *RT_ResolveLightLeaf (const vec3_t origin, qmodel_t *wm)
 }
 
 /*
+================
+RT_ResolvePointCluster
+
+Leaf index to use for the per-cluster light lists of a point, or 0 (the solid
+leaf, whose light list is always empty) when no open leaf is near it.
+
+Mod_PointInLeaf tests "d > 0 -> front, else back", so a point lying EXACTLY on
+a BSP plane resolves to the back child. Items rest with their origin on the
+floor plane after SV_DropToFloor (their bbox mins.z is 0), so a naive probe
+answers "solid" for every pickup in the map and the model ends up in leaf 0
+with no lights at all - not the muzzle flash, not the level's static lights.
+Brush-entity vertices are baked at spawn for the same reason: a retracted
+bridge spawns inside a wall. Fall back to the neighbourhood probe, which also
+covers geometry that is genuinely embedded in solid.
+================
+*/
+int RT_ResolvePointCluster (const vec3_t p)
+{
+	mleaf_t *leaf = RT_ResolveLightLeaf (p, cl.worldmodel);
+	if (!leaf)
+		return 0;
+
+	return (int)(leaf - cl.worldmodel->leafs);
+}
+
+/*
 Assign a stable slot to uid in cluster c and stamp it as present this frame.
 The slot is reused if the light already owns one, recycled if a stale one is
 free, or freshly appended when the cluster still has room. If the cluster is

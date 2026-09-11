@@ -370,6 +370,8 @@ qboolean RT_AllowFakeLights (void); // strict light-source modes (materials_only
 void RT_ClusterLightListsReset (void);
 void RT_ClusterLightAdd (uint64_t uniqueID, const vec3_t origin);
 void RT_ClusterLightListsUpload (void);
+int RT_ResolvePointCluster (const vec3_t p); // leaf for a point's light list, 0 when solid
+void RT_BrushClusterCacheReset (void);       // brush-entity cluster cache, reset on map load
 void RT_ClusterLightReport_f (void); // rt_light_report: why each light is (not) sampled
 void RT_LightReport_f (void);        // rt_light_report: emissive pass + cluster lists
 void RT_PrintEmissiveStats (void);   // rt_light_report: emissive pass only
@@ -409,6 +411,7 @@ void R_ClearTextureChains (qmodel_t *mod, texchain_t chain);
 void R_ChainSurface (msurface_t *surf, texchain_t chain);
 void R_DrawTextureChains (cb_context_t *cbx, qmodel_t *model, entity_t *ent, texchain_t chain, int entuniqueid);
 void R_DrawWorld_Water (cb_context_t *cbx);
+void R_DrawWorld_Animated (cb_context_t *cbx);
 
 float GL_WaterAlphaForSurface (msurface_t *fa);
 

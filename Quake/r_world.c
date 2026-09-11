@@ -923,7 +923,7 @@ typedef struct rt_uploadsurf_state_t
 	// switching to +abasebtn's lit frame, or a pulsing medkit panel), falling
 	// back to the base frame's material when the frame has none, so partially
 	// authored chains do not blink on/off every animation tick (~0.2s).
-	// R_DrawTextureChains_Water always uses the base texture (never a light).
+	// R_DrawTextureChains_Water follows the same rule (teleport/warp frames).
 	gltexture_t *light_tex;
 	gltexture_t *lightmap_tex;
 	qboolean     alpha_test;
@@ -933,6 +933,11 @@ typedef struct rt_uploadsurf_state_t
 	qboolean     is_water;
 	qboolean     is_acid;
 	qboolean     is_teleport;
+	// Solid world chain that animates (+0slip..+6slip pulsing panels, blinking
+	// wall lights): static geometry would freeze it on the frame that was live
+	// when the map loaded, so it is re-submitted every frame as DYNAMIC geometry
+	// (see R_DrawTextureChains_Animated) and must not be treated as static.
+	qboolean     is_animated;
 } rt_uploadsurf_state_t;
 
 /*
@@ -996,7 +1001,7 @@ static void RT_FlushBatch (cb_context_t *cbx, const rt_uploadsurf_state_t *s, ui
 	const int       num_surf_indices = cbx->batch_indices_count;
 
 	// i.e. uploaded once at the level load
-    const qboolean is_static_geom = (s->model == cl.worldmodel) && !s->is_warp;
+    const qboolean is_static_geom = (s->model == cl.worldmodel) && !s->is_warp && !s->is_animated;
 
 #if 0
 	float constant_factor = 0.0f, slope_factor = 0.0f;
@@ -1332,7 +1337,131 @@ per-surface path and are not static RT geometry here.
 */
 static qboolean RT_IsStaticWorldSurface (const rt_uploadsurf_state_t *s)
 {
-	return s->model == cl.worldmodel && !s->is_warp;
+	return s->model == cl.worldmodel && !s->is_warp && !s->is_animated;
+}
+
+/*
+================
+RT_AnimatedLightTex
+
+Light-source texture of a world texture chain at the CURRENT animation frame.
+A frame that carries a materials.yaml entry of its own owns the material
+(teleport +0slip..+6slip, blinking +0/+1 buttons, pulsing lava), a frame
+without one keeps the base frame's - so a partly authored chain does not blink
+on and off, and the light always describes the frame that is on screen.
+
+Frame 0 is what R_TextureAnimation resolves for world surfaces (R_DrawWorld
+submits them with ent == NULL).
+================
+*/
+static gltexture_t *RT_AnimatedLightTex (texture_t *base)
+{
+	if (!base || !base->gltexture)
+		return NULL;
+
+	gltexture_t *frame = R_TextureAnimation (base, 0)->gltexture;
+
+	return (frame && frame->rthasmaterial) ? frame : base->gltexture;
+}
+
+/*
+================
+RT_AnimatedLightTexAnyFrame
+
+Light-source texture anywhere in the chain's animation cycle, or NULL when no
+frame of it is a light source at all. Used when BAKING a fixture: that runs
+once while the map loads, so the frame it happens to land on is arbitrary and
+a partly lit chain may well be showing its dark frame. Such a fixture must
+still get its area light - RT_UploadAllWorldModelLights swaps in the frame
+that is actually on screen, every frame.
+================
+*/
+static gltexture_t *RT_AnimatedLightTexAnyFrame (texture_t *base)
+{
+	gltexture_t *light_tex = RT_AnimatedLightTex (base);
+	if (light_tex && light_tex->rtislight)
+		return light_tex;
+
+	if (!base || !base->anim_total)
+		return NULL;
+
+	// anim_next is a closed cycle (gl_model.c), so bound the walk.
+	for (texture_t *f = base->anim_next; f && f != base; f = f->anim_next)
+	{
+		gltexture_t *ft = f->gltexture;
+		if (ft && ft->rtislight && ft->rthasmaterial)
+			return ft;
+	}
+
+	return NULL;
+}
+
+/*
+================
+RT_EmissiveLightParamsForTex
+
+Resolve the area-light parameters a light-source texture carries: the luma
+material and its average mask value (meanEmiss, which the shader needs to
+normalize the mask), plus the base radiance.
+
+Shared by the map-load bake (RT_AddEmissiveLight) and the per-frame re-upload
+(RT_UploadAllWorldModelLights) so an animated chain can never end up with one
+frame's material paired with another frame's color. Returns false when the
+texture is not a usable light source.
+================
+*/
+static qboolean RT_EmissiveLightParamsForTex (gltexture_t *light_tex, RgMaterial *material, float *meanEmiss, vec3_t color)
+{
+	// Light-source materials only: a material is a light source when it has a
+	// luma texture (texture_emissive -> MASKED area light following the luma
+	// footprint) OR a hand-authored light_color (is_light, e.g. the *light*
+	// lamp textures -> UNIFORM area light over the whole surface).
+	if (!light_tex || !light_tex->rtislight)
+		return false;
+
+	// Reject only textures whose total emission is effectively zero (mean luma
+	// below ~0.13/255, i.e. quantization noise). Small legit masks (medkit /
+	// ammo diodes: a handful of dim pixels over a large texture) average to
+	// ~0.002-0.009 per channel and were wrongly dropped by the old 0.01 cut.
+	if (!light_tex->rthaslightcolor && VectorLength (light_tex->rtemissivecolor) <= 0.0005f)
+		return false;
+
+	// Real luma mask present (texture_emissive / color_emissive synthesis with
+	// non-zero average luma)? Drives the material / meanEmiss pair.
+	const qboolean has_mask = light_tex->rtemissivetex && light_tex->rtemissivemean > 0.0f;
+
+	*material  = has_mask ? light_tex->rtmaterial : RG_NO_MATERIAL;
+	*meanEmiss = has_mask ? light_tex->rtemissivemean : 1.0f;
+
+	if (light_tex->rthaslightcolor)
+	{
+		// Hand-authored light_color wins outright.
+		VectorCopy (light_tex->rtlightcolor, color);
+	}
+	else if (has_mask)
+	{
+		// rtemissivecolor is the average of albedo * emission over EVERY pixel,
+		// so the mask's dark footprint dilutes it, while the shader multiplies
+		// the radiance by meanEmiss a second time (mask / meanEmiss cancels the
+		// mask out of the NEE estimator, so the flux ends up proportional to
+		// meanEmiss * color). Feeding the diluted average in as the radiance
+		// therefore dims the light by meanEmiss TWICE - for a lamp covering 5%
+		// of its texture that is a ~400x loss, which is why color_emissive
+		// fixtures (no light_color in materials.yaml) looked so much weaker
+		// than their hand-authored luma counterparts. Divide the coverage back
+		// out so color is the radiance of a LIT texel and the total flux
+		// matches the mask's true footprint.
+		const float meanBase = light_tex->rtemissivemeanbase > 1e-6f ? light_tex->rtemissivemeanbase : 1e-6f;
+		VectorScale (light_tex->rtemissivecolor, 1.0f / meanBase, color);
+	}
+	else
+	{
+		// Maskless light (uniform over the whole face): the average IS the
+		// radiance, and meanEmiss is 1 so nothing is double-counted.
+		VectorCopy (light_tex->rtemissivecolor, color);
+	}
+
+	return true;
 }
 
 /*
@@ -1371,47 +1500,32 @@ static void RT_AddEmissiveLight (const rt_uploadsurf_state_t *s)
 	if (watch)
 		watch->surfaces++;
 
-	// Light-source materials only: a material is a light source when it has a
-	// luma texture (texture_emissive -> MASKED area light following the luma
-	// footprint) OR a hand-authored light_color (is_light, e.g. the *light*
-	// lamp textures -> UNIFORM area light over the whole surface). Both are
-	// uploaded for NEE; in classic render they are skipped by the caller.
-	if (!light_tex || !light_tex->rtislight)
+	// Which frame of the texture chain is a light source, and with what
+	// material / mask average / radiance - shared with the per-frame re-upload
+	// (see RT_EmissiveLightParamsForTex). The gates (is_light, non-zero
+	// emission) are applied inside.
+	RgMaterial material;
+	float      meanEmiss;
+	vec3_t     color;
+
+	if (!RT_EmissiveLightParamsForTex (light_tex, &material, &meanEmiss, color))
 	{
-		rt_emis_stats.no_material++;
-		if (watch)
-			watch->no_material++;
-		RT_EmisNoteSkip (light_tex ? light_tex->name : "<no texture>", "no light material");
+		if (!light_tex || !light_tex->rtislight)
+		{
+			rt_emis_stats.no_material++;
+			if (watch)
+				watch->no_material++;
+			RT_EmisNoteSkip (light_tex ? light_tex->name : "<no texture>", "no light material");
+		}
+		else
+		{
+			rt_emis_stats.no_color++;
+			if (watch)
+				watch->no_color++;
+			RT_EmisNoteSkip (light_tex->name, "no light color");
+		}
 		return;
 	}
-	// Reject only textures whose total emission is effectively zero (mean luma
-	// below ~0.13/255, i.e. quantization noise). Small legit masks (medkit /
-	// ammo diodes: a handful of dim pixels over a large texture) average to
-	// ~0.002-0.009 per channel and were wrongly dropped by the old 0.01 cut.
-	if (!light_tex->rthaslightcolor && VectorLength (light_tex->rtemissivecolor) <= 0.0005f)
-	{
-		rt_emis_stats.no_color++;
-		if (watch)
-			watch->no_color++;
-		RT_EmisNoteSkip (light_tex->name, "no light color");
-		return;
-	}
-
-	// Real luma mask present (texture_emissive with non-zero average luma)?
-	// Drives the material / meanEmiss pair below.
-	const qboolean has_mask = light_tex->rtemissivetex && light_tex->rtemissivemean > 0.0f;
-
-	// Prefer the hand-authored light_color when present (materials.yaml),
-	// falling back to the average luma emission color.
-	vec3_t color;
-	if (light_tex->rthaslightcolor)
-		VectorCopy (light_tex->rtlightcolor, color);
-	else
-		VectorCopy (light_tex->rtemissivecolor, color);
-	// color is the BASE radiance at full mask brightness, WITHOUT the master
-	// rt_emis_light_intensity knob and the shared area fixup: those are applied
-	// live at upload time (RT_ScaleEmissiveLightColor), so changing the cvar
-	// takes effect immediately instead of only at map load.
 
 	const qboolean is_static_geom = RT_IsStaticWorldSurface (s);
 
@@ -1650,13 +1764,14 @@ static void RT_AddEmissiveLight (const rt_uploadsurf_state_t *s)
 	// mask aligns perfectly with the surface texture.
 	RgTexturedAreaLightUploadInfo light_info = {0};
 	light_info.uniqueID  = RT_GetBrushSurfUniqueId (s->entuniqueid, s->model, s->surf, 0);
-	// Masked lights resolve their luma (RME) texture through light_tex->rtmaterial
-	// and use the average luma (meanEmiss) so the shader can normalize the mask
+	// Masked lights resolve their luma (RME) texture through the material and
+	// use the average luma (meanEmiss) so the shader can normalize the mask
 	// before sampling; maskless lights carry NO material and meanEmiss = 1.0, so
 	// the shader reads mask = 1.0 and the WHOLE surface emits uniformly at the
-	// hand-authored light color.
-	light_info.material  = has_mask ? light_tex->rtmaterial : RG_NO_MATERIAL;
-	light_info.meanEmiss = has_mask ? light_tex->rtemissivemean : 1.0f;
+	// hand-authored light color. Both were resolved by
+	// RT_EmissiveLightParamsForTex above, together with the radiance.
+	light_info.material  = material;
+	light_info.meanEmiss = meanEmiss;
 	light_info.area      = total_area;
 	light_info.fit       = 0;      // set below after the affine fit
 	light_info.isStatic  = is_static_geom ? 1 : 0;
@@ -1792,16 +1907,16 @@ static void RT_CollectWorldEmissiveLights (void)
 
 		// World surfaces are not entities, so the animated frame is frame 0,
 		// exactly as R_DrawTextureChains_Multitexture resolves it for ent NULL.
-		gltexture_t *diffuse_tex = R_TextureAnimation (t, 0)->gltexture;
-		gltexture_t *light_tex   = t->gltexture;
-
-		// Follow the animated frame's material when it has one of its own,
-		// else keep the base frame's (mirrors the chain pass).
-		if (diffuse_tex->rthasmaterial)
-			light_tex = diffuse_tex;
+		// The bake runs ONCE, at whatever instant the map happens to load, so
+		// the chain is searched for a lit frame rather than trusting frame 0:
+		// a surface whose current frame is the dark half of a blink (or the
+		// unlit frame of a partly authored teleport chain) must still get its
+		// area light. RT_UploadAllWorldModelLights then swaps in the frame
+		// that is actually on screen, every frame.
+		gltexture_t *light_tex = RT_AnimatedLightTexAnyFrame (t);
 
 		// Cheap reject so the affine fit below only runs for real light sources.
-		if (!light_tex || !light_tex->rtislight)
+		if (!light_tex)
 			continue;
 
 		rt_uploadsurf_state_t state = {
@@ -1809,7 +1924,7 @@ static void RT_CollectWorldEmissiveLights (void)
 			.ent = NULL,
 			.model = model,
 			.surf = surf,
-			.diffuse_tex = diffuse_tex,
+			.diffuse_tex = light_tex,
 			.light_tex = light_tex,
 			.lightmap_tex = (surf->lightmaptexturenum >= 0) ? lightmaps[surf->lightmaptexturenum].texture : greytexture,
 			.alpha = 1.0f,
@@ -1817,6 +1932,91 @@ static void RT_CollectWorldEmissiveLights (void)
 
 		RT_AddEmissiveLight (&state);
 	}
+}
+
+/*
+================
+Brush-entity light-list cluster cache
+
+Submodel vertices are baked once per map by GL_BuildBModelVertexBuffer with
+the leaf each face occupied AT SPAWN, and RT_BatchSurface re-copies those same
+stale verts every frame. A retracted bridge spawns inside the wall it slides
+out of, so it bakes cluster 0 (the solid leaf, whose light list is always
+empty) and would stay unlit for the whole level unless the cluster is
+re-resolved from the entity's current position.
+
+Re-resolving is a BSP walk plus, when the centroid lands in solid, a 6x3
+neighbourhood probe - far too slow to repeat for every surface of every brush
+entity every frame. An entity's leaf is determined by its origin for all but
+the largest submodels, and it moves at most once per frame, so remember the
+answer per (entity, surface) and re-resolve only when the origin moved.
+================
+*/
+#define RT_BRUSHCLUSTER_CACHE_SIZE 256
+
+typedef struct
+{
+	const entity_t *ent;
+	int             vbo_firstvert;
+	vec3_t          origin;
+	int             cluster;
+} rt_brushcluster_cacheentry_t;
+
+static rt_brushcluster_cacheentry_t rt_brushcluster_cache[RT_BRUSHCLUSTER_CACHE_SIZE];
+
+/*
+================
+RT_BrushClusterCacheReset
+
+Drop every cached cluster: rtallbrushvertices - and with it the meaning of
+vbo_firstvert - is rebuilt on map load.
+================
+*/
+void RT_BrushClusterCacheReset (void)
+{
+	memset (rt_brushcluster_cache, 0, sizeof (rt_brushcluster_cache));
+}
+
+/*
+================
+RT_ResolveBrushSurfCluster
+
+Light-list cluster for one brush-entity surface at the entity's current
+position. The batch verts are still in model space (vkpt applies
+RT_GetBrushModelMatrix at upload), so the entity origin is added to the
+centroid here.
+================
+*/
+static int RT_ResolveBrushSurfCluster (const rt_uploadsurf_state_t *s, const RgVertex *verts, int numverts)
+{
+	const size_t idx = ((size_t) s->ent / sizeof (void *) + (size_t) s->surf->vbo_firstvert) % RT_BRUSHCLUSTER_CACHE_SIZE;
+	rt_brushcluster_cacheentry_t *ce = &rt_brushcluster_cache[idx];
+
+	if (ce->ent == s->ent && ce->vbo_firstvert == s->surf->vbo_firstvert &&
+		VectorCompare (ce->origin, s->ent->origin))
+	{
+		return ce->cluster;
+	}
+
+	vec3_t centroid = {0, 0, 0};
+
+	for (int i = 0; i < numverts; i++)
+	{
+		centroid[0] += verts[i].position[0];
+		centroid[1] += verts[i].position[1];
+		centroid[2] += verts[i].position[2];
+	}
+
+	if (numverts > 0)
+		VectorScale (centroid, 1.0f / (float) numverts, centroid);
+	VectorAdd (centroid, s->ent->origin, centroid);
+
+	ce->ent = s->ent;
+	ce->vbo_firstvert = s->surf->vbo_firstvert;
+	VectorCopy (s->ent->origin, ce->origin);
+	ce->cluster = RT_ResolvePointCluster (centroid);
+
+	return ce->cluster;
 }
 
 static void RT_BatchSurface (cb_context_t *cbx, const rt_uploadsurf_state_t *s, uint32_t *brushpasses)
@@ -1843,7 +2043,18 @@ static void RT_BatchSurface (cb_context_t *cbx, const rt_uploadsurf_state_t *s, 
 	}
 
 	R_TriangleIndicesForSurf (cbx->batch_verts_count, num_surf_verts, &cbx->batch_indices[cbx->batch_indices_count]);
-	memcpy (&cbx->batch_verts[cbx->batch_verts_count], rtallbrushvertices + s->surf->vbo_firstvert, sizeof (RgVertex) * num_surf_verts);
+	RgVertex *batch_verts = &cbx->batch_verts[cbx->batch_verts_count];
+	memcpy (batch_verts, rtallbrushvertices + s->surf->vbo_firstvert, sizeof (RgVertex) * num_surf_verts);
+
+	// Brush entities carry the cluster baked at spawn (see the cache above), so
+	// stamp the one resolved from where the entity is NOW.
+	if (s->ent && s->model != cl.worldmodel)
+	{
+		const uint32_t cluster = (uint32_t) RT_ResolveBrushSurfCluster (s, batch_verts, num_surf_verts);
+
+		for (int i = 0; i < num_surf_verts; i++)
+			batch_verts[i].cluster = cluster;
+	}
 
 	cbx->batch_indices_count += num_surf_indices;
 	cbx->batch_verts_count += num_surf_verts;
@@ -1930,13 +2141,24 @@ void R_DrawTextureChains_Water (cb_context_t *cbx, qmodel_t *model, entity_t *en
 				Atomic_StoreUInt32 (&t->update_warp, true); // FIXME: one frame too late!
 			}
 
+			// Teleporters, warp liquids and the other SURF_DRAWTURB surfaces
+			// animate through the same chain mechanism as solid geometry, and
+			// each frame can carry its own materials.yaml entry (+0slip..
+			// +6slip, pulsing panels). Follow the frame that is on screen NOW,
+			// falling back to the base frame for chains only partly authored --
+			// the SAME rule R_DrawTextureChains_Multitexture uses. Without it
+			// the emissive light is stuck on whichever frame the lookup
+			// happened to bake, so the whole animation looked static.
+			gltexture_t *anim_tex  = R_TextureAnimation (t, 0)->gltexture;
+			gltexture_t *surf_tex  = (anim_tex && anim_tex->rthasmaterial) ? anim_tex : t->gltexture;
+
 			rt_uploadsurf_state_t cur_state = {
 				.entuniqueid = entuniqueid,
 				.ent = ent,
 				.model = model,
 				.surf = s,
-				.diffuse_tex = t->gltexture, // t->warpimage,
-				.light_tex = t->gltexture,
+				.diffuse_tex = surf_tex,
+				.light_tex = surf_tex,
 				.lightmap_tex = (s->lightmaptexturenum >= 0) ? lightmaps[s->lightmaptexturenum].texture : greytexture,
 				.alpha_test = false,
 				.alpha = GL_WaterAlphaForEntitySurface (ent, s),
@@ -1949,6 +2171,94 @@ void R_DrawTextureChains_Water (cb_context_t *cbx, qmodel_t *model, entity_t *en
 
 			if (cur_state.lightmap_tex != last_state.lightmap_tex ||
 				fabsf(cur_state.alpha - last_state.alpha) < 0.001f)
+			{
+				RT_FlushBatch (cbx, &last_state, &brushpasses);
+			}
+
+			RT_BatchSurface (cbx, &cur_state, &brushpasses);
+			last_state = cur_state;
+		}
+
+		RT_FlushBatch (cbx, &last_state, &brushpasses);
+	}
+
+	Atomic_AddUInt32 (&rs_brushpasses, brushpasses);
+}
+
+/*
+================
+R_DrawTextureChains_Animated
+
+Solid world chains that animate (+0slip..+6slip pulsing panels, blinking wall
+lights) are excluded from the once-per-map static submit, because that would
+freeze the visible texture on the frame live at map load. This per-frame pass
+re-submits them as DYNAMIC geometry, resolving the frame that is on screen NOW
+(the same rule R_DrawTextureChains_Multitexture uses), so the visible texture
+animates alongside its already-animating area light.
+================
+*/
+void R_DrawTextureChains_Animated (cb_context_t *cbx, qmodel_t *model)
+{
+	int                   i;
+	msurface_t           *s;
+	texture_t            *t;
+	rt_uploadsurf_state_t last_state = {0};
+
+	uint32_t brushpasses = 0;
+	for (i = 0; i < model->numtextures; ++i)
+	{
+		t = model->textures[i];
+
+		// Solid animated chains only. Turbulent/warped animated textures
+		// (teleport +0slip.., warp water) are drawn by the water pass with
+		// their portal/water semantics, and tiled/notexture chains are handled
+		// elsewhere -- mirror R_DrawTextureChains_Multitexture's exclusions so
+		// this pass never double-draws a surface.
+		if (!t || !t->texturechains[chain_world] || !t->anim_total)
+			continue;
+		if (t->texturechains[chain_world]->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE))
+			continue;
+
+		RT_ClearBatch (cbx);
+
+		gltexture_t *diffuse_tex = R_TextureAnimation (t, 0)->gltexture;
+		if (!diffuse_tex)
+			diffuse_tex = t->gltexture;
+
+		// Light source material follows the animated frame, falling back to the
+		// base frame when the current one has no authored material (partially
+		// authored chains must not blink on/off every tick) -- the same rule as
+		// R_DrawTextureChains_Multitexture.
+		gltexture_t *light_tex = t->gltexture;
+		if (diffuse_tex->rthasmaterial)
+			light_tex = diffuse_tex;
+
+		const qboolean alpha_test = (t->texturechains[chain_world]->flags & SURF_DRAWFENCE) != 0;
+
+		for (s = t->texturechains[chain_world]; s; s = s->texturechains[chain_world])
+		{
+			if (s->flags & SURF_DRAWSKY)
+				continue;
+
+			rt_uploadsurf_state_t cur_state = {
+				.entuniqueid = ENT_UNIQUEID_WORLD,
+				.ent = NULL,
+				.model = model,
+				.surf = s,
+				.diffuse_tex = diffuse_tex,
+				.light_tex = light_tex,
+				.lightmap_tex = (s->lightmaptexturenum >= 0) ? lightmaps[s->lightmaptexturenum].texture : greytexture,
+				.alpha_test = alpha_test,
+				.alpha = 1.0f,
+				.use_zbias = false,
+				.is_warp = false,
+				.is_water = false,
+				.is_acid = false,
+				.is_teleport = false,
+				.is_animated = true,
+			};
+
+			if (cur_state.lightmap_tex != last_state.lightmap_tex)
 			{
 				RT_FlushBatch (cbx, &last_state, &brushpasses);
 			}
@@ -1984,6 +2294,13 @@ void R_DrawTextureChains_Multitexture (
 		t = model->textures[i];
 
 		if (!t || !t->texturechains[chain] || t->texturechains[chain]->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE))
+			continue;
+
+		// Animated world chains are drawn per-frame as DYNAMIC geometry by
+		// R_DrawTextureChains_Animated; submitting them here would freeze the
+		// visible texture on whichever frame was live when the map loaded
+		// (the light already animates, but the geometry material did not).
+		if (ent == NULL && t->anim_total != 0)
 			continue;
 
 		RT_ClearBatch (cbx);
@@ -2113,6 +2430,21 @@ void R_DrawWorld_Water (cb_context_t *cbx)
 
 /*
 =============
+R_DrawWorld_Animated -- per-frame dynamic pass for animated solid world chains.
+=============
+*/
+void R_DrawWorld_Animated (cb_context_t *cbx)
+{
+	if (!r_drawworld_cheatsafe)
+		return;
+
+	R_BeginDebugUtilsLabel (cbx, "Animated");
+	R_DrawTextureChains_Animated (cbx, cl.worldmodel);
+	R_EndDebugUtilsLabel (cbx);
+}
+
+/*
+=============
 R_DrawWorld_ShowTris -- ericw -- moved from R_DrawTextureChains_ShowTris, which is no longer specific to the world.
 =============
 */
@@ -2137,6 +2469,30 @@ void RT_UploadAllWorldModelLights (void)
 	{
 		RgTexturedAreaLightUploadInfo li = rt_wldlights_emissive[i];
 
+		// The fixture's TEXTURE animates (teleport +0slip..+6slip, blinking
+		// +0/+1 buttons, pulsing lamps) and the bake froze whichever frame was
+		// live when the map loaded - so the light always carried that one
+		// frame's luma, forever. Re-resolve the light-source texture for the
+		// frame that is on screen NOW and, when it differs from the baked one,
+		// swap in its material / mask average / radiance.
+		gltexture_t *light_tex = RT_AnimatedLightTex (rt_wldlights_emissive_surf[i]->texinfo->texture);
+		if (light_tex != rt_wldlights_emissive_tex[i])
+		{
+			RgMaterial material;
+			float      meanEmiss;
+			vec3_t     color;
+
+			// A frame that is not a light source at all (the dark half of a
+			// +0/+1 blink pair, an idle button frame, a liquid that is not
+			// emissive this frame) emits nothing while it is on screen.
+			if (!RT_EmissiveLightParamsForTex (light_tex, &material, &meanEmiss, color))
+				continue;
+
+			li.material  = material;
+			li.meanEmiss = meanEmiss;
+			VectorCopy (color, li.color.data);
+		}
+
 		// The fixture's classic lightstyle animation is applied HERE, per frame:
 		// the list is baked once per map, so a scale folded into it at map load
 		// would freeze every flickering/pulsing lamp at that single instant (the
@@ -2144,7 +2500,6 @@ void RT_UploadAllWorldModelLights (void)
 		// style happened to be dark while the map was loading). A style that is
 		// off right now skips the light for this frame - upload and cluster
 		// registration - and it returns as soon as the style lights up again.
-		gltexture_t *light_tex = rt_wldlights_emissive_tex[i];
 		if (light_tex && light_tex->rtlightstyles && CVAR_TO_BOOL (rt_light_styles))
 		{
 			const float style_scale = RT_SurfaceLightStyleScale (rt_wldlights_emissive_surf[i]);
