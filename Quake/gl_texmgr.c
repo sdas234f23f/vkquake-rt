@@ -57,6 +57,13 @@ extern cvar_t rt_model_rough;
 extern cvar_t rt_model_metal;
 
 #define MAX_MIPS 16
+
+// Steepness of the exponential falloff of a colour-synthesized ("color_emissive")
+// emissive mask, in units of "distance from the authored colour / threshold".
+// The mask is 1.0 at the authored colour and decays exponentially towards 0 at
+// the threshold (where it reaches exactly 0). Lower = softer/wider glow.
+#define RT_COLOR_EMISSIVE_FALLOFF 2.0f
+
 static int          numgltextures;
 static gltexture_t *active_gltextures, *free_gltextures;
 gltexture_t        *notexture, *nulltexture, *whitetexture, *greytexture;
@@ -1241,7 +1248,17 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	//    rtemissivecolor) and the emissive surface stays authored. Scaling
 	//    .b there would blow out e.g. explosion sprites that carry brightness
 	//    22 for their fake light.
-	const qboolean has_emis_mask = (emisTex != NULL) || mat->has_color_emissive;
+
+	// Emissive mask precedence: an authored "texture_emissive" always wins
+	// over "color_emissive". The decision is made on the KEY, not on whether
+	// the luma file loaded, so a missing/broken luma file cannot silently
+	// degrade into a colour-synthesized mask -- that is reported instead.
+	const qboolean has_luma_key = (mat->filename_emissive[0] != '\0');
+	const qboolean use_color_emissive = mat->has_color_emissive && !has_luma_key;
+	if (has_luma_key && !emisBuf)
+		Con_Printf ("RT: material '%s': texture_emissive '%s' could not be loaded; using no emissive mask\n",
+		            mat->name, mat->filename_emissive);
+	const qboolean has_emis_mask = (emisBuf != NULL) || use_color_emissive;
 	const float emissScale = (isBrush && has_emis_mask && mat->is_light) ? mat->light_brightness : 1.0f;
 	const qboolean maskedTAL = (emissScale != 1.0f);
 
@@ -1315,25 +1332,41 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 			if (fb > emiss)
 				emiss = fb;
 		}
-		else if (!emisBuf && mat->has_color_emissive)
+		else if (!emisBuf && use_color_emissive)
 		{
 			// color_emissive: synthesize the emissive mask from the base
-			// texture instead of a hand-painted *_luma file -- only pixels
-			// whose colour is within color_emissive_threshold of the authored
-			// colour become emissive (e.g. a red button glows, the grey metal
-			// around it does not). The distance is the RGB-space distance
-			// divided by sqrt(3), so the threshold reads as a 0..1 fraction of
-			// the colour cube; it is compared squared to avoid the sqrt. A
-			// matched pixel emits its own Rec.709 luminance, so the art's
-			// brightness gradations (dim red vs. bright red) are preserved.
+			// texture instead of a hand-painted *_luma file -- pixels whose
+			// colour is close to the authored colour become emissive (e.g. a
+			// red button glows, the grey metal around it does not), anything
+			// beyond color_emissive_threshold stays dark. Never reached when
+			// the material authors a texture_emissive: the luma file owns the
+			// mask.
+			// The distance is the RGB-space distance divided by sqrt(3), so
+			// the threshold reads as a 0..1 fraction of the colour cube; it is
+			// compared squared to avoid the sqrt.
+			// The mask then FADES with that distance rather than cutting off
+			// at a hard edge: the authored colour is fully white and the value
+			// decays exponentially to black as the pixel approaches the
+			// threshold (RT_COLOR_EMISSIVE_FALLOFF), so the glow blends into
+			// the surrounding art instead of looking like a texture cut out
+			// with scissors and pasted on top.
 			const float dr = src[0] / 255.0f - mat->color_emissive[0];
 			const float dg = src[1] / 255.0f - mat->color_emissive[1];
 			const float db = src[2] / 255.0f - mat->color_emissive[2];
 			const float thr = mat->color_emissive_threshold;
-			if (dr * dr + dg * dg + db * db <= 3.0f * thr * thr)
+			const float d2 = dr * dr + dg * dg + db * db;
+			if (d2 <= 3.0f * thr * thr)
 			{
-				const float lum = (0.2126f * src[0] + 0.7152f * src[1] + 0.0722f * src[2]) / 255.0f;
-				emiss = lum * mat->emissive_factor;
+				// dnorm: 0.0 at the authored colour, 1.0 at the threshold
+				const float dnorm = (thr > 0.0f) ? sqrtf (d2 / 3.0f) / thr : 0.0f;
+				const float k = RT_COLOR_EMISSIVE_FALLOFF;
+				const float tail = expf (-k);
+				// the exponential is renormalized so the mask lands on exactly
+				// 0.0 at the threshold (the raw exponential is still well above
+				// zero there) and on exactly 1.0 at the authored colour -- no
+				// visible seam at the cutoff
+				emiss = (expf (-k * dnorm) - tail) / (1.0f - tail);
+				emiss *= mat->emissive_factor;
 			}
 		}
 
@@ -1399,7 +1432,9 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		// emissive channel, exactly like a texture_emissive (luma) file would.
 		// Expose it as such so r_world.c builds a MASKED area light that
 		// follows the mask instead of a uniform light over the whole face.
-		if (mat->has_color_emissive)
+		// Only when no texture_emissive is authored -- the luma file always
+		// owns the mask (see the precedence block above).
+		if (use_color_emissive)
 			glt->rtemissivetex = true;
 
 		// Apply the material's light_brightness multiplier so emissive lights

@@ -1780,10 +1780,14 @@ static void RT_CollectWorldEmissiveLights (void)
 		if (!t || !t->gltexture)
 			continue;
 
-		// Same surfaces the texture-chain pass skips: sky is not ray-traced
-		// geometry, liquids are re-submitted every frame (dynamic lights), and
-		// tiled/notexture surfaces carry no material of their own.
-		if (surf->flags & (SURF_DRAWSKY | SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE))
+		// Sky is not ray-traced geometry and notexture surfaces carry no
+		// material of their own. Liquids (SURF_DRAWTURB) ARE swept here on
+		// purpose: lava is static world geometry, so its light must be baked
+		// like every other fixture -- the per-frame water pass only chains
+		// what is in the current PVS/frustum, which made emissive liquids
+		// lose their light outside it. Non-light liquids (water, slime,
+		// teleports) fall through to the cheap rtislight reject below.
+		if (surf->flags & (SURF_DRAWSKY | SURF_NOTEXTURE))
 			continue;
 
 		// World surfaces are not entities, so the animated frame is frame 0,
@@ -1822,10 +1826,14 @@ static void RT_BatchSurface (cb_context_t *cbx, const rt_uploadsurf_state_t *s, 
 
 	// Emissive material surfaces generate ONE triangle area light per surface
 	// (merged from the fan), so large luma surfaces don't blow the light budget.
-	// Static world surfaces are excluded: they are baked for the whole map in
-	// one sweep (RT_CollectWorldEmissiveLights) instead of from this frame's
-	// draw list, which only contains what this camera can see.
-	if (!RT_IsStaticWorldSurface (s))
+	// World-model surfaces are ALL excluded here - including turbulent liquids
+	// (lava): they are static geometry and are baked for the whole map in one
+	// sweep (RT_CollectWorldEmissiveLights) instead of from this frame's draw
+	// list, which only contains what this camera can see. (Uploading lava per
+	// frame made its light vanish outside the current PVS and "follow" the
+	// view direction as surfaces entered/left the frustum.) Only brush
+	// entities (doors, plats, moving fixtures) keep the per-frame dynamic add.
+	if (s->model != cl.worldmodel)
 		RT_AddEmissiveLight (s);
 
 	if (cbx->batch_indices_count + num_surf_indices > MAX_BATCH_INDICES ||
