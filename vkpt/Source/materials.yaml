@@ -199,19 +199,19 @@ materials:
   - name: textures/+0basebtn
     texture_emissive: textures/+0basebtn_luma.png
     light_color: d70000
-    light_brightness: 0.5
+    light_brightness: 0.2
     is_light: true
   - name: textures/+1basebtn
     is_light: false
   - name: textures/+abasebtn
     texture_emissive: textures/+abasebtn_luma.png
     light_color: dbcb13
-    light_brightness: 0.5
+    light_brightness: 0.2
     is_light: true
   - name: textures/basebutn3
     light_color: b30000
-    light_brightness: 0.5
-    is_light: false
+    light_brightness: 0.1
+    is_light: true
   - name: textures/tlight01
     texture_emissive: textures/tlight01_luma.png
     light_color: fff393
@@ -220,7 +220,7 @@ materials:
   - name: textures/tlight02
     texture_emissive: textures/tlight02_luma.png
     light_color: ffffdd
-    light_brightness: 0.5
+    light_brightness: 0.8
     is_light: true
   - name: textures/tlight03
     light_color: ffffdd
@@ -241,12 +241,10 @@ materials:
   - name: textures/tlight07
     texture_emissive: textures/tlight07_luma.png
     light_color: bfaf50
-    light_brightness: 0.6
+    light_brightness: 0.8
     is_light: true
   - name: textures/tlight08
-    light_color: ffffdd
-    light_brightness: 0.5
-    is_light: true
+    is_light: false
   - name: textures/tlight09
     light_color: ffffdd
     light_brightness: 0.5
@@ -259,7 +257,7 @@ materials:
   - name: textures/tlight11
     texture_emissive: textures/tlight11_luma.png
     light_color: ffffff
-    light_brightness: 0.7
+    light_brightness: 0.5
     is_light: true
   - name: textures/+0slip
     is_light: false
@@ -588,8 +586,10 @@ materials:
   - name: progs/backpack.mdl:frame0
     is_light: false
   - name: progs/bolt.mdl:frame0
-    force_rasterize: true
-    is_light: false
+    texture_emissive: mdl_skins/bolt_skin0.png
+    light_color: ccccff
+    light_brightness: 1
+    is_light: true
   - name: progs/bolt2.mdl:frame0
     force_rasterize: true
     is_light: false
@@ -619,6 +619,11 @@ materials:
     light_color: ffffdd
     light_brightness: 0.5
     light_upoffset: 16.0
+    is_light: true
+  - name: progs/bolt1.mdl:frame0
+    texture_emissive: mdl_skins/bolt_skin0.png
+    light_color: ccccff
+    light_brightness: 1
     is_light: true
   - name: progs/g_light.mdl:frame0
     is_light: false
