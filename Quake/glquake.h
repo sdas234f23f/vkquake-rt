@@ -370,6 +370,9 @@ qboolean RT_AllowFakeLights (void); // strict light-source modes (materials_only
 void RT_ClusterLightListsReset (void);
 void RT_ClusterLightAdd (uint64_t uniqueID, const vec3_t origin);
 void RT_ClusterLightListsUpload (void);
+void RT_ClusterLightReport_f (void); // rt_light_report: why each light is (not) sampled
+void RT_LightReport_f (void);        // rt_light_report: emissive pass + cluster lists
+void RT_PrintEmissiveStats (void);   // rt_light_report: emissive pass only
 
 void GL_SubdivideSurface (msurface_t *fa);
 void R_BuildLightMap (msurface_t *surf, byte *dest, int stride);

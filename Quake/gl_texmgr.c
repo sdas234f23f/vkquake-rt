@@ -470,6 +470,9 @@ static void TexMgr_RTMatDump_f (void)
 			Con_Printf ("RT dump:   authored: brightness=%.3f is_light=%d light_styles=%d has_light_color=%d light_color=(%.4f,%.4f,%.4f)\n",
 			            mat->light_brightness, mat->is_light, mat->light_styles, mat->has_light_color,
 			            mat->light_color[0], mat->light_color[1], mat->light_color[2]);
+			Con_Printf ("RT dump:   authored: color_emissive=%d (%.4f,%.4f,%.4f) color_emissive_threshold=%.4f emissive_factor=%.3f\n",
+			            mat->has_color_emissive, mat->color_emissive[0], mat->color_emissive[1], mat->color_emissive[2],
+			            mat->color_emissive_threshold, mat->emissive_factor);
 		}
 		else
 		{
@@ -1225,18 +1228,21 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 
 	// light_brightness folding. Two distinct cases:
 	//
-	//  * MASKED brush TALs (brush surface with a real luma texture that is a
-	//    light source): the RME .b channel doubles as the visible emissive
-	//    AND the NEE luma mask sampled by r_world.c. Brightness is folded
-	//    into that stored emission (emissScale) so the lamp surface dims
-	//    together with the light it casts; the color is left authored and the
-	//    shader dims through meanEmiss = brightness * mean.
+	//  * MASKED brush TALs (brush surface with a real luma texture -- or a
+	//    color_emissive-synthesized mask, which lands in the very same RME
+	//    .b channel -- that is a light source): the RME .b channel doubles as
+	//    the visible emissive AND the NEE luma mask sampled by r_world.c.
+	//    Brightness is folded into that stored emission (emissScale) so the
+	//    lamp surface dims together with the light it casts; the color is
+	//    left authored and the shader dims through meanEmiss = brightness *
+	//    mean.
 	//  * Everything else (alias/sprite sources, uniform light_color-only
 	//    lamps): brightness scales the light COLOR only (rtlightcolor /
 	//    rtemissivecolor) and the emissive surface stays authored. Scaling
 	//    .b there would blow out e.g. explosion sprites that carry brightness
 	//    22 for their fake light.
-	const float emissScale = (isBrush && emisTex != NULL && mat->is_light) ? mat->light_brightness : 1.0f;
+	const qboolean has_emis_mask = (emisTex != NULL) || mat->has_color_emissive;
+	const float emissScale = (isBrush && has_emis_mask && mat->is_light) ? mat->light_brightness : 1.0f;
 	const qboolean maskedTAL = (emissScale != 1.0f);
 
 	// average emitted color (albedo * emissive), used to generate emissive
@@ -1292,8 +1298,9 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 				metal = factor;
 		}
 
-		// emissive: from the emissive texture, synthesized from the base, or
-		// merged from the classic fullbright mask (fullbrightOverride)
+		// emissive: from the emissive texture, synthesized by colour match
+		// (color_emissive), or merged from the classic fullbright mask
+		// (fullbrightOverride)
 		float emiss = 0.0f;
 		if (emisBuf)
 		{
@@ -1308,11 +1315,26 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 			if (fb > emiss)
 				emiss = fb;
 		}
-		else if (!emisBuf && mat->synth_emissive)
+		else if (!emisBuf && mat->has_color_emissive)
 		{
-			const float lum = (0.2126f * src[0] + 0.7152f * src[1] + 0.0722f * src[2]) / 255.0f;
-			if (mat->emissive_threshold <= 0 || lum > mat->emissive_threshold / 255.0f)
+			// color_emissive: synthesize the emissive mask from the base
+			// texture instead of a hand-painted *_luma file -- only pixels
+			// whose colour is within color_emissive_threshold of the authored
+			// colour become emissive (e.g. a red button glows, the grey metal
+			// around it does not). The distance is the RGB-space distance
+			// divided by sqrt(3), so the threshold reads as a 0..1 fraction of
+			// the colour cube; it is compared squared to avoid the sqrt. A
+			// matched pixel emits its own Rec.709 luminance, so the art's
+			// brightness gradations (dim red vs. bright red) are preserved.
+			const float dr = src[0] / 255.0f - mat->color_emissive[0];
+			const float dg = src[1] / 255.0f - mat->color_emissive[1];
+			const float db = src[2] / 255.0f - mat->color_emissive[2];
+			const float thr = mat->color_emissive_threshold;
+			if (dr * dr + dg * dg + db * db <= 3.0f * thr * thr)
+			{
+				const float lum = (0.2126f * src[0] + 0.7152f * src[1] + 0.0722f * src[2]) / 255.0f;
 				emiss = lum * mat->emissive_factor;
+			}
 		}
 
 		// accumulate the average emitted color (albedo * emissive) for the
@@ -1372,6 +1394,13 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		glt->rtemissivecolor[1] = emissG / (npix * 255.0f);
 		glt->rtemissivecolor[2] = emissB / (npix * 255.0f);
 		glt->rtemissivemean = (float)(emissMean / npix);
+
+		// color_emissive synthesized a real per-pixel mask into the RME
+		// emissive channel, exactly like a texture_emissive (luma) file would.
+		// Expose it as such so r_world.c builds a MASKED area light that
+		// follows the mask instead of a uniform light over the whole face.
+		if (mat->has_color_emissive)
+			glt->rtemissivetex = true;
 
 		// Apply the material's light_brightness multiplier so emissive lights
 		// (is_light: true without light_color, e.g. flame skins) scale exactly

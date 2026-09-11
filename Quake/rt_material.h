@@ -45,8 +45,9 @@ typedef struct rt_material_s {
     qboolean metalness_from_normal_alpha; // opt-in: metal = normal.alpha/255 * factor (Q2RTX packing)
     qboolean bsp_radiance;             // NOT IMPLEMENTED (parsed for .mat compatibility only)
     float default_radiance;            // NOT IMPLEMENTED (parsed for .mat compatibility only)
-    qboolean synth_emissive;
-    int emissive_threshold;
+    vec3_t color_emissive;             // "color_emissive:" RGB whose matching pixels become emissive
+    qboolean has_color_emissive;       // "color_emissive:" key present
+    float color_emissive_threshold;    // max normalized RGB distance for a pixel to match (default 0.02)
     // legacy texture_custom_info.txt migrations (now authored in materials.yaml)
     vec3_t light_color;            // explicit light color (hex) normalized to [0,1]
     qboolean has_light_color;      // "light_color:" key present

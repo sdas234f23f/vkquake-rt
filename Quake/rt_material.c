@@ -311,6 +311,7 @@ static void rt_mat_reset(rt_material_t *mat)
     mat->light_brightness = 1.0f;
     mat->kind = RT_MAT_KIND_REGULAR;
     mat->light_styles = true;    // surfaces honor lightstyle animation unless light_styles: false
+    mat->color_emissive_threshold = 0.02f; // ~2% RGB-distance tolerance around color_emissive
 }
 
 static int rt_mat_parse_kind(const char *kindname)
@@ -402,10 +403,10 @@ static void rt_mat_set_attribute(rt_material_t *mat, const char *key, const char
         mat->bsp_radiance = rt_mat_parse_bool(value);
     else if (!q_strcasecmp(key, "default_radiance"))
         mat->default_radiance = (float)atof(value);
-    else if (!q_strcasecmp(key, "synth_emissive"))
-        mat->synth_emissive = rt_mat_parse_bool(value);
-    else if (!q_strcasecmp(key, "emissive_threshold"))
-        mat->emissive_threshold = atoi(value);
+    else if (!q_strcasecmp(key, "color_emissive"))
+        mat->has_color_emissive = rt_mat_parse_hex_color(value, mat->color_emissive);
+    else if (!q_strcasecmp(key, "color_emissive_threshold"))
+        mat->color_emissive_threshold = (float)atof(value);
     else if (!q_strcasecmp(key, "light_color"))
         mat->has_light_color = rt_mat_parse_hex_color(value, mat->light_color);
     else if (!q_strcasecmp(key, "light_brightness"))

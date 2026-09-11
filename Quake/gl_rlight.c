@@ -384,6 +384,7 @@ extern cvar_t rt_materials_only;
 extern cvar_t rt_poi_trigger, rt_poi_func, rt_poi_weapon, rt_poi_pwrup, rt_poi_armor, rt_poi_key, rt_poi_health, rt_poi_ammo;
 extern cvar_t rt_poi_distthresh, rt_poi_distthresh_super;
 extern cvar_t rt_light_reach;
+extern cvar_t rt_light_report_filter;
 
 
 static qboolean StartsWith (const char *val, const char *begin)
@@ -932,9 +933,44 @@ static int rt_cluster_light_count;
 static qboolean rt_cluster_dropped_warned;
 static qboolean rt_cluster_perlist_warned;
 
+// Per-cluster slot state. Shared between the upload (RT_ClusterLightListsUpload)
+// and the rt_light_report diagnostics. See the upload for the stability rules.
+static uint64_t *rt_cluster_slot_uids = NULL;
+static uint32_t *rt_cluster_slot_stamp = NULL;
+static uint8_t  *rt_cluster_slot_fill = NULL;
+static int       rt_cluster_slot_alloc = 0;
+static int       rt_cluster_last_clusters = 0;
+static uint32_t  rt_cluster_frame_stamp = 0;
+static uint32_t *rt_cluster_offsets = NULL;
+static uint64_t *rt_cluster_list = NULL;
+static int       rt_cluster_list_alloc = 0;
+static vec3_t    rt_cluster_vieworg;
+
+// Diagnostics for rt_light_report. Purely informational: none of this changes
+// which lights end up in the per-cluster lists.
+typedef struct rt_light_diag_s
+{
+	uint64_t uniqueID;
+	vec3_t   origin;
+	qboolean resolved;    // an open leaf was found for the light origin
+	int      granted;     // clusters that handed the light a slot
+	int      denied;      // clusters that were already full
+} rt_light_diag_t;
+
+static rt_light_diag_t rt_light_diag[RT_CLUSTER_MAX_LIGHTS];
+static int rt_light_diag_count;
+static int rt_light_diag_unresolved;
+static int rt_light_diag_granted;
+static int rt_light_diag_denied;
+
 void RT_ClusterLightListsReset (void)
 {
 	rt_cluster_light_count = 0;
+	rt_light_diag_count = 0;
+	rt_light_diag_unresolved = 0;
+	rt_light_diag_granted = 0;
+	rt_light_diag_denied = 0;
+	VectorCopy (r_refdef.vieworg, rt_cluster_vieworg);
 }
 
 void RT_ClusterLightAdd (uint64_t uniqueID, const vec3_t origin)
@@ -960,6 +996,14 @@ void RT_ClusterLightAdd (uint64_t uniqueID, const vec3_t origin)
 
 	rt_cluster_lights[rt_cluster_light_count].uniqueID = uniqueID;
 	VectorCopy (origin, rt_cluster_lights[rt_cluster_light_count].origin);
+
+	rt_light_diag[rt_cluster_light_count].uniqueID = uniqueID;
+	VectorCopy (origin, rt_light_diag[rt_cluster_light_count].origin);
+	rt_light_diag[rt_cluster_light_count].resolved = false;
+	rt_light_diag[rt_cluster_light_count].granted = 0;
+	rt_light_diag[rt_cluster_light_count].denied = 0;
+	rt_light_diag_count = rt_cluster_light_count + 1;
+
 	rt_cluster_light_count++;
 }
 
@@ -1007,8 +1051,9 @@ Assign a stable slot to uid in cluster c and stamp it as present this frame.
 The slot is reused if the light already owns one, recycled if a stale one is
 free, or freshly appended when the cluster still has room. If the cluster is
 full the light simply is not sampled there this frame (warned once globally).
+Returns true when the light is in the cluster's list this frame.
 */
-static void RT_ClusterAssignSlot (int c, uint64_t uid, uint64_t *slotUids,
+static qboolean RT_ClusterAssignSlot (int c, uint64_t uid, uint64_t *slotUids,
 	uint32_t *slotStamp, uint8_t *slotFill, uint32_t frameStamp)
 {
 	uint64_t *cuids = slotUids + c * RT_CLUSTER_MAX_PER_LIST;
@@ -1021,7 +1066,7 @@ static void RT_ClusterAssignSlot (int c, uint64_t uid, uint64_t *slotUids,
 		if (cuids[s] == uid)
 		{
 			cstamp[s] = frameStamp;
-			return;
+			return true;
 		}
 	}
 
@@ -1032,7 +1077,7 @@ static void RT_ClusterAssignSlot (int c, uint64_t uid, uint64_t *slotUids,
 		{
 			cuids[s] = uid;
 			cstamp[s] = frameStamp;
-			return;
+			return true;
 		}
 	}
 
@@ -1042,7 +1087,7 @@ static void RT_ClusterAssignSlot (int c, uint64_t uid, uint64_t *slotUids,
 		const int s = slotFill[c]++;
 		cuids[s] = uid;
 		cstamp[s] = frameStamp;
-		return;
+		return true;
 	}
 
 	if (!rt_cluster_perlist_warned)
@@ -1052,6 +1097,8 @@ static void RT_ClusterAssignSlot (int c, uint64_t uid, uint64_t *slotUids,
 			RT_CLUSTER_MAX_PER_LIST);
 		rt_cluster_perlist_warned = true;
 	}
+
+	return false;
 }
 
 void RT_ClusterLightListsUpload (void)
@@ -1074,55 +1121,51 @@ void RT_ClusterLightListsUpload (void)
 	// a light whose slot shifted read/wrote the counters of a neighbouring
 	// light, which made the CDF mass oscillate and generated emissive triangle
 	// lights toggle on/off ("timer" flicker of tlight07/tlight11 on e1m1).
-	static uint64_t *slotUids = NULL;
-	static uint32_t *slotStamp = NULL;
-	static uint8_t *slotFill = NULL;
-	static uint32_t frameStamp = 0;
-	static int allocSlots = 0;
-	static int lastClusters = 0;
-
+	// The slot arrays live at file scope so rt_light_report can inspect them.
 	const int slotCount = numClusters * RT_CLUSTER_MAX_PER_LIST;
-	if (numClusters != lastClusters)
+	if (numClusters != rt_cluster_last_clusters)
 	{
-		if (slotCount > allocSlots)
+		if (slotCount > rt_cluster_slot_alloc)
 		{
-			slotUids = (uint64_t *)Mem_Realloc (slotUids, sizeof (uint64_t) * slotCount);
-			slotStamp = (uint32_t *)Mem_Realloc (slotStamp, sizeof (uint32_t) * slotCount);
-			slotFill = (uint8_t *)Mem_Realloc (slotFill, sizeof (uint8_t) * numClusters);
-			allocSlots = slotCount;
+			rt_cluster_slot_uids = (uint64_t *)Mem_Realloc (rt_cluster_slot_uids, sizeof (uint64_t) * slotCount);
+			rt_cluster_slot_stamp = (uint32_t *)Mem_Realloc (rt_cluster_slot_stamp, sizeof (uint32_t) * slotCount);
+			rt_cluster_slot_fill = (uint8_t *)Mem_Realloc (rt_cluster_slot_fill, sizeof (uint8_t) * numClusters);
+			rt_cluster_slot_alloc = slotCount;
 		}
 		// Reset the per-cluster slot state for the new map. slotUids/slotStamp
 		// are gated by slotFill, so only slotFill and slotStamp need clearing
 		// (slotStamp is read for recycling, never for stale slots).
-		memset (slotFill, 0, sizeof (uint8_t) * numClusters);
-		memset (slotStamp, 0, sizeof (uint32_t) * slotCount);
-		lastClusters = numClusters;
+		memset (rt_cluster_slot_fill, 0, sizeof (uint8_t) * numClusters);
+		memset (rt_cluster_slot_stamp, 0, sizeof (uint32_t) * slotCount);
+		rt_cluster_last_clusters = numClusters;
 	}
 
-	frameStamp++;
+	rt_cluster_frame_stamp++;
 
-	static uint32_t *offsets = NULL;
-	static uint64_t *lights = NULL;
-	static int allocClusters = 0;
-
-	if (numClusters > allocClusters)
+	if (numClusters > rt_cluster_list_alloc)
 	{
-		offsets = (uint32_t *)Mem_Realloc (offsets, sizeof (uint32_t) * (numClusters + 1));
-		lights = (uint64_t *)Mem_Realloc (lights, sizeof (uint64_t) * numClusters * RT_CLUSTER_MAX_PER_LIST);
-		allocClusters = numClusters;
+		rt_cluster_offsets = (uint32_t *)Mem_Realloc (rt_cluster_offsets, sizeof (uint32_t) * (numClusters + 1));
+		rt_cluster_list = (uint64_t *)Mem_Realloc (rt_cluster_list, sizeof (uint64_t) * numClusters * RT_CLUSTER_MAX_PER_LIST);
+		rt_cluster_list_alloc = numClusters;
 	}
 
 	// Pass 1: find or assign the stable slot of every registered light in every
 	// cluster it illuminates (via the PVS) and stamp it as present this frame.
 	for (int li = 0; li < rt_cluster_light_count; li++)
 	{
+		rt_light_diag_t *diag = &rt_light_diag[li];
+
 		// Never register a light from the solid leaf: it has no PVS of its
 		// own, and Mod_LeafPVS() answers "visible from every cluster" for it,
 		// which would exhaust the RT_CLUSTER_MAX_PER_LIST budget everywhere
 		// and starve the lights registered later.
 		mleaf_t *leaf = RT_ResolveLightLeaf (rt_cluster_lights[li].origin, wm);
 		if (!leaf)
+		{
+			rt_light_diag_unresolved++;
 			continue;
+		}
+		diag->resolved = true;
 
 		const uint64_t uid = rt_cluster_lights[li].uniqueID;
 
@@ -1157,7 +1200,10 @@ void RT_ClusterLightListsUpload (void)
 				if (d2 > reachSq)
 					continue;
 
-				RT_ClusterAssignSlot (c, uid, slotUids, slotStamp, slotFill, frameStamp);
+				if (RT_ClusterAssignSlot (c, uid, rt_cluster_slot_uids, rt_cluster_slot_stamp, rt_cluster_slot_fill, rt_cluster_frame_stamp))
+					diag->granted++;
+				else
+					diag->denied++;
 			}
 			continue;
 		}
@@ -1177,19 +1223,30 @@ void RT_ClusterLightListsUpload (void)
 				if (c >= numClusters)
 					continue;
 
-				RT_ClusterAssignSlot (c, uid, slotUids, slotStamp, slotFill, frameStamp);
+				if (RT_ClusterAssignSlot (c, uid, rt_cluster_slot_uids, rt_cluster_slot_stamp, rt_cluster_slot_fill, rt_cluster_frame_stamp))
+					diag->granted++;
+				else
+					diag->denied++;
 			}
 		}
+	}
+
+	rt_light_diag_granted = 0;
+	rt_light_diag_denied = 0;
+	for (int li = 0; li < rt_light_diag_count; li++)
+	{
+		rt_light_diag_granted += rt_light_diag[li].granted;
+		rt_light_diag_denied += rt_light_diag[li].denied;
 	}
 
 	// Prefix sums over the allocated slot counts -> offsets.
 	uint32_t total = 0;
 	for (int c = 0; c < numClusters; c++)
 	{
-		offsets[c] = total;
-		total += (uint32_t)slotFill[c];
+		rt_cluster_offsets[c] = total;
+		total += (uint32_t)rt_cluster_slot_fill[c];
 	}
-	offsets[numClusters] = total;
+	rt_cluster_offsets[numClusters] = total;
 
 	// Pass 2: write the slot-indexed lists. Lights present this frame keep
 	// their slot; absent ones leave a hole (RT_CLUSTER_INVALID_LIGHT) in their
@@ -1197,22 +1254,222 @@ void RT_ClusterLightListsUpload (void)
 	// to the same light as last frame.
 	for (int c = 0; c < numClusters; c++)
 	{
-		const int cfill = slotFill[c];
-		uint64_t *dst = lights + offsets[c];
-		uint64_t *cuids = slotUids + c * RT_CLUSTER_MAX_PER_LIST;
-		uint32_t *cstamp = slotStamp + c * RT_CLUSTER_MAX_PER_LIST;
+		const int cfill = rt_cluster_slot_fill[c];
+		uint64_t *dst = rt_cluster_list + rt_cluster_offsets[c];
+		uint64_t *cuids = rt_cluster_slot_uids + c * RT_CLUSTER_MAX_PER_LIST;
+		uint32_t *cstamp = rt_cluster_slot_stamp + c * RT_CLUSTER_MAX_PER_LIST;
 		for (int s = 0; s < cfill; s++)
 		{
-			dst[s] = (cstamp[s] == frameStamp) ? cuids[s] : RT_CLUSTER_INVALID_LIGHT;
+			dst[s] = (cstamp[s] == rt_cluster_frame_stamp) ? cuids[s] : RT_CLUSTER_INVALID_LIGHT;
 		}
 	}
 
 	RgClusterLightListsUploadInfo info = {
 		.numClusters = (uint32_t)numClusters,
-		.pOffsets = offsets,
-		.pLightUniqueIds = lights,
+		.pOffsets = rt_cluster_offsets,
+		.pLightUniqueIds = rt_cluster_list,
 		.totalLightCount = total,
 	};
 	RgResult r = rgUploadClusterLightLists (vulkan_globals.instance, &info);
 	RG_CHECK (r);
+}
+
+/*
+================
+RT_FormatLightId
+
+Human readable name for a light unique ID. World surface lights carry the
+surface index, so the emissive source texture can be printed as well - that is
+what makes a report line match a texture in the editor.
+================
+*/
+static void RT_FormatLightId (char *out, size_t outSize, uint64_t uid)
+{
+	const int      type      = (int)(uid >> 60);
+	const int      triangle  = (int)((uid >> 48) & 0xFFFull);
+	const int      surfindex = (int)((uid >> 32) & 0xFFFFull);
+	const unsigned ent       = (unsigned)(uid & 0xFFFFFFFFull);
+	const char    *texname   = NULL;
+
+	if (type == 1 && ent == ENT_UNIQUEID_WORLD && cl.worldmodel && cl.worldmodel->type == mod_brush &&
+		surfindex < cl.worldmodel->numsurfaces)
+	{
+		msurface_t *surf = &cl.worldmodel->surfaces[surfindex];
+		if (surf->texinfo && surf->texinfo->texture)
+			texname = surf->texinfo->texture->name;
+	}
+
+	if (type == 1 && texname)
+		q_snprintf (out, outSize, "world  surf %-4i %s", surfindex, texname);
+	else if (type == 1)
+		q_snprintf (out, outSize, "brush  ent %-5u surf %-4i tri %i", ent, surfindex, triangle);
+	else if (type == 2)
+		q_snprintf (out, outSize, "alias  ent %u", ent);
+	else if (type == 3)
+		q_snprintf (out, outSize, "sprite ent %u", ent);
+	else
+		q_snprintf (out, outSize, "type %i uid %016llx", type, (unsigned long long)uid);
+}
+
+/*
+================
+RT_ClusterLightReport_f
+
+Prints why each registered RT light may or may not be sampled by the renderer.
+
+A light that reaches the renderer at all was registered (the emissive pass
+produced it), so it is in the emissive list. The remaining ways for it to stay
+dark are: no open leaf was found for its origin, or every cluster that the PVS
+accepted it into was already at RT_CLUSTER_MAX_PER_LIST. Additionally a light
+can be perfectly valid and yet not light the current view, because the viewer's
+own cluster does not list it - that is the interesting case for "the same
+texture lights up in one place of the map but not in another".
+
+Columns:
+  cls   yes when the light is listed in the viewer's own cluster
+  pvs   clusters that accepted it
+  no!   clusters that were already full and rejected it
+  dist  distance from the camera in Quake units
+  then the light ID and a verdict.
+
+Run it while looking at the problem in game: the lists are filled by the world
+pass, so the numbers describe the last rendered frame.
+================
+*/
+static float RT_LightDiagDist (const rt_light_diag_t *d)
+{
+	const float dx = d->origin[0] - rt_cluster_vieworg[0];
+	const float dy = d->origin[1] - rt_cluster_vieworg[1];
+	const float dz = d->origin[2] - rt_cluster_vieworg[2];
+	return sqrtf (dx * dx + dy * dy + dz * dz);
+}
+
+void RT_ClusterLightReport_f (void)
+{
+	const int maxLines = (Cmd_Argc () > 1) ? atoi (Cmd_Argv (1)) : 64;
+
+	if (rt_cluster_last_clusters <= 0 || !rt_cluster_slot_fill)
+	{
+		Con_Printf ("RT lights: no cluster light state yet - load a map and look at the world first.\n");
+		return;
+	}
+
+	Con_Printf ("RT lights: %i registered, %i dropped (no open leaf), %i cluster slots granted, %i denied\n",
+		rt_cluster_light_count, rt_light_diag_unresolved, rt_light_diag_granted, rt_light_diag_denied);
+
+	int             viewCluster = -1;
+	int             viewFill = 0;
+	const uint64_t *viewUids = NULL;
+
+	if (cl.worldmodel && cl.worldmodel->type == mod_brush)
+	{
+		mleaf_t *viewleaf = Mod_PointInLeaf (rt_cluster_vieworg, cl.worldmodel);
+		if (viewleaf && viewleaf != cl.worldmodel->leafs)
+		{
+			viewCluster = (int)(viewleaf - cl.worldmodel->leafs);
+			viewFill = rt_cluster_slot_fill[viewCluster];
+			viewUids = rt_cluster_slot_uids + viewCluster * RT_CLUSTER_MAX_PER_LIST;
+		}
+	}
+
+	if (viewCluster < 0)
+		Con_Printf ("camera cluster: unavailable (camera is not in the world)\n");
+	else
+	{
+		int live = 0;
+		for (int s = 0; s < viewFill; s++)
+		{
+			if (viewUids[s] != RT_CLUSTER_INVALID_LIGHT)
+				live++;
+		}
+		Con_Printf ("camera cluster %i: %i/%i slots used, %i accepted this frame%s\n", viewCluster, viewFill,
+			RT_CLUSTER_MAX_PER_LIST, live,
+			(viewFill >= RT_CLUSTER_MAX_PER_LIST) ? "  *** FULL: further lights are dropped here ***" : "");
+	}
+
+	Con_Printf ("%-3s %5s %5s %8s  %-34s %s\n", "cls", "pvs", "no!", "dist", "light", "verdict");
+
+	int shown = 0;
+
+	// rt_light_report_filter narrows the table to one texture, and the rows are
+	// printed nearest-first, so a filtered report describes the light the
+	// player is actually looking at instead of the first N lights in
+	// registration order. Sorted with an insertion sort over an index array
+	// (rt_light_diag itself must keep its registration order).
+	const char *filter = rt_light_report_filter.string;
+	static int  order[RT_CLUSTER_MAX_LIGHTS];
+	int         order_num = 0;
+
+	for (int li = 0; li < rt_light_diag_count; li++)
+	{
+		if (filter[0])
+		{
+			char probe[64];
+			RT_FormatLightId (probe, sizeof (probe), rt_light_diag[li].uniqueID);
+			if (!strstr (probe, filter))
+				continue;
+		}
+		order[order_num++] = li;
+	}
+
+	for (int i = 1; i < order_num; i++)
+	{
+		const int key = order[i];
+		const float keydist = RT_LightDiagDist (&rt_light_diag[key]);
+		int j = i - 1;
+		while (j >= 0 && RT_LightDiagDist (&rt_light_diag[order[j]]) > keydist)
+		{
+			order[j + 1] = order[j];
+			j--;
+		}
+		order[j + 1] = key;
+	}
+
+	if (filter[0])
+	{
+		Con_Printf ("filter \"%s\": %i of %i registered lights match\n", filter, order_num, rt_light_diag_count);
+		if (order_num == 0)
+			Con_Printf ("  (this texture registered no light at all - see the emissive pass above)\n");
+	}
+
+	for (int oi = 0; oi < order_num; oi++)
+	{
+		const rt_light_diag_t *d = &rt_light_diag[order[oi]];
+
+		qboolean inView = false;
+		for (int s = 0; s < viewFill; s++)
+		{
+			if (viewUids[s] == d->uniqueID)
+			{
+				inView = true;
+				break;
+			}
+		}
+
+		const float dist = RT_LightDiagDist (d);
+
+		const char *verdict;
+		if (!d->resolved)
+			verdict = "DROPPED: no open leaf for the light origin";
+		else if (!d->granted && d->denied)
+			verdict = "DROPPED: every cluster was full";
+		else if (!d->granted)
+			verdict = "DROPPED: no cluster accepted it";
+		else if (!inView)
+			verdict = "ok, but camera cluster does not sample it";
+		else
+			verdict = "ok";
+
+		if (shown >= maxLines)
+			break;
+		shown++;
+
+		char id[64];
+		RT_FormatLightId (id, sizeof (id), d->uniqueID);
+		Con_Printf ("%-3s %5i %5i %8.0f  %-34s %s\n", inView ? "yes" : "-", d->granted, d->denied, dist, id, verdict);
+	}
+
+	if (shown < order_num)
+		Con_Printf ("... %i more matches (rt_light_report <line count>%s to print more)\n",
+			order_num - shown, filter[0] ? " <texture>" : "");
 }

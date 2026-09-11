@@ -279,6 +279,12 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
     CVAR_DEF_LIST (CVAR_DEF_T)
 #undef CVAR_DEF_T
 
+// rt_light_report texture filter (rt_light_report [lines] [substring]): names
+// which texture's emissive surfaces and clustered lights the report should
+// single out. Deliberately NOT archived - it is a debugging aid and a stale
+// value left in config.cfg would silently narrow every later report.
+cvar_t rt_light_report_filter = {"rt_light_report_filter", "", 0};
+
 
 enum
 {
@@ -772,6 +778,7 @@ static void GL_InitInstance (void)
 	Cmd_AddCommand ("rt_pfnportal", RT_PrintNearestPortal);
 	Cmd_AddCommand ("rt_water_color", RT_WaterColor);
 	Cmd_AddCommand ("rt_water_acidcolor", RT_AcidColor);
+	Cmd_AddCommand ("rt_light_report", RT_LightReport_f);
 	Cmd_AddCommand ("fog", RT_Fog_Cmd);
 	Cvar_SetValueQuick (&_rt_firsttime, 0);
 
@@ -1815,6 +1822,8 @@ void VID_Init (void)
 #define CVAR_DEF_T(name, default_value) Cvar_RegisterVariable (&name);
 		CVAR_DEF_LIST (CVAR_DEF_T)
 #undef CVAR_DEF_T
+
+		Cvar_RegisterVariable (&rt_light_report_filter);
 	}
 
 	Cvar_SetCallback (&rt_sun_preset, RT_SunPreset_f);

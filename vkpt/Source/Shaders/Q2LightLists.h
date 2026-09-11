@@ -1,15 +1,15 @@
 // Copyright (c) 2020-2021 Sultim Tsyrendashiev
-// 
+//
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
 // to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
-// 
+//
 // The above copyright notice and this permission notice shall be included in all
 // copies or substantial portions of the Software.
-// 
+//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -296,7 +296,12 @@ void q2SampleClusterLights(
         return;
     }
 
-    float r = rng.x * massSum;
+    // The inverse-CDF variate must be the residual within the chosen
+    // partition (Q2RTX does `rng.x -= fpart` in place). Using the full rng.x
+    // here would confine the CDF to the [fpart/partitions, (fpart+1)/partitions)
+    // slice of the partition's mass, which correlates the block index with the
+    // entry index and makes most of the list unreachable.
+    float r = r0 * massSum;
     const float totalMassScaled = massSum * partitions;
     float pdf = 0.0;
     int selectedSlot = -1;

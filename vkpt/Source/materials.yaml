@@ -2,23 +2,34 @@
 # `is_light: false` marks a *static* surface (textures/*) whose luma
 # texture should generate emissive triangle lights. Dynamic surfaces
 # (progs/* models and sprites) are gated separately by the engine.
+#
+# Emissive masks can be authored two ways:
+#   * `texture_emissive: textures/foo_luma.png` -- a hand-painted mask file:
+#     its pixels' luminance is the emission. Most precise; keeps the mask
+#     independent of the diffuse art.
+#   * `color_emissive: ff0000` -- no mask file: the mask is synthesized from
+#     the base texture, so only pixels close to that colour glow. The tone
+#     tolerance is `color_emissive_threshold` (0..1 colour-cube distance
+#     divided by sqrt(3); default 0.02 = very strict). Matched pixels emit
+#     their own luminance, so brighter shades inside the tolerance glow
+#     more. `emissive_factor` scales the result. Combine with
+#     `is_light: true` to also cast light (otherwise the surface only glows):
+#     e.g.  - name: textures/foo
+#             color_emissive: ff0000
+#             is_light: true
+# A `texture_emissive` file and the classic fullbright mask both win over
+# color_emissive when present.
 materials:
   - name: textures/#lava1
     texture_gloss: textures/#lava1_gloss.png
     texture_emissive: textures/#lava1_luma.png
-    light_brightness: 0.5
+    light_brightness: 1
     light_upoffset: 8.0
-    is_light: false
+    is_light: true
   - name: textures/#teleport
     texture_gloss: textures/#teleport_gloss.png
     texture_emissive: textures/#teleport_luma.png
     is_light: false
-  - name: textures/+0_med100
-    texture_normals: textures/+0_med100_n.png
-    texture_gloss: textures/+0_med100_gloss.png
-    texture_emissive: textures/+0_med100_luma.png
-    metalness_factor: 1.0
-    is_light: true
   - name: textures/+0_med25
     texture_normals: textures/+0_med25_n.png
     texture_gloss: textures/+0_med25_gloss.png
@@ -31,11 +42,34 @@ materials:
     texture_emissive: textures/+0_med25s_luma.png
     metalness_factor: 1.0
     is_light: true
+  - name: textures/med100
+    texture_normals: textures/med100_n.png
+    texture_gloss: textures/med100_gloss.png
+    metalness_factor: 1.0
+    is_light: false
+  - name: textures/+0_med100
+    texture_normals: textures/+0_med100_n.png
+    texture_gloss: textures/+0_med100_gloss.png
+    texture_emissive: textures/+0_med100_luma.png
+    metalness_factor: 0.1
+    is_light: true
   - name: textures/+1_med100
     texture_normals: textures/+1_med100_n.png
     texture_gloss: textures/+1_med100_gloss.png
     texture_emissive: textures/+1_med100_luma.png
-    metalness_factor: 1.0
+    metalness_factor: 0.2
+    is_light: true
+  - name: textures/+2_med100
+    texture_normals: textures/+2_med100_n.png
+    texture_gloss: textures/+2_med100_gloss.png
+    texture_emissive: textures/+2_med100_luma.png
+    metalness_factor: 0.3
+    is_light: true
+  - name: textures/+3_med100
+    texture_normals: textures/+3_med100_n.png
+    texture_gloss: textures/+3_med100_gloss.png
+    texture_emissive: textures/+3_med100_luma.png
+    metalness_factor: 0.5
     is_light: true
   - name: textures/+1_med25
     texture_normals: textures/+1_med25_n.png
@@ -49,22 +83,10 @@ materials:
     texture_emissive: textures/+1_med25s_luma.png
     metalness_factor: 1.0
     is_light: true
-  - name: textures/+2_med100
-    texture_normals: textures/+2_med100_n.png
-    texture_gloss: textures/+2_med100_gloss.png
-    texture_emissive: textures/+2_med100_luma.png
-    metalness_factor: 1.0
-    is_light: true
   - name: textures/+2_med25
     texture_normals: textures/+2_med25_n.png
     texture_gloss: textures/+2_med25_gloss.png
     texture_emissive: textures/+2_med25_luma.png
-    metalness_factor: 1.0
-    is_light: true
-  - name: textures/+3_med100
-    texture_normals: textures/+3_med100_n.png
-    texture_gloss: textures/+3_med100_gloss.png
-    texture_emissive: textures/+3_med100_luma.png
     metalness_factor: 1.0
     is_light: true
   - name: textures/+3_med25
@@ -115,11 +137,6 @@ materials:
     light_color: ffffdd
     light_brightness: 2
     is_light: true
-  - name: textures/med100
-    texture_normals: textures/med100_n.png
-    texture_gloss: textures/med100_gloss.png
-    metalness_factor: 1.0
-    is_light: false
   - name: textures/med3_0
     texture_normals: textures/med3_0_n.png
     texture_gloss: textures/med3_0_gloss.png
@@ -198,7 +215,7 @@ materials:
   - name: textures/tlight01
     texture_emissive: textures/tlight01_luma.png
     light_color: fff393
-    light_brightness: 0.5
+    light_brightness: 1
     is_light: true
   - name: textures/tlight02
     texture_emissive: textures/tlight02_luma.png

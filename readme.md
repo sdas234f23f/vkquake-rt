@@ -49,11 +49,10 @@ Steps:
 2. (Re)build the SPIR-V shaders — optional, but after changing any shader source you must regenerate them:
 
    ```
-   cd vkpt/Source/Shaders
-   python GenerateShaders.py
-   cd ../..
-   Copy-Item vkpt\Build\*.spv build\Debug\ovrd\shaders\ -Force
+   .\build_shaders.ps1
    ```
+
+   This compiles `vkpt/Source/Shaders` with `glslc` and deploys the SPIR-V into `build\Debug\id1\shaders`. Pass `-Rebuild` to ignore the shader cache and recompile everything, and `-GenCommon` when the generated shader-common headers changed.
 
 3. Configure and build:
 
