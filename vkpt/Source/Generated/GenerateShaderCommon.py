@@ -562,10 +562,11 @@ GLOBAL_UNIFORM_STRUCT = [
     # Layout alignment: ShGlobalUniform is std140, and the C-side struct is a
     # dense 4-byte-packed mirror of it. Every vec4/mat4 member must start on a
     # 16-byte boundary, so the number of scalar bytes before a vec4 must stay a
-    # multiple of 16. The two floats above shift that phase by 8, so two pad
-    # floats are required to keep the offsets identical on both sides.
-    (TYPE_FLOAT32,      1,      "_padEmisA",                    1),
-    (TYPE_FLOAT32,      1,      "_padEmisB",                    1),
+    # multiple of 16. emissionSharpMask and talSelfLitOffset shift that phase by
+    # 8, so two more scalars are required to keep the offsets identical on both
+    # sides. Only the entry count matters here, not which values they hold.
+    (TYPE_UINT32,       1,      "emissionBlendMode",            1),
+    (TYPE_FLOAT32,      1,      "emissionBlendStrength",        1),
 
     (TYPE_UINT32,       1,      "maxBounceShadowsLights",           1),
     (TYPE_FLOAT32,      1,      "rayLength",                        1),

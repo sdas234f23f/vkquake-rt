@@ -235,8 +235,8 @@ struct ShGlobalUniform
     float skyColorSaturation;
     float emissionSharpMask;
     float talSelfLitOffset;
-    float _padEmisA;
-    float _padEmisB;
+    uint emissionBlendMode;
+    float emissionBlendStrength;
     uint maxBounceShadowsLights;
     float rayLength;
     uint rayCullBackFaces;

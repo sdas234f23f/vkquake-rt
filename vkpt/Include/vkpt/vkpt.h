@@ -937,6 +937,10 @@ typedef struct RgDrawFrameTexturesParams
     RgBool32        squareInputRoughness;
     // Default: 0.0
     float           minRoughness;
+    // Default: 1
+    uint32_t        emissionBlendMode;
+    // Default: 1.0
+    float           emissionBlendStrength;
 } RgDrawFrameTexturesParams;
 
 typedef enum RgDebugDrawFlagBits

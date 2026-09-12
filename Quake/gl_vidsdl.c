@@ -182,6 +182,8 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 	CVAR_DEF_T (rt_emis_maxscrcolor, "4") \
 	CVAR_DEF_T (rt_emis_fullbright_dflt, "255") \
 	CVAR_DEF_T (rt_emis_sharpmask, "1") \
+	CVAR_DEF_T (rt_emis_blend, "1") \
+	CVAR_DEF_T (rt_emis_blendstr, "1") \
 	CVAR_DEF_T (rt_tal_selflit, "6") \
     \
 	CVAR_DEF_T (rt_reflrefr_depth, "2") \
@@ -1244,6 +1246,8 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 		.emissionSharpMask = CVAR_TO_FLOAT (rt_emis_sharpmask),
 		.talSelfLitOffset = CVAR_TO_FLOAT (rt_tal_selflit),
 		.minRoughness = CVAR_TO_FLOAT (rt_roughmin),
+		.emissionBlendMode = CVAR_TO_UINT32 (rt_emis_blend),
+		.emissionBlendStrength = CVAR_TO_FLOAT (rt_emis_blendstr),
 	};
 
 	RgDrawFrameLensFlareParams lens_flare_params = {

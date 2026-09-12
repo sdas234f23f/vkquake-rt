@@ -321,6 +321,8 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
         gu->talSelfLitOffset       = std::max( drawInfo.pTexturesParams->talSelfLitOffset, 0.0f );
         gu->squareInputRoughness   = !!drawInfo.pTexturesParams->squareInputRoughness;
         gu->minRoughness           = std::clamp( drawInfo.pTexturesParams->minRoughness, 0.0f, 1.0f );
+        gu->emissionBlendMode      = drawInfo.pTexturesParams->emissionBlendMode;
+        gu->emissionBlendStrength  = std::clamp( drawInfo.pTexturesParams->emissionBlendStrength, 0.0f, 1.0f );
     }
     else
     {
@@ -331,6 +333,8 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
         gu->talSelfLitOffset       = 0.0f;
         gu->squareInputRoughness   = 1;
         gu->minRoughness           = 0.0f;
+        gu->emissionBlendMode      = 0u;
+        gu->emissionBlendStrength  = 1.0f;
     }
 
     if( drawInfo.pIlluminationParams != nullptr )

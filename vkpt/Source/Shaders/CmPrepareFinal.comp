@@ -77,13 +77,49 @@ vec3 reinhard(const vec3 c)
 }
 
 
+vec3 blendEmissionLayer( const vec3 hdr, const vec3 layer, const uint mode )
+{
+    if( mode == 0u )
+    {
+        return hdr;
+    }
+    if( mode == 2u )
+    {
+        return hdr + layer;
+    }
+
+    const vec3  base     = clamp( hdr, vec3( 0.0 ), vec3( 1.0 ) );
+    const vec3  emiss    = clamp( layer, vec3( 0.0 ), vec3( 1.0 ) );
+    const float coverage = clamp( max( max( layer.x, layer.y ), layer.z ), 0.0, 1.0 );
+
+    vec3 blended = emiss;
+    if( mode == 3u )
+    {
+        blended = mix( 2.0 * base * emiss, 1.0 - 2.0 * ( 1.0 - base ) * ( 1.0 - emiss ), step( vec3( 0.5 ), base ) );
+    }
+    else if( mode == 4u )
+    {
+        blended = mix( 2.0 * base * emiss, 1.0 - 2.0 * ( 1.0 - base ) * ( 1.0 - emiss ), step( vec3( 0.5 ), emiss ) );
+    }
+    else if( mode == 5u )
+    {
+        blended = clamp( base / max( vec3( 1.0 ) - emiss, vec3( 1e-3 ) ), vec3( 0.0 ), vec3( 1.0 ) );
+    }
+
+    return hdr + ( blended - base ) * coverage + max( layer - 1.0, 0.0 );
+}
+
+
 // Q2RTX-style tone curve application (tone_mapping_apply.comp, SDR path).
 // Applies the noise-aware tone curve + auto-exposure + knee to the HDR image.
 vec3 finalizeColor( const vec3 hdr, const vec3 screenEmis )
 {
     if( globalUniform.lightmapEnable == 0 )
     {
-        vec3 input_color = hdr + screenEmis * globalUniform.emissionMaxScreenColor;
+        const float strength = clamp( globalUniform.emissionBlendStrength, 0.0, 1.0 );
+        const vec3  layer    = screenEmis * globalUniform.emissionMaxScreenColor * strength;
+
+        vec3 input_color = blendEmissionLayer( hdr, layer, globalUniform.emissionBlendMode );
 
         const float lum = max( getLuminance( input_color ), exp2( min_log_luminance ) );
 
