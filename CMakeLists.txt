@@ -531,6 +531,7 @@ if(VKQUAKE_PLATFORM_WINDOWS)
     )
     if(MSVC)
         target_link_options(vkquake PRIVATE /SUBSYSTEM:WINDOWS)
+        target_link_options(vkquake PRIVATE $<$<CONFIG:Debug>:/MAP>)
     endif()
 endif()
 
