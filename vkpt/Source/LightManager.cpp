@@ -380,6 +380,18 @@ void vkpt::LightManager::IncrementCount(const ShLightEncoded& encodedLight)
 
 void vkpt::LightManager::AddLight(uint32_t frameIndex, uint64_t uniqueId, const vkpt::ShLightEncoded &encodedLight)
 {
+    // A light is identified by its uniqueId and must be registered at most
+    // once per frame. Duplicate uploads happen when the same static emissive
+    // entity is drawn more than once in a frame (its efrags can land in
+    // several visible leaves during a level change / respawn). Registering it
+    // twice would inflate the light counts, corrupt the temporal mapping in
+    // FillMatchPrev, and leave uniqueIDToArrayIndex non-bijective. Skip the
+    // duplicate before any of that state is touched.
+    if (uniqueIDToArrayIndex[frameIndex].find(uniqueId) != uniqueIDToArrayIndex[frameIndex].end())
+    {
+        return;
+    }
+
     if (GetLightArrayEnd(regLightCount, dirLightCount) >= LIGHT_ARRAY_MAX_SIZE)
     {
         fprintf(stderr, "vkpt: light array overflow (regLightCount=%u dirLightCount=%u LIGHT_ARRAY_MAX_SIZE=%u) - dropping light(s)\n",
@@ -394,11 +406,7 @@ void vkpt::LightManager::AddLight(uint32_t frameIndex, uint64_t uniqueId, const 
     auto *dst = (ShLightEncoded *)lightsBuffer->GetMapped(frameIndex);
     memcpy(&dst[index.GetArrayIndex()], &encodedLight, sizeof(vkpt::ShLightEncoded));
 
-
     FillMatchPrev(frameIndex, index, uniqueId);
-    // must be unique
-    assert(uniqueIDToArrayIndex[frameIndex].find(uniqueId) == uniqueIDToArrayIndex[frameIndex].end());
-    // save index for the next frame
     uniqueIDToArrayIndex[frameIndex][uniqueId] = index;
 }
 

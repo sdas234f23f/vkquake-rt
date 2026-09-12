@@ -316,6 +316,11 @@ bool Scene::DoesUniqueIDExist(uint64_t uniqueID) const
         dynamicUniqueIDToSimpleIndex.find(uniqueID) != dynamicUniqueIDToSimpleIndex.end();
 }
 
+bool Scene::DoesDynamicUniqueIDExist(uint64_t uniqueID) const
+{
+    return dynamicUniqueIDToSimpleIndex.find(uniqueID) != dynamicUniqueIDToSimpleIndex.end();
+}
+
 bool Scene::TryGetStaticSimpleIndex(uint64_t uniqueID, uint32_t *result) const
 {
     auto f = staticUniqueIDToSimpleIndex.find(uniqueID);

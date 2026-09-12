@@ -72,6 +72,7 @@ public:
     void GetAABB(float outMin[3], float outMax[3]) const;
 
     bool DoesUniqueIDExist(uint64_t uniqueID) const;
+    bool DoesDynamicUniqueIDExist(uint64_t uniqueID) const;
 
 private:
     bool TryGetStaticSimpleIndex(uint64_t uniqueID, uint32_t *result) const;

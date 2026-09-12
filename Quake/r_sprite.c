@@ -210,7 +210,7 @@ void R_DrawSpriteModel (cb_context_t *cbx, entity_t *e, int entuniqueid)
 		// modes (materials_only / rt_truelight 2) drop it.
 
 		RgSphericalLightUploadInfo light_info = {
-			.uniqueID = RT_GetAliasModelUniqueId (entuniqueid),
+			.uniqueID = RT_GetSpriteModelUniqueId (entuniqueid),
 			.color = {color[0], color[1], color[2]},
 			.position = {e->origin[0], e->origin[1], e->origin[2]},
 			.radius = METRIC_TO_QUAKEUNIT (CVAR_TO_FLOAT (rt_dlight_radius)),

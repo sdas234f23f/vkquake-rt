@@ -1267,6 +1267,15 @@ void VulkanDevice::UploadGeometry(const RgGeometryUploadInfo *uploadInfo)
 
     if (scene->DoesUniqueIDExist(uploadInfo->uniqueID))
     {
+        // A dynamic entity can legitimately be uploaded more than once per frame
+        // (e.g. during a level change / respawn its efrags can land in several
+        // visible leaves). Skipping the duplicate mirrors the light-manager dedup
+        // and keeps dynamicUniqueIDToSimpleIndex a bijection for this frame.
+        if (uploadInfo->geomType == RG_GEOMETRY_TYPE_DYNAMIC && scene->DoesDynamicUniqueIDExist(uploadInfo->uniqueID))
+        {
+            return;
+        }
+
         throw RgException(RG_WRONG_ARGUMENT, "Geometry with ID="s + std::to_string(uploadInfo->uniqueID) + " already exists");
     }
 
