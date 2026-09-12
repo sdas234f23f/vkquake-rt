@@ -36,10 +36,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <direct.h>
 #include <time.h>
 
-// ---- crash log: on an unhandled exception, write exception info + a raw
-// stack trace to crash.log next to the executable, then let Windows show
-// its own error dialog. Helps debugging hard crashes without a debugger.
-
 static char cwd[1024];
 
 static LONG WINAPI Sys_CrashLogFilter (EXCEPTION_POINTERS *ep)
@@ -294,7 +290,7 @@ static void Sys_SetTimerResolution (void)
 
 void Sys_Init (void)
 {
-	SetUnhandledExceptionFilter (Sys_CrashLogFilter); // write crash.log on hard crashes
+	SetUnhandledExceptionFilter (Sys_CrashLogFilter);
 
 	Sys_SetTimerResolution ();
 	Sys_SetDPIAware ();

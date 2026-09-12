@@ -96,7 +96,6 @@ public:
     void UploadPolygonalLight(const RgPolygonalLightUploadInfo *pLightInfo);
     void UploadTexturedAreaLight(const RgTexturedAreaLightUploadInfo *pLightInfo);
 
-    // Q2RTX per-BSP-cluster light lists (uploaded by the game each frame).
     void UploadClusterLightLists(const RgClusterLightListsUploadInfo *pInfo);
 
     // Q2RTX-style fog volumes (used by the new Q2RTX core path)
@@ -228,8 +227,6 @@ private:
     double                                  previousFrameTime;
     double                                  currentFrameTime;
 
-    // In-game debug stats overlay: the latest ray count read back from the GPU
-    // and the smoothed FPS (fixed point, x10), shown when the overlay is enabled.
     uint32_t                                statsRays = 0;
     uint32_t                                statsFpsX10 = 0;
     float                                   statsSmoothedFps = 0.0f;

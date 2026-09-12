@@ -57,23 +57,15 @@ public:
 
     void AddSphericalLight(uint32_t frameIndex, const RgSphericalLightUploadInfo &info);
     void AddPolygonalLight(uint32_t frameIndex, const RgPolygonalLightUploadInfo &info);
-    // textureIndex is the resolved RME (emission) texture index, packed into
-    // data_0.w as float bits. The caller (VulkanDevice) resolves it from the
-    // light's material; EMPTY_TEXTURE_INDEX means "no mask" (full brightness).
     void AddTexturedAreaLight(uint32_t frameIndex, const RgTexturedAreaLightUploadInfo &info, uint32_t textureIndex);
     void AddDirectionalLight(uint32_t frameIndex, const RgDirectionalLightUploadInfo &info);
     void AddSpotlight(uint32_t frameIndex, const RgSpotLightUploadInfo &info);
 
     void CopyFromStaging(VkCommandBuffer cmd, uint32_t frameIndex);
 
-    // Q2RTX-style per-BSP-cluster light lists + adaptive shadow statistics.
-    // The lists (prefix-sum offsets + concatenated light UNIQUE IDs) are
-    // uploaded from the CPU each frame; CopyFromStaging resolves the unique
-    // IDs to light-array indices and copies the lists to the device.
     void SetClusterLightLists(uint32_t frameIndex, uint32_t numClusters,
                               const uint32_t *pOffsets, const uint64_t *pLightUniqueIds,
                               uint32_t totalLightCount);
-    // lightStats is a ring buffer (reset per frame).
     void ResetLightStats(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t frameId);
     void BarrierQ2ClusterLists(VkCommandBuffer cmd, uint32_t frameIndex);
 
@@ -96,12 +88,6 @@ private:
     std::shared_ptr<AutoBuffer> lightsBuffer;
     Buffer lightsBuffer_Prev;
 
-    // Q2RTX-style per-BSP-cluster light lists + adaptive shadow statistics
-    // (see Q2_* constants). Single storage buffer each, indexed with a manual
-    // frame offset (no descriptor arrays needed):
-    //   lightListOffsets : [Q2_MAX_CLUSTERS + 1] uint (prefix sums)
-    //   lightListLights  : [Q2_MAX_CLUSTERS * MAX_PER_CELL] uint
-    //   lightStats       : [3][Q2_MAX_CLUSTERS * MAX_PER_CELL * SIDES * 2] uint
     std::shared_ptr<AutoBuffer> lightListOffsets;
     std::shared_ptr<AutoBuffer> lightListLights;
     Buffer lightStats;

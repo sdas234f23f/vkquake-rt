@@ -30,11 +30,9 @@ namespace vkpt
 {
 
 // New Q2RTX-style denoiser: full ASVGF (gradient atrous, temporal, LF atrous at
-// 1/3 res, HF/SPEC atrous + compositing) fed from the vkpt ReSTIR outputs via
 // CmQ2Adapter.comp, followed by checkerboard interleave into PreFinal.
 //
 // The ASVGF uses the Q2RTX channel format (LF luma-SH YCoCg, HF/SPEC packed
-// RGBE). The gradients are provided by the vkpt gradient estimation
 // (DISPingGradient), which is computed here by running the legacy ASVGF
 // gradient atrous pass.
 class Q2Denoiser : public IShaderDependency
@@ -56,11 +54,6 @@ public:
     void Denoise(
         VkCommandBuffer cmd, uint32_t frameIndex,
         const std::shared_ptr<const GlobalUniform> &uniform);
-    // Q2RTX-style gradient reproject. Runs BEFORE the lighting passes: matches
-    // gradient sample pixels to the previous frame and patches their G-buffer
-    // (RNG seed, normal, base color, metallic, position, view direction) so
-    // the lighting re-traces them with the previous frame's random numbers.
-    // (The Denoise pass only computes the gradient images + filters.)
     void GradientReproject(
         VkCommandBuffer cmd, uint32_t frameIndex,
         const std::shared_ptr<const GlobalUniform> &uniform);

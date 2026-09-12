@@ -291,17 +291,9 @@ vec3 getSky(vec3 direction)
     return col * globalUniform.skyColorMultiplier;
 }
 
-// Mip chain of the render cubemap (1024^2 -> 1), must match cubemapMipLevels
-// in RenderCubemap.cpp.
 #define SKY_MIP_COUNT 11.0
-// LOD for diffuse sky bounces: the sun disc (~1.4 deg) is smeared over the
-// ~5.6 deg texel of LOD 6, so it cannot produce a firefly on a single sample.
 #define SKY_DIFFUSE_BOUNCE_LOD 6.0
 
-// Sky color for lighting (bounces, reflections): sampled from the mip chain so
-// a bright sun disc / hot texels are spread over a large solid angle instead of
-// producing fireflies (Q2RTX prefiltered env behavior). LOD 0 is the sharp sky,
-// used only for direct visibility.
 vec3 getSkyFiltered(vec3 direction, float lod)
 {
     uint skyType = globalUniform.skyType;
@@ -314,8 +306,6 @@ vec3 getSkyFiltered(vec3 direction, float lod)
 
     if (skyType == SKY_TYPE_PROCEDURAL)
     {
-        // sun-free lighting env: the sun disc is sampled separately by the NEE
-        // directional light, so it never smears into rough reflections.
         return textureLod(renderCubemapEnv, direction, lod).rgb;
     }
 #endif
@@ -329,7 +319,6 @@ vec3 getSkyFiltered(vec3 direction, float lod)
     return globalUniform.skyColorDefault.xyz;
 }
 
-// getSky equivalent with an explicit LOD (includes skyColorMultiplier)
 vec3 getSkyFilteredMultiplied(vec3 direction, float lod)
 {
     return getSkyFiltered(direction, lod) * globalUniform.skyColorMultiplier;
@@ -385,9 +374,6 @@ float traceVisibility(const Surface surf, const vec3 lightPosition, uint lightIn
 
 
 
-// Boost the chroma (colorfulness) of a light contribution while keeping its
-// luminance. White light (r==g==b) is unaffected; colored light tints surfaces
-// more strongly, fixing "pale" walls lit by lava / fire.
 #define LIGHT_CHROMA_BOOST 1.3
 vec3 boostChroma(const vec3 c)
 {
@@ -395,11 +381,6 @@ vec3 boostChroma(const vec3 c)
     return max(mix(vec3(lum), c, LIGHT_CHROMA_BOOST), vec3(0.0));
 }
 
-// Stronger chroma boost for the emissive (glow) component of a bounce-hit
-// radiance. The emitted color comes from the surface albedo (lava = orange-red)
-// and is otherwise washed out by the whitish reflected direct light. Keeping
-// it separate from the reflection lets lava / fire tint nearby walls a vivid
-// orange-red instead of pale pink.
 #define EMISSION_CHROMA_BOOST 8.0
 vec3 boostEmissionChroma(const vec3 c)
 {
@@ -429,18 +410,11 @@ void shade(const Surface surf, const LightSample light, float oneOverPdf, out ve
 
 
 
-// ---------------------------------------------------------------------------
-// Ray statistics (debug stats overlay)
-// ---------------------------------------------------------------------------
-
 #define RAY_STATS_CATEGORY_PRIMARY            0
 #define RAY_STATS_CATEGORY_REFLECTION_REFRACTION 1
 #define RAY_STATS_CATEGORY_INDIRECT           2
 #define RAY_STATS_CATEGORY_SHADOW             3
 
-// Host-visible per-frame counters (desc set 11 of the ray tracing pipeline).
-// Only written when the stats overlay is enabled; read back by the host on the
-// next frame that reuses that frame index.
 layout(set = DESC_SET_RAY_STATS, binding = 0) buffer RtRayStats
 {
     uint counts[RAY_STATS_CATEGORY_COUNT];

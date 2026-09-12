@@ -1615,7 +1615,7 @@ static int COM_FindFile (const char *filename, int *handle, FILE **file, unsigne
 	//
 	for (search = com_searchpaths; search; search = search->next)
 	{
-		if (search->rt_pkz) /* look through a mounted .pkz archive (like a PAK) */
+		if (search->rt_pkz)
 		{
 			int size = RT_PKZ_FindFile (search->rt_pkz, filename, NULL);
 			if (size < 0)

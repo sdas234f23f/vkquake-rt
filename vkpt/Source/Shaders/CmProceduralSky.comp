@@ -1,12 +1,4 @@
 // Procedural atmospheric sky.
-// Fills two cubemaps:
-//   - cubemapOut (binding 0): the VISUAL sky, including the sun disc. Read by
-//     getSkyPrimary() for primary visibility only.
-//   - envCubemapOut (binding 2): the LIGHTING environment, WITHOUT the sun disc.
-//     Read by getSkyFiltered()/getSkyFilteredMultiplied() for sky lighting
-//     (bounces, reflections). The sun is sampled separately by the NEE
-//     directional light, so the bright disc never smears into the prefiltered
-//     env (Q2RTX behavior) and cannot produce fireflies at high LODs.
 // Single-scattering atmosphere (Rayleigh + Mie) evaluated analytically, no LUTs.
 // The per-face camera bases are passed from the CPU side and match the convention
 // of the rasterized sky cubemap path (Matrix::GetCubemapViewProjMat).
@@ -118,8 +110,6 @@ float cloudMask(vec3 dir, float time, float speed)
     return n;
 }
 
-// Returns the base sky color WITHOUT the sun disc and WITHOUT the sky color
-// multiplier; both are applied by the caller (once, so they never double-multiply).
 vec3 evaluateSky(vec3 rd, vec3 sunDir, vec3 sunColor, float tintStrength)
 {
     vec3 camera = vec3(0.0, 0.0, PLANET_RADIUS);
@@ -221,10 +211,8 @@ void main()
 
     vec3 base = evaluateSky(dir, sunDir, sunColor, tintStrength);
 
-    // lighting env: base sky, no sun disc (the sun is a separate NEE light)
     imageStore(envCubemapOut, ipos, vec4(base * multiplier, 1.0));
 
-    // visual sky: same base plus the sun disc, then the multiplier once
     float cosAng = cos(sunAngRad);
     float disc = smoothstep(cosAng, 1.0, dot(dir, sunDir));
     vec3 col = (base + sunColor * sunIntensity * disc) * multiplier;

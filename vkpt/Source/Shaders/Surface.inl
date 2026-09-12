@@ -37,7 +37,6 @@ struct Surface
     vec3    specularColor;
     float   emission;
     vec3    toViewerDir;
-    // BSP cluster of the surface (Q2RTX per-cluster light lists).
     uint    cluster;
 };
 

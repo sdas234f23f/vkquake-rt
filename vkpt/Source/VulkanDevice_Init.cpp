@@ -187,8 +187,6 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
         blueNoise,
         shadowMap);
 
-    // per-frame ray counters, written by the RT shaders when the stats overlay
-    // is enabled (desc set 11 of the ray tracing pipeline)
     rayStats            = std::make_shared<RayStats>(device, memAllocator);
 
     rtPipeline = std::make_shared< RayTracingPipeline >( 
@@ -243,7 +241,6 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
         framebuffers,
         shaderManager);
 
-    // Q2RTX-style core path denoiser (full ASVGF + interleave)
     q2Denoiser          = std::make_shared<Q2Denoiser>(
         device,
         framebuffers,

@@ -29,14 +29,8 @@
 namespace vkpt
 {
 
-// Number of ray categories the RT shaders atomically accumulate per frame.
-// Must match RAY_STATS_CATEGORY_COUNT in GenerateShaderCommon.py.
 constexpr uint32_t RAY_STATS_CATEGORY_COUNT = 4;
 
-// Per-frame host-visible ray counters. The RT shaders atomicAdd into a
-// storage buffer (desc set 11 of the ray tracing pipeline) when the stats
-// overlay is enabled; the host reads the value back on the next frame that
-// reuses that frame index (safe because BeginFrame waits on the frame fence).
 class RayStats
 {
 public:
@@ -49,7 +43,6 @@ public:
     RayStats &operator=(RayStats &&other) noexcept = delete;
 
     void Reset(uint32_t frameIndex);
-    // Total number of rays accumulated for the given frame index.
     uint32_t GetRays(uint32_t frameIndex) const;
 
     VkDescriptorSetLayout GetDescSetLayout() const;

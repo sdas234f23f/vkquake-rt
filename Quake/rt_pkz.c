@@ -1,4 +1,3 @@
-// .pkz (zip) archive support for the Q2RTX material system (phase 4.5).
 
 #include "quakedef.h"
 #include "rt_pkz.h"
@@ -12,18 +11,17 @@
 
 typedef struct {
     char path[MAX_OSPATH];
-    byte *data;          // whole archive read into memory
+    byte *data;
     size_t dataSize;
     mz_zip_archive zip;
     qboolean valid;
 } rt_pkz_archive_t;
 
-// memory streams returned by RT_PKZ_OpenFile
 typedef struct {
     qboolean inUse;
-    int archive;         // index into rt_pkz_archives
-    int fileIndex;       // mz_zip file index
-    byte *buf;           // lazily decompressed
+    int archive;
+    int fileIndex;
+    byte *buf;
     size_t size;
     size_t pos;
 } rt_pkz_stream_t;
@@ -36,8 +34,6 @@ static int rt_pkz_temp_count = 0;
 static searchpath_t *rt_pkz_searchpaths[RT_PKZ_MAX_ARCHIVES];
 static int rt_pkz_searchpath_count = 0;
 
-// miniz 3.x (single header, MINIZ_NO_STDIO) reads through user callbacks.
-// We give it the whole archive already loaded into memory.
 static void *pkz_alloc(void *opaque, size_t items, size_t size)
 {
     (void)opaque;
@@ -77,7 +73,6 @@ void RT_PKZ_Init(void)
     memset(rt_pkz_archives, 0, sizeof(rt_pkz_archives));
     rt_pkz_count = 0;
 
-    // find *.pkz files directly in the game directory
     char pattern[MAX_OSPATH];
     q_snprintf(pattern, sizeof(pattern), "%s/*.pkz", com_gamedir);
 
@@ -151,7 +146,6 @@ void RT_PKZ_Init(void)
 
     FindClose(h);
 
-    // expose every mounted archive through the engine search path (like PAK)
     for (int i = 0; i < rt_pkz_count && rt_pkz_searchpath_count < RT_PKZ_MAX_ARCHIVES; i++)
     {
         rt_pkz_archive_t *a = &rt_pkz_archives[i];
@@ -181,7 +175,6 @@ void RT_PKZ_Init(void)
 
 void RT_PKZ_Shutdown(void)
 {
-    // remove pkz searchpaths from the engine search path
     for (int i = 0; i < rt_pkz_searchpath_count; i++)
     {
         searchpath_t *target = rt_pkz_searchpaths[i];
@@ -222,7 +215,6 @@ void RT_PKZ_Shutdown(void)
         }
     }
 
-    // delete extracted temp files
     for (int i = 0; i < rt_pkz_temp_count; i++)
     {
         remove(rt_pkz_temp_files[i]);
@@ -332,10 +324,6 @@ int RT_PKZ_ListFiles(const char *dir, const char *ext,
     return count;
 }
 
-// ---------------------------------------------------------------------------
-// native searchpath integration (read like .PAK)
-// ---------------------------------------------------------------------------
-
 static int rt_pkz_find_index(rt_pkz_archive_t *a, const char *name, int *outSize)
 {
     if (!a || !a->valid || !name || !name[0])
@@ -442,7 +430,6 @@ int RT_PKZ_Read(int handle, void *dest, int count)
         {
             return 0;
         }
-        // trust the actual extracted size, not the central-directory stat
         s->size = len;
     }
 

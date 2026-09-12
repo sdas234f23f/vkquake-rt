@@ -98,38 +98,6 @@ cvar_t                          r_usesops = {"r_usesops", "1", CVAR_ARCHIVE};   
 task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
 
 // RT
-// Master emissive-luma knob rt_emis_light_intensity is a unit multiplier with a
-// default of 1.0, calibrated to reproduce the reference lamp look (see
-// RT_EMIS_LIGHT_INTENSITY_REFERENCE in glquake.h). The emissive-surface display
-// boost below follows the same relative scale (rt_emis_mapboost *
-// rt_emis_light_intensity) so the surface glow and the light-source radiance
-// stay in lockstep.
-//
-// rt_emis_maxscrcolor scales the on-screen emissive add (albedo * luma coverage
-// * value) in CmPrepareFinal. It must stay small: above ~4 that product exceeds
-// 1.0 wherever a mask is non-zero, so every emissive clips to a flat saturated
-// colour and luma masks turn into solid colour plates instead of stencils. The
-// "320" default from v3.6.0 (commit 3489e87, "emissive chroma boost") was the
-// cause of the EXIT sign / lamp / button "solid plate + pale rim" regression;
-// upstream shipped "125", which clips as well. 4 was verified by eye on e1m1.
-//
-// Light-source modes:
-//   rt_truelight      0 = legacy: fake lights everywhere (incl. legacy map
-//                         entity "light" points)
-//                     1 = physical default: luma/emissive materials + real
-//                         dynamic events (muzzle flash / explosions / rockets)
-//                     2 = strict: only textured-area lights (luma + light_color
-//                         materials) and the sky; no floating fake points and
-//                         no classic dlights (the flashlight stays on)
-//   rt_materials_only 1 = materials.yaml sources only; the sky/sun and the
-//                         flashlight are additionally dropped (for previewing
-//                         "what the map's own materials light up")
-//   rt_plight_intensity / rt_plight_radius / rt_wlight_intensity /
-//   rt_wlight_radius are kept for config.cfg compatibility only: the world
-//   poly/sphere light paths they scaled were removed and the renderer no
-//   longer reads them.
-// The authoritative source-by-mode table lives next to RT_AllowFakeLights()
-// in gl_rlight.c.
 #define CVAR_DEF_LIST( CVAR_DEF_T ) \
 	\
 	CVAR_DEF_T (rt_classic_render, "0") \
@@ -279,10 +247,6 @@ task_handle_t prev_end_rendering_task = INVALID_TASK_HANDLE;
     CVAR_DEF_LIST (CVAR_DEF_T)
 #undef CVAR_DEF_T
 
-// rt_light_report texture filter (rt_light_report [lines] [substring]): names
-// which texture's emissive surfaces and clustered lights the report should
-// single out. Deliberately NOT archived - it is a debugging aid and a stale
-// value left in config.cfg would silently narrow every later report.
 cvar_t rt_light_report_filter = {"rt_light_report_filter", "", 0};
 
 
@@ -662,8 +626,6 @@ static void RT_SwitchRenderer (void)
 	int newval = !CVAR_TO_BOOL (rt_classic_render);
 	Cvar_SetValueQuick (&rt_classic_render, newval);
 
-	// world geometry (incl. portals) is only uploaded once per map,
-	// so reload it to pick up the new renderer mode
 	R_NewMap ();
 }
 
@@ -770,7 +732,6 @@ static void GL_InitInstance (void)
 	RgResult r = rgCreateInstance (&info, &vulkan_globals.instance);
 	RG_CHECK (r);
 
-	// Q2RTX-style .mat materials (phase 4.5)
 	RT_MAT_Init ();
 
 	Cmd_AddCommand ("rt_pfnreloadshaders", RT_ReloadShaders);
@@ -1190,7 +1151,6 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	float skyMult = 1.0f / CLAMP (0.02f, RT_Luminance (skyflatcolor), 1.0f);
 	skyMult *= CVAR_TO_FLOAT (rt_sky);
 
-	// 4.6: sky brightness (all sky types, incl. procedural) + master brightness
 	const float skyBrightness = CVAR_TO_FLOAT (rt_sky_brightness) * CVAR_TO_FLOAT (rt_brightness);
 
 	const qboolean materials_only = CVAR_TO_BOOL (rt_materials_only);
@@ -1201,20 +1161,15 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 
 	if (usePhysicalSky)
 	{
-		// the procedural sky is tinted by the sun preset color (rt_sky_light_*)
 		RT_INIT_SKY_LIGHT_COLOR (sky_base_color);
 	}
 	else
 	{
 		VectorCopy (skyflatcolor, sky_base_color);
 	}
-	// 4.6: sky display color (rt_sky_color_*) + master brightness. The sky
-	// display is decoupled from the sun light color (rt_sky_light_*), so the
-	// sky can be tinted or blackened without killing the sun light.
 	VectorScale (sky_base_color, skyBrightness, sky_base_color);
 	RT_APPLY_SKY_COLOR (sky_base_color);
 
-	// materials-only mode: fully black sky (no sky display, no sun, no ambient)
 	if (materials_only)
 	{
 		sky_base_color[0] = sky_base_color[1] = sky_base_color[2] = 0.0f;
@@ -1225,18 +1180,13 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 		         : usePhysicalSky ? RG_SKY_TYPE_PROCEDURAL
 		         : RG_SKY_TYPE_RASTERIZED_GEOMETRY,
 		.skyColorDefault = RT_VEC3 (sky_base_color),
-		// for the procedural sky this is passed as its brightness (skyParams[0]);
-		// for rasterized/color skies it scales the sky in reflections (getSky)
 		.skyColorMultiplier = materials_only ? 0.0f : (usePhysicalSky ? skyBrightness : skyMult * skyBrightness),
-		// repurposed field: carries the procedural sky tint strength (rt_sky_tint)
 		.skyColorSaturation = CVAR_TO_FLOAT (rt_sky_tint),
 		.skyViewerPosition = RT_VEC3 (r_origin),
 	};
 
 	if (usePhysicalSky)
 	{
-		// procedural cloud params are packed into the otherwise-unused skyCubemapRotationTransform field:
-		// [0..2] cloud color rgb, [3] coverage, [4] density, [5] drift speed, [6] enabled
 		float *c = &sky_params.skyCubemapRotationTransform.matrix[0][0];
 		c[0] = CVAR_TO_FLOAT (rt_sky_cloud_color_r) / 255.0f;
 		c[1] = CVAR_TO_FLOAT (rt_sky_cloud_color_g) / 255.0f;
@@ -1262,7 +1212,6 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 		VectorCopy (skyflatcolor, volume_light_color);
 	}
 
-	// 4.6: master brightness + RGB tint for the volumetric light and ambient
 	VectorScale (volume_light_color, CVAR_TO_FLOAT (rt_volume_lintensity) * CVAR_TO_FLOAT (rt_brightness), volume_light_color);
 	RT_APPLY_LIGHT_TINT (volume_light_color);
 
@@ -1270,7 +1219,6 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	VectorScale (skyflatcolor, CVAR_TO_FLOAT (rt_volume_ambient) * CVAR_TO_FLOAT (rt_brightness), volume_ambient_color);
 	RT_APPLY_LIGHT_TINT (volume_ambient_color);
 
-	// materials-only mode: no volumetric fog/light contribution
 	if (materials_only)
 	{
 		volume_light_color[0] = volume_light_color[1] = volume_light_color[2] = 0.0f;
@@ -1393,10 +1341,7 @@ static void GL_EndRenderingTask (end_rendering_parms_t *parms)
 	RgDrawFrameDebugParams debug_params = {
 		.drawFlags = CVAR_TO_UINT32 (rt_debugflags),
 	};
-	// 4.7: the Q2RTX-style core is the only renderer (the legacy pre-Q2RTX
-	// render path was removed), so the core flag is always set.
 	debug_params.drawFlags |= RG_DEBUG_DRAW_Q2RTX_CORE_BIT;
-	// in-game ray stats / FPS overlay is driven by its own cvar (rt_stats)
 	if (CVAR_TO_BOOL (rt_stats))
 	{
 		debug_params.drawFlags |= RG_DEBUG_DRAW_STATS_BIT;
@@ -1599,26 +1544,15 @@ static void VID_InitModelist (void)
 	}
 }
 
-/*
-===================
-RT_SunPreset_f
-
-Applies the rt_sun_preset colors directly to rt_sky_light_r/g/b so
-that the sun and its volumetric shafts share the same color without
-affecting the other light sources (which use rt_globallight_*).
-Preset 0 = manual mode (rt_sky_light_* are used as-is).
-===================
-*/
 static void RT_SunPreset_f (cvar_t *var)
 {
 	const int preset = CLAMP (0, CVAR_TO_INT32 (rt_sun_preset), 7);
 
 	if (preset == 0)
 	{
-		return; // manual, keep user values
+		return;
 	}
 
-	// presets: [1] warm, [2] daylight, [3] neutral-white, [4] golden sunset, [5] cold/overcast, [6] purple (Q1 style), [7] cold blue
 	static const int presets[8][3] = {
 		{0, 0, 0},
 		{255, 214, 163},
@@ -1635,23 +1569,6 @@ static void RT_SunPreset_f (cvar_t *var)
 	Cvar_SetValueQuick (&rt_sky_light_b, presets[preset][2]);
 }
 
-/*
-===================
-Q2RTX-style fog volumes (new core path)
-
-A fog volume is an axis-aligned box filled with uniform or gradient fog,
-defined by two points on any diagonal. Up to RG_MAX_FOG_VOLUMES volumes.
-
-Usage:
-  fog -v <index> -a <x,y,z|here> -b <x,y,z|here> -c <r,g,b> -d <distance> -f <face>
-  fog -v <index> -p    print the volume
-  fog -v <index> -r    reset the volume
-  fog -R               reset all volumes
-
-  -d: distance at which objects in the fog are 50% visible
-  -f: softface where the density is zero: none, xa, xb, ya, yb, za, zb
-===================
-*/
 static RgFogVolume rt_fog_volumes[RG_MAX_FOG_VOLUMES];
 
 static void RT_Fog_ParsePoint (const char *s, float *out)
@@ -1676,7 +1593,7 @@ static uint32_t RT_Fog_ParseSoftFace (const char *s)
 	if (!strcmp (s, "yb")) return 4;
 	if (!strcmp (s, "za")) return 5;
 	if (!strcmp (s, "zb")) return 6;
-	return 0; // none or unknown
+	return 0;
 }
 
 static const char *RT_Fog_SoftFaceName (uint32_t softface)
@@ -1777,7 +1694,6 @@ static void RT_Fog_Cmd (void)
 		}
 	}
 
-	// push the volumes to the renderer (inactive ones are skipped there)
 	rgSetFogVolumes (vulkan_globals.instance, RG_MAX_FOG_VOLUMES, rt_fog_volumes);
 	return;
 
@@ -2072,7 +1988,6 @@ void VID_Toggle (void)
 
 static int GetUpscalerDefaultQuality (int type)
 {
-	// FSR 3.1 presets: 1=Native AA, 2=Quality; FSR 2.0 / DLSS: 1=Quality
 	return (type == UPSCALER_FSR31) ? 2 : 1;
 }
 
@@ -2373,7 +2288,6 @@ static void VID_Menu_ChooseNextAA (int vidopt, int dir)
 
 	if (vidopt == VID_OPT_UPSCALER)
 	{
-		// Cycle: Off -> FSR2 -> FSR31 -> DLSS -> Off (only available ones)
 		do {
 			menu_settings.upscaler_type += dir < 0 ? -1 : 1;
 			if (menu_settings.upscaler_type < 0) menu_settings.upscaler_type = UPSCALER_DLSS;
@@ -2524,7 +2438,7 @@ static void VID_MenuKey (int key)
 			Cvar_SetValueQuick (&r_particles, menu_settings.r_particles);
 			break;
 		case VID_OPT_VOLUMETRICS:
-			int newval = (CVAR_TO_UINT32 (rt_volume_type) + 2) % 3; // left arrow: previous
+			int newval = (CVAR_TO_UINT32 (rt_volume_type) + 2) % 3;
 			Cvar_SetValueQuick (&rt_volume_type, newval);
 			break;
 		case VID_OPT_MATERIALS_ONLY:

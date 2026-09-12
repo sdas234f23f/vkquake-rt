@@ -205,10 +205,6 @@ void R_DrawSpriteModel (cb_context_t *cbx, entity_t *e, int entuniqueid)
 		VectorScale (color, CVAR_TO_FLOAT (rt_dlight_intensity), color);
 		RT_FIXUP_LIGHT_INTENSITY (color, true);
 
-		// The sprite's hand-authored light_color sphere is a "fake" in-air
-		// point (projectile glows, explosion flashes); strict light-source
-		// modes (materials_only / rt_truelight 2) drop it.
-
 		RgSphericalLightUploadInfo light_info = {
 			.uniqueID = RT_GetSpriteModelUniqueId (entuniqueid),
 			.color = {color[0], color[1], color[2]},
@@ -219,8 +215,6 @@ void R_DrawSpriteModel (cb_context_t *cbx, entity_t *e, int entuniqueid)
 		RgResult r = rgUploadSphericalLight (vulkan_globals.instance, &light_info);
 		RG_CHECK (r);
 
-		// Register for the per-cluster light lists so the sprite's sphere
-		// light is actually sampled by surfaces around the entity.
 		RT_ClusterLightAdd (light_info.uniqueID, e->origin);
 	}
 

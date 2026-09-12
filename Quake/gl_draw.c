@@ -557,11 +557,6 @@ void Draw_Character (cb_context_t *cbx, int x, int y, int num)
 	RG_CHECK (r);
 }
 
-/*
-================
-Draw_StringScaled
-================
-*/
 void Draw_StringScaled (cb_context_t *cbx, int x, int y, const char *str, float scale, const RgFloat4D *color)
 {
 	int         num_verts = 0;

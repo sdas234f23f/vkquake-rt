@@ -780,40 +780,13 @@ void RT_ParseElights ()
 	}
 }
 
-// ============================================================================
-// Strict light-source modes
-// ----------------------------------------------------------------------------
-// The two strict-mode cvars (rt_materials_only / rt_truelight) tell the light
-// uploaders which categories of light may exist in a frame. Everything funnels
-// through RT_AllowFakeLights() below so the condition lives in one place:
-//
-//                         rt_truelight  0   1   2   |  rt_materials_only 1
-//   textured-area lights (luma / light_color)      on   on   on   |  on
-//   sky / sun                                      on   on   on   |  off
-//   flashlight                                     on   on   on   |  off
-//   classic dlights (muzzle flash / explosions)    on   on   off  |  off
-//   world light_color spheres (removed)            -    -    -    |  -
-//   model/sprite light_color spheres               on   on   off  |  off
-//   legacy entity "light" points                   on   off  off  |  off
-//
-// rt_truelight 0 is the legacy "everything glows" look, 1 is the physical
-// default (luma/emissive materials + real dynamic events like flashes), and 2
-// restricts to physically-plausible light sources only (no floating fake
-// points); rt_materials_only additionally drops the sky and the flashlight.
-// ============================================================================
 qboolean RT_AllowFakeLights (void)
 {
-	// Fake lights = classic point-light approximations that "hang in the air"
-	// (dlights, model/sprite light_color spheres). They are suppressed in
-	// materials-only mode and at rt_truelight 2.
 	return !CVAR_TO_BOOL (rt_materials_only) && CVAR_TO_FLOAT (rt_truelight) < 2;
 }
 
 void RT_UploadAllElights ()
 {
-	// Legacy entity lights (map "light" entities that hang in the air) are not
-	// physically-plausible sources: they exist only in legacy rt_truelight 0
-	// mode. Both strict modes (rt_truelight > 0, materials_only) skip them.
 	if (CVAR_TO_FLOAT (rt_truelight) > 0 || CVAR_TO_BOOL (rt_materials_only))
 	{
 		return;
@@ -897,29 +870,11 @@ void RT_UploadAllElights ()
 	}
 }
 
-// ============================================================================
-// Q2RTX per-BSP-cluster light lists
-//
-// The world model's BSP leaves are used as clusters (vkQuake's PVS is
-// leaf-indexed, exactly like the Q2RTX cluster visibility). Every frame the
-// light uploads register (uniqueID, origin) here; RT_ClusterLightListsUpload
-// then builds the per-cluster lists from the PVS and uploads them to the
-// renderer, which resolves the unique IDs to its light-array indices.
-// ============================================================================
-
 #define RT_CLUSTER_MAX_LIGHTS    1024
-#define RT_CLUSTER_MAX_PER_LIST  64    // must match Q2_LIGHT_LIST_MAX_PER_CELL
-#define RT_CLUSTER_MAX_CLUSTERS  8192  // must match Q2_MAX_CLUSTERS
+#define RT_CLUSTER_MAX_PER_LIST  64
+#define RT_CLUSTER_MAX_CLUSTERS  8192
 
-// A per-cluster light slot is stable across frames: it is assigned to a light
-// unique ID the first time it is seen and kept while the light keeps appearing.
-// The renderer's adaptive shadow statistics are keyed by (cluster, slot), so a
-// stable slot keeps each light's hit/miss counters attributed to itself. Slots
-// that stay unused for this many frames are recycled for new lights.
 #define RT_CLUSTER_SLOT_RECYCLE_FRAMES 60
-// Hole marker written into the slot-indexed per-cluster lists: it never matches
-// a real light unique ID, resolves to an invalid light-array index on the
-// renderer side, and the shader skips it (mass contribution zero).
 #define RT_CLUSTER_INVALID_LIGHT       (~0ull)
 
 typedef struct rt_cluster_light_s
@@ -933,8 +888,6 @@ static int rt_cluster_light_count;
 static qboolean rt_cluster_dropped_warned;
 static qboolean rt_cluster_perlist_warned;
 
-// Per-cluster slot state. Shared between the upload (RT_ClusterLightListsUpload)
-// and the rt_light_report diagnostics. See the upload for the stability rules.
 static uint64_t *rt_cluster_slot_uids = NULL;
 static uint32_t *rt_cluster_slot_stamp = NULL;
 static float    *rt_cluster_slot_dist2 = NULL;
@@ -947,15 +900,13 @@ static uint64_t *rt_cluster_list = NULL;
 static int       rt_cluster_list_alloc = 0;
 static vec3_t    rt_cluster_vieworg;
 
-// Diagnostics for rt_light_report. Purely informational: none of this changes
-// which lights end up in the per-cluster lists.
 typedef struct rt_light_diag_s
 {
 	uint64_t uniqueID;
 	vec3_t   origin;
-	qboolean resolved;    // an open leaf was found for the light origin
-	int      granted;     // clusters that handed the light a slot
-	int      denied;      // clusters that were already full
+	qboolean resolved;
+	int      granted;
+	int      denied;
 } rt_light_diag_t;
 
 static rt_light_diag_t rt_light_diag[RT_CLUSTER_MAX_LIGHTS];
@@ -988,7 +939,6 @@ void RT_ClusterLightAdd (uint64_t uniqueID, const vec3_t origin)
 		return;
 	}
 
-	// deduplicate by unique ID (a light can be uploaded from several paths)
 	for (int i = 0; i < rt_cluster_light_count; i++)
 	{
 		if (rt_cluster_lights[i].uniqueID == uniqueID)
@@ -1008,17 +958,6 @@ void RT_ClusterLightAdd (uint64_t uniqueID, const vec3_t origin)
 	rt_cluster_light_count++;
 }
 
-/*
-A light origin that lands in the solid leaf has no PVS of its own, and
-Mod_LeafPVS() answers "visible from every cluster" for it (Mod_NoVisPVS).
-Registering such a light would insert it into every cluster of the map and
-exhaust the RT_CLUSTER_MAX_PER_LIST budget everywhere, permanently starving
-every light that happens to be registered later. Emissive surface centers and
-light-fixture centroids routinely land exactly on, or just inside, world
-geometry, so probe a small neighbourhood for an open leaf before giving up.
-Returns NULL when the light is genuinely buried in solid and illuminates
-nothing.
-*/
 static mleaf_t *RT_ResolveLightLeaf (const vec3_t origin, qmodel_t *wm)
 {
 	static const vec3_t probeDirs[6] = {
@@ -1047,23 +986,6 @@ static mleaf_t *RT_ResolveLightLeaf (const vec3_t origin, qmodel_t *wm)
 	return NULL;
 }
 
-/*
-================
-RT_ResolvePointCluster
-
-Leaf index to use for the per-cluster light lists of a point, or 0 (the solid
-leaf, whose light list is always empty) when no open leaf is near it.
-
-Mod_PointInLeaf tests "d > 0 -> front, else back", so a point lying EXACTLY on
-a BSP plane resolves to the back child. Items rest with their origin on the
-floor plane after SV_DropToFloor (their bbox mins.z is 0), so a naive probe
-answers "solid" for every pickup in the map and the model ends up in leaf 0
-with no lights at all - not the muzzle flash, not the level's static lights.
-Brush-entity vertices are baked at spawn for the same reason: a retracted
-bridge spawns inside a wall. Fall back to the neighbourhood probe, which also
-covers geometry that is genuinely embedded in solid.
-================
-*/
 int RT_ResolvePointCluster (const vec3_t p)
 {
 	mleaf_t *leaf = RT_ResolveLightLeaf (p, cl.worldmodel);
@@ -1101,7 +1023,6 @@ static qboolean RT_ClusterAssignSlot (int c, uint64_t uid, uint64_t *slotUids,
 	const int cfill = slotFill[c];
 	const float d2 = RT_ClusterDist2ToBounds (origin, minmaxs);
 
-	// Already assigned slot for this unique ID?
 	for (int s = 0; s < cfill; s++)
 	{
 		if (cuids[s] == uid)
@@ -1112,7 +1033,6 @@ static qboolean RT_ClusterAssignSlot (int c, uint64_t uid, uint64_t *slotUids,
 		}
 	}
 
-	// Recycle a slot that has been unused for a while.
 	for (int s = 0; s < cfill; s++)
 	{
 		if (frameStamp - cstamp[s] > RT_CLUSTER_SLOT_RECYCLE_FRAMES)
@@ -1124,7 +1044,6 @@ static qboolean RT_ClusterAssignSlot (int c, uint64_t uid, uint64_t *slotUids,
 		}
 	}
 
-	// Otherwise append a fresh slot.
 	if (slotFill[c] < RT_CLUSTER_MAX_PER_LIST)
 	{
 		const int s = slotFill[c]++;
@@ -1177,17 +1096,6 @@ void RT_ClusterLightListsUpload (void)
 	if (numClusters > RT_CLUSTER_MAX_CLUSTERS)
 		return;
 
-	// Per-cluster light slots are STABLE across frames: a slot (0..63) is
-	// assigned to each light unique ID the first time it is seen in a cluster
-	// and kept while the light keeps appearing. The renderer's adaptive shadow
-	// statistics are keyed by (cluster, slot), and the per-cluster lists are
-	// written slot-indexed (holes as RT_CLUSTER_INVALID_LIGHT), so a light's
-	// hit/miss counters are addressed by the SAME slot every frame, regardless
-	// of registration order or of other lights appearing/leaving. Without this,
-	// a light whose slot shifted read/wrote the counters of a neighbouring
-	// light, which made the CDF mass oscillate and generated emissive triangle
-	// lights toggle on/off ("timer" flicker of tlight07/tlight11 on e1m1).
-	// The slot arrays live at file scope so rt_light_report can inspect them.
 	const int slotCount = numClusters * RT_CLUSTER_MAX_PER_LIST;
 	if (numClusters != rt_cluster_last_clusters)
 	{
@@ -1199,9 +1107,6 @@ void RT_ClusterLightListsUpload (void)
 			rt_cluster_slot_fill = (uint8_t *)Mem_Realloc (rt_cluster_slot_fill, sizeof (uint8_t) * numClusters);
 			rt_cluster_slot_alloc = slotCount;
 		}
-		// Reset the per-cluster slot state for the new map. slotUids/slotStamp
-		// are gated by slotFill, so only slotFill and slotStamp need clearing
-		// (slotStamp is read for recycling, never for stale slots).
 		memset (rt_cluster_slot_fill, 0, sizeof (uint8_t) * numClusters);
 		memset (rt_cluster_slot_stamp, 0, sizeof (uint32_t) * slotCount);
 		memset (rt_cluster_slot_dist2, 0, sizeof (float) * slotCount);
@@ -1217,16 +1122,10 @@ void RT_ClusterLightListsUpload (void)
 		rt_cluster_list_alloc = numClusters;
 	}
 
-	// Pass 1: find or assign the stable slot of every registered light in every
-	// cluster it illuminates (via the PVS) and stamp it as present this frame.
 	for (int li = 0; li < rt_cluster_light_count; li++)
 	{
 		rt_light_diag_t *diag = &rt_light_diag[li];
 
-		// Never register a light from the solid leaf: it has no PVS of its
-		// own, and Mod_LeafPVS() answers "visible from every cluster" for it,
-		// which would exhaust the RT_CLUSTER_MAX_PER_LIST budget everywhere
-		// and starve the lights registered later.
 		mleaf_t *leaf = RT_ResolveLightLeaf (rt_cluster_lights[li].origin, wm);
 		if (!leaf)
 		{
@@ -1237,12 +1136,6 @@ void RT_ClusterLightListsUpload (void)
 
 		const uint64_t uid = rt_cluster_lights[li].uniqueID;
 
-		// A leaf with no compressed VIS row (a map that carries no visdata at
-		// all, or a leaf the compiler gave no row) makes Mod_LeafPVS() answer
-		// "visible from every cluster". Flooding all clusters again exhausts
-		// the per-cluster slot budget map-wide and starves lights registered
-		// later, so cap the fallback by distance instead: the light reaches
-		// only clusters whose leaf bounds lie within rt_light_reach of it.
 		if (!leaf->compressed_vis)
 		{
 			const float reach = METRIC_TO_QUAKEUNIT (CVAR_TO_FLOAT (rt_light_reach));
@@ -1273,8 +1166,6 @@ void RT_ClusterLightListsUpload (void)
 			{
 				if (!(vis[j] & (1u << k)))
 					continue;
-				// PVS bit (j*8+k) -> leaf index (j*8+k)+1 (1-based, leaf 0
-				// is the all-seeing solid leaf).
 				const int c = (j << 3) + k + 1;
 				if (c >= numClusters)
 					continue;
@@ -1295,7 +1186,6 @@ void RT_ClusterLightListsUpload (void)
 		rt_light_diag_denied += rt_light_diag[li].denied;
 	}
 
-	// Prefix sums over the allocated slot counts -> offsets.
 	uint32_t total = 0;
 	for (int c = 0; c < numClusters; c++)
 	{
@@ -1304,10 +1194,6 @@ void RT_ClusterLightListsUpload (void)
 	}
 	rt_cluster_offsets[numClusters] = total;
 
-	// Pass 2: write the slot-indexed lists. Lights present this frame keep
-	// their slot; absent ones leave a hole (RT_CLUSTER_INVALID_LIGHT) in their
-	// slot, so downstream slots never shift and the shader's stats stay keyed
-	// to the same light as last frame.
 	for (int c = 0; c < numClusters; c++)
 	{
 		const int cfill = rt_cluster_slot_fill[c];
@@ -1330,15 +1216,6 @@ void RT_ClusterLightListsUpload (void)
 	RG_CHECK (r);
 }
 
-/*
-================
-RT_FormatLightId
-
-Human readable name for a light unique ID. World surface lights carry the
-surface index, so the emissive source texture can be printed as well - that is
-what makes a report line match a texture in the editor.
-================
-*/
 static void RT_FormatLightId (char *out, size_t outSize, uint64_t uid)
 {
 	const int      type      = (int)(uid >> 60);
@@ -1367,31 +1244,6 @@ static void RT_FormatLightId (char *out, size_t outSize, uint64_t uid)
 		q_snprintf (out, outSize, "type %i uid %016llx", type, (unsigned long long)uid);
 }
 
-/*
-================
-RT_ClusterLightReport_f
-
-Prints why each registered RT light may or may not be sampled by the renderer.
-
-A light that reaches the renderer at all was registered (the emissive pass
-produced it), so it is in the emissive list. The remaining ways for it to stay
-dark are: no open leaf was found for its origin, or every cluster that the PVS
-accepted it into was already at RT_CLUSTER_MAX_PER_LIST. Additionally a light
-can be perfectly valid and yet not light the current view, because the viewer's
-own cluster does not list it - that is the interesting case for "the same
-texture lights up in one place of the map but not in another".
-
-Columns:
-  cls   yes when the light is listed in the viewer's own cluster
-  pvs   clusters that accepted it
-  no!   clusters that were already full and rejected it
-  dist  distance from the camera in Quake units
-  then the light ID and a verdict.
-
-Run it while looking at the problem in game: the lists are filled by the world
-pass, so the numbers describe the last rendered frame.
-================
-*/
 static float RT_LightDiagDist (const rt_light_diag_t *d)
 {
 	const float dx = d->origin[0] - rt_cluster_vieworg[0];
@@ -1447,11 +1299,6 @@ void RT_ClusterLightReport_f (void)
 
 	int shown = 0;
 
-	// rt_light_report_filter narrows the table to one texture, and the rows are
-	// printed nearest-first, so a filtered report describes the light the
-	// player is actually looking at instead of the first N lights in
-	// registration order. Sorted with an insertion sort over an index array
-	// (rt_light_diag itself must keep its registration order).
 	const char *filter = rt_light_report_filter.string;
 	static int  order[RT_CLUSTER_MAX_LIGHTS];
 	int         order_num = 0;

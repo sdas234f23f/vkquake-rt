@@ -224,7 +224,6 @@ void vkpt::RenderCubemap::Draw(VkCommandBuffer cmd, uint32_t frameIndex,
 
     vkCmdEndRenderPass(cmd);
 
-    // generate the mip chain from the just-rendered mip 0 (used by lighting shaders)
     GenerateMipmaps(cmd, cubemap.image);
 }
 
@@ -244,7 +243,6 @@ void vkpt::RenderCubemap::GenerateMipmaps(VkCommandBuffer cmd, VkImage image, Vk
         .layerCount = 6,
     };
 
-    // mip 0: its current layout -> TRANSFER_SRC
     const VkAccessFlags mip0SrcAccess =
         mip0Layout == VK_IMAGE_LAYOUT_GENERAL ? VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_SHADER_READ_BIT;
 
@@ -275,7 +273,6 @@ void vkpt::RenderCubemap::GenerateMipmaps(VkCommandBuffer cmd, VkImage image, Vk
             .layerCount = 6,
         };
 
-        // current mip: UNDEFINED -> TRANSFER_DST
         Utils::BarrierImage(
             cmd, image,
             0, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -283,7 +280,6 @@ void vkpt::RenderCubemap::GenerateMipmaps(VkCommandBuffer cmd, VkImage image, Vk
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
             curMipmap);
 
-        // blit from the previous mip level (all 6 faces at once)
         VkImageBlit curBlit = {};
         curBlit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         curBlit.srcSubresource.mipLevel = mipLevel - 1;
@@ -305,7 +301,6 @@ void vkpt::RenderCubemap::GenerateMipmaps(VkCommandBuffer cmd, VkImage image, Vk
             image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             1, &curBlit, VK_FILTER_LINEAR);
 
-        // current mip: TRANSFER_DST -> TRANSFER_SRC for the next one
         Utils::BarrierImage(
             cmd, image,
             VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
@@ -314,7 +309,6 @@ void vkpt::RenderCubemap::GenerateMipmaps(VkCommandBuffer cmd, VkImage image, Vk
             curMipmap);
     }
 
-    // all mips: TRANSFER_SRC -> SHADER_READ_ONLY
     const VkImageSubresourceRange allMips =
     {
         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -616,7 +610,6 @@ void vkpt::RenderCubemap::CreateDescriptors(const std::shared_ptr<SamplerManager
     bindings[0].descriptorCount = 1;
     bindings[0].stageFlags = VK_SHADER_STAGE_ALL;
 
-    // sun-free env cubemap used for procedural sky lighting (getSkyFiltered)
     bindings[1].binding = BINDING_RENDER_CUBEMAP_ENV;
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[1].descriptorCount = 1;
@@ -711,7 +704,6 @@ void vkpt::RenderCubemap::CreateProceduralSkyDescriptors()
 
     VkDescriptorSetLayoutBinding bindings[3] = {};
 
-    // 0: cubemap storage image (visual sky with sun disc)
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[0].descriptorCount = 1;
@@ -723,7 +715,6 @@ void vkpt::RenderCubemap::CreateProceduralSkyDescriptors()
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-    // 2: env cubemap storage image (sun-free lighting environment)
     bindings[2].binding = 2;
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[2].descriptorCount = 1;
@@ -869,7 +860,6 @@ void vkpt::RenderCubemap::DrawProcedural(VkCommandBuffer cmd, const ProceduralSk
         memcpy(mappedProcSkyParams, &params, sizeof(ProceduralSkyParams));
     }
 
-    // cubemap/envCubemap: SHADER_READ_ONLY -> GENERAL (the shader writes both)
     for (VkImage image : { cubemap.image, envCubemap.image })
     {
         VkImageMemoryBarrier barrier = {};
@@ -903,9 +893,6 @@ void vkpt::RenderCubemap::DrawProcedural(VkCommandBuffer cmd, const ProceduralSk
     const uint32_t wgY = Utils::GetWorkGroupCount(cubemapSize, 16);
     vkCmdDispatch(cmd, wgX, wgY, 6);
 
-    // generate the mip chain from the just-filled mip 0 (GENERAL) and leave the
-    // whole image SHADER_READ_ONLY for the lighting shaders. Both the visual
-    // cubemap (with sun disc) and the env cubemap (sun-free) get mip chains.
     GenerateMipmaps(cmd, cubemap.image, VK_IMAGE_LAYOUT_GENERAL);
     GenerateMipmaps(cmd, envCubemap.image, VK_IMAGE_LAYOUT_GENERAL);
 }

@@ -94,11 +94,6 @@ private:
 
     void BindPipelineIfNew(VkCommandBuffer cmd, const RasterizedDataCollector::DrawInfo &info, VkPipeline &curPipeline);
 
-    // Generate the color cubemap mip chain after mip 0 was filled by the
-    // rasterized render pass or the procedural compute pass. The prefiltered
-    // levels are used by the lighting shaders (getSkyFiltered) so the sky is
-    // sampled without fireflies at high rt_sky_brightness.
-    // mip0Layout must be the current layout of mip level 0.
     void GenerateMipmaps(VkCommandBuffer cmd, VkImage image, VkImageLayout mip0Layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     // procedural sky (compute)
@@ -118,10 +113,6 @@ private:
     VkRenderPass multiviewRenderPass;
 
     Attachment cubemap;
-    // Sun-free lighting environment for the procedural sky (see CmProceduralSky.comp):
-    // identical to `cubemap` except the baked sun disc, which lives only in
-    // `cubemap` (direct view). Sampled by getSkyFiltered() via binding
-    // BINDING_RENDER_CUBEMAP_ENV; `cubemap` is BINDING_RENDER_CUBEMAP.
     Attachment envCubemap;
     Attachment cubemapDepth;
 

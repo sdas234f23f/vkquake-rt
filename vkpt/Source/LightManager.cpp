@@ -60,10 +60,6 @@ vkpt::LightManager::LightManager(
 
     lightsBuffer_Prev.Init(_allocator, sizeof(ShLightEncoded) * LIGHT_ARRAY_MAX_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "Lights buffer - prev");
 
-    // Q2RTX-style per-BSP-cluster light lists + adaptive shadow statistics.
-    // The lists (prefix-sum offsets + concatenated light unique IDs) are
-    // uploaded from the CPU each frame and copied to the device in
-    // CopyFromStaging (unique IDs resolved to light-array indices there).
     lightListOffsets = std::make_shared<AutoBuffer>(device, _allocator);
     lightListOffsets->Create(sizeof(uint32_t) * (Q2_MAX_CLUSTERS + 1),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -138,8 +134,6 @@ static vkpt::ShLightEncoded EncodeAsSphereLight(const RgSphericalLightUploadInfo
 
     lt.data_0[3] = radius;
 
-    // One-sided emission normal (light-textured surfaces converted to spheres).
-    // Zero for plain point lights (dlights, light entities) = full sphere.
     lt.data_1[0] = info.normal.data[0];
     lt.data_1[1] = info.normal.data[1];
     lt.data_1[2] = info.normal.data[2];
@@ -187,33 +181,11 @@ static vkpt::ShLightEncoded EncodeAsTriangleLight(const RgPolygonalLightUploadIn
     return lt;
 }
 
-// Phase 2 textured area light: the emitting surface is a CONVEX POLYGON in
-// texture space (the face's own texcoords, up to MAX_TEXTURED_AREA_LIGHT_VERTS
-// verts) mapped to world through the affine map world = A*s + B*t + C recovered
-// from the face vertices. The polygon's world footprint therefore lies exactly
-// on the brush face geometry. The shader samples the UV polygon uniformly
-// (constant Jacobian -> uniform area sample in world) and modulates the color
-// by the luma mask at the sampled UV, so light comes from the actual luma
-// footprint (lamp body, medkit diodes) instead of the whole quad. The color is
-// NOT divided by area (unlike triangle lights): the uniform area-sampling pdf
-// (1/area) is folded into the shader's dw = area * G, so the encoded radiance
-// is simply the per-unit-area radiance at full mask brightness.
-//
-// Packing:
-//   data_0.xyz = A (affine S axis), data_0.w = RME texture index (as float)
-//   data_1.xyz = B (affine T axis), data_1.w = mean emissivity
-//   data_2.xyz = C (affine offset), data_2.w = numVerts (as float)
-//   data_3..data_6 = uvVerts, two (s,t) pairs per vec4 (verts 0..7)
-//   data_7.xyz = outward normal, data_7.w = exact world-space polygon area
 static vkpt::ShLightEncoded EncodeAsTexturedAreaLight(const RgTexturedAreaLightUploadInfo &info, uint32_t textureIndex)
 {
     vkpt::ShLightEncoded lt = {};
     lt.lightType = LIGHT_TYPE_TEXTURED_AREA;
 
-    // Radiance at full mask brightness. NOT divided by area: the shader folds
-    // the polygon's area into dw = area * G (solid angle), so the encoded
-    // radiance is the per-unit-area radiance and the contribution scales with
-    // the lit footprint.
     lt.color[0] = info.color.data[0];
     lt.color[1] = info.color.data[1];
     lt.color[2] = info.color.data[2];
@@ -221,7 +193,6 @@ static vkpt::ShLightEncoded EncodeAsTexturedAreaLight(const RgTexturedAreaLightU
     lt.data_0[0] = info.A.data[0];
     lt.data_0[1] = info.A.data[1];
     lt.data_0[2] = info.A.data[2];
-    // texture index as float bits
     memcpy(&lt.data_0[3], &textureIndex, sizeof(uint32_t));
 
     lt.data_1[0] = info.B.data[0];
@@ -380,13 +351,6 @@ void vkpt::LightManager::IncrementCount(const ShLightEncoded& encodedLight)
 
 void vkpt::LightManager::AddLight(uint32_t frameIndex, uint64_t uniqueId, const vkpt::ShLightEncoded &encodedLight)
 {
-    // A light is identified by its uniqueId and must be registered at most
-    // once per frame. Duplicate uploads happen when the same static emissive
-    // entity is drawn more than once in a frame (its efrags can land in
-    // several visible leaves during a level change / respawn). Registering it
-    // twice would inflate the light counts, corrupt the temporal mapping in
-    // FillMatchPrev, and leave uniqueIDToArrayIndex non-bijective. Skip the
-    // duplicate before any of that state is touched.
     if (uniqueIDToArrayIndex[frameIndex].find(uniqueId) != uniqueIDToArrayIndex[frameIndex].end())
     {
         return;
@@ -510,7 +474,6 @@ void vkpt::LightManager::CopyFromStaging(VkCommandBuffer cmd, uint32_t frameInde
 
     lightsBuffer->CopyFromStaging(cmd, frameIndex, sizeof(ShLightEncoded) * GetLightArrayEnd(regLightCount, dirLightCount));
 
-    // Q2RTX per-cluster light lists (offsets + light indices).
     lightListOffsets->CopyFromStaging(cmd, frameIndex, sizeof(uint32_t) * (Q2_MAX_CLUSTERS + 1));
     lightListLights->CopyFromStaging(cmd, frameIndex, sizeof(uint32_t) * Q2_MAX_CLUSTERS * Q2_LIGHT_LIST_MAX_PER_CELL);
 
@@ -534,7 +497,6 @@ void vkpt::LightManager::SetClusterLightLists(uint32_t frameIndex, uint32_t numC
         numClusters = Q2_MAX_CLUSTERS;
     }
 
-    // Prefix-sum offsets (numClusters+1 entries; zero the rest).
     uint32_t *dstOffsets = static_cast<uint32_t *>(lightListOffsets->GetMapped(frameIndex));
     for (uint32_t i = 0; i <= Q2_MAX_CLUSTERS; i++)
     {
@@ -545,8 +507,6 @@ void vkpt::LightManager::SetClusterLightLists(uint32_t frameIndex, uint32_t numC
         dstOffsets[i] = pOffsets[i];
     }
 
-    // Resolve the light unique IDs to light-array indices right away (all
-    // lights are uploaded before the lists, so uniqueIDToArrayIndex is ready).
     const uint32_t lightsWords = Q2_MAX_CLUSTERS * Q2_LIGHT_LIST_MAX_PER_CELL;
     uint32_t *dstLights = static_cast<uint32_t *>(lightListLights->GetMapped(frameIndex));
     for (uint32_t i = 0; i < lightsWords; i++)
@@ -558,21 +518,14 @@ void vkpt::LightManager::SetClusterLightLists(uint32_t frameIndex, uint32_t numC
     for (uint32_t i = 0; i < count; i++)
     {
         const auto it = uniqueIDToArrayIndex[frameIndex].find(pLightUniqueIds[i]);
-        // Not found (e.g. a light culled this frame) -> 0, which the shader
-        // treats as an invalid index (LIGHT_ARRAY_REGULAR_LIGHTS_OFFSET is 1).
         dstLights[i] = (it != uniqueIDToArrayIndex[frameIndex].end()) ? it->second.GetArrayIndex() : 0u;
     }
 }
 
 void vkpt::LightManager::ResetLightStats(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t frameId)
 {
-    // Ring slot for the current (monotonic) frame id. frameId keeps increasing,
-    // so slot = frameId % Q2_LIGHT_LIST_STATS_BUFFERS (the in-flight frameIndex
-    // only alternates 0/1 and must not be used for ring indexing).
     const uint32_t slot = frameId % Q2_LIGHT_LIST_STATS_BUFFERS;
 
-    // Zero the stats slot for this frame (the direct pass will accumulate into
-    // it this frame; the CDF reads the previous frames' slots).
     const VkDeviceSize statsSlotSize =
         sizeof(uint32_t) * Q2_MAX_CLUSTERS * Q2_LIGHT_LIST_MAX_PER_CELL *
         Q2_LIGHT_LIST_STATS_SIDES * 2;

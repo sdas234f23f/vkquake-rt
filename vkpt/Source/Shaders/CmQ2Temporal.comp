@@ -102,7 +102,6 @@ main()
 
     ivec2 ipos = ivec2(gl_GlobalInvocationID);
     vec4 motion = texelFetch(framebufMotion_Sampler, ipos, 0);
-    // vkpt stores the depth derivative in DepthGrad (Motion.w is unused)
     const float gradDepth = texelFetch(framebufDepthGrad_Sampler, ipos, 0).r;
 
     // Find out if this pixel belongs to a checkerboard-split-path surface (water/glass)
@@ -290,12 +289,6 @@ main()
 
     if(temporal_sample_valid_diff)
     {
-        // Compute the antilag factors based on the gradients only, matching
-        // Q2RTX (asvgf_temporal.comp): the LF/HF history is carried across
-        // camera motion by motion-vector reprojection, not by shrinking the
-        // history. A motion term here would collapse hist_len on every head
-        // movement and expose raw 1-spp noise. Motion affects only the SPEC
-        // channel below (Q2_FLT_ANTILAG_SPEC_MOTION), as in Q2RTX.
         float antilag_alpha_lf = clamp(mix(1.0, Q2_FLT_ANTILAG_LF * grad_lf, Q2_FLT_TEMPORAL_LF), 0, 1);
         float antilag_alpha_hf = clamp(mix(1.0, Q2_FLT_ANTILAG_HF * grad_hf_spec.x, Q2_FLT_TEMPORAL_HF), 0, 1);
 

@@ -9,8 +9,6 @@
 
 #include "quakedef.h"
 
-// material kinds (Q2RTX materialKinds[]), used later by the reflect/refract
-// and sky paths once the material ids flow into the renderer
 enum {
     RT_MAT_KIND_INVALID    = 0,
     RT_MAT_KIND_REGULAR    = 1,
@@ -26,54 +24,45 @@ enum {
 };
 
 typedef struct rt_material_s {
-    char name[MAX_QPATH];              // lowercase texture name, no extension
-    char filename_base[MAX_QPATH];     // base texture path (without .tga)
+    char name[MAX_QPATH];
+    char filename_base[MAX_QPATH];
     char filename_normals[MAX_QPATH];
     char filename_emissive[MAX_QPATH];
-    char filename_mask[MAX_QPATH];     // NOT IMPLEMENTED (parsed for .mat compat only)
-    char filename_gloss[MAX_QPATH];    // gloss map (HD packs: _gloss) -> roughness = 1 - gloss
+    char filename_mask[MAX_QPATH];
+    char filename_gloss[MAX_QPATH];
     float bump_scale;
-    float roughness_override;          // 0 = unset
-    float metalness_factor;            // metallic: absolute when metalness_factor: is authored
+    float roughness_override;
+    float metalness_factor;
     float emissive_factor;
-    float specular_factor;             // NOT IMPLEMENTED (parsed for .mat compatibility only)
+    float specular_factor;
     float base_factor;
-    int kind;                          // NOT IMPLEMENTED (parsed for .mat compatibility only)
+    int kind;
     qboolean is_light;
-    qboolean light_styles;             // surface honors lightstyle animation (default true)
-    qboolean has_metalness_factor;     // "metalness_factor:" key present -> factor is authoritative
-    qboolean metalness_from_normal_alpha; // opt-in: metal = normal.alpha/255 * factor (Q2RTX packing)
-    qboolean bsp_radiance;             // NOT IMPLEMENTED (parsed for .mat compatibility only)
-    float default_radiance;            // NOT IMPLEMENTED (parsed for .mat compatibility only)
-    vec3_t color_emissive;             // "color_emissive:" RGB whose matching pixels become emissive
-    qboolean has_color_emissive;       // "color_emissive:" key present
-    float color_emissive_threshold;    // max normalized RGB distance for a pixel to match (default 0.02)
-    // legacy texture_custom_info.txt migrations (now authored in materials.yaml)
-    vec3_t light_color;            // explicit light color (hex) normalized to [0,1]
-    qboolean has_light_color;      // "light_color:" key present
-    float light_brightness;        // light intensity multiplier (Q2RTX-style ray-count scaling, default 1.0)
-    float light_upoffset;          // sphere light vertical offset, default 0.0
-    qboolean mirror;               // reflect/refract surface (was @MIRROR)
-    qboolean exact_normals;        // flat-shaded geometry (was @EXACT_NORMALS)
-    qboolean force_rasterize;      // rasterize, no shadows (was @RASTER_LIGHT)
+    qboolean light_styles;
+    qboolean has_metalness_factor;
+    qboolean metalness_from_normal_alpha;
+    qboolean bsp_radiance;
+    float default_radiance;
+    vec3_t color_emissive;
+    qboolean has_color_emissive;
+    float color_emissive_threshold;
+    vec3_t light_color;
+    qboolean has_light_color;
+    float light_brightness;
+    float light_upoffset;
+    qboolean mirror;
+    qboolean exact_normals;
+    qboolean force_rasterize;
     qboolean valid;
 } rt_material_t;
 
-// Clears the table and loads materials/*.yaml (global materials) + any
-// <map>.yaml for the current map (see RT_MAT_ChangeMap).
 void RT_MAT_Init(void);
 void RT_MAT_Shutdown(void);
 
-// Loads <mapname>.yaml (map-specific materials) on top of the global ones.
 void RT_MAT_ChangeMap(const char *mapname);
 
-// Finds a material by texture name (no extension, case-insensitive).
-// Returns NULL if no material is defined for this texture.
 rt_material_t *RT_MAT_Find(const char *name);
 
-// Loads the given material texture (RT_MAT_TEX_*) as RGBA8 from a .pkz
-// archive or the filesystem (TGA type 2/10, 24/32-bit). Returns a heap
-// buffer (free with Mem_Free) or NULL.
 enum {
     RT_MAT_TEX_BASE,
     RT_MAT_TEX_NORMALS,
@@ -83,10 +72,8 @@ enum {
 };
 byte *RT_MAT_LoadTexture(const rt_material_t *mat, int which, int *outWidth, int *outHeight);
 
-// True if the material system is enabled (rt_materials cvar).
 qboolean RT_MAT_Enabled(void);
 
-// Console command "rt_mat [name]": prints the material table or one material.
 void RT_MAT_Cmd(void);
 
-#endif // RT_MATERIAL_H
+#endif

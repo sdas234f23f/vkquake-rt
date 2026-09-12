@@ -214,11 +214,6 @@ static void GL_DrawAliasFrame(
 
     if (tx && tx->rthaslightcolor && RT_AllowFakeLights ())
     {
-        // Explicit spherical light with a hand-authored color (materials.yaml
-        // "light_color:"), migrated from the legacy @RASTER_LIGHT entries:
-        // projectiles, teleporter, lava balls, explosion sprites, etc.
-        // Suppressed in strict light-source modes (materials_only / rt_truelight 2):
-        // these are "fake" in-air points, not physically-emissive materials.
         vec3_t color = {tx->rtlightcolor[0], tx->rtlightcolor[1], tx->rtlightcolor[2]};
         VectorScale(color, CVAR_TO_FLOAT(rt_dlight_intensity), color);
         RT_FIXUP_LIGHT_INTENSITY(color, true);
@@ -233,33 +228,17 @@ static void GL_DrawAliasFrame(
         RgResult r = rgUploadSphericalLight(vulkan_globals.instance, &light_info);
         RG_CHECK(r);
 
-        // Register for the per-cluster light lists so the sphere light is
-        // actually sampled by surfaces around the entity (lava balls etc.).
         vec3_t lightorigin;
         VectorCopy(lerpdata.origin, lightorigin);
         lightorigin[2] += tx->rtupoffset;
         RT_ClusterLightAdd(light_info.uniqueID, lightorigin);
     }
 
-    // NOTE: model skins with an emissive luma material (materials.yaml
-    // "is_light: true") do NOT generate a spherical light here. The glow comes
-    // purely from the luma texture emission, sampled by the ray tracer and
-    // scaled by rt_emis_mapboost * rt_emis_light_intensity (see gl_vidsdl.c).
-    // The only model light left is the curated light_color branch above.
-
 assert(
     (!isviewer && !isfirstperson) ||
     (isviewer && !isfirstperson) ||
     (!isviewer && isfirstperson));
 
-// Q2RTX per-cluster light lists: dynamic alias geometry (monsters, pickups)
-// is uploaded with cluster 0 in its base vertices, which points at the SOLID
-// leaf (empty light list -> unlit). Resolve the entity origin's leaf so the
-// model is lit by the same cluster light list as the surface it stands on.
-// RT_ResolvePointCluster also probes the neighbourhood, which is what makes
-// pickup items work at all: they rest with their bbox mins.z on the floor, so
-// their origin sits exactly on the shadowed side of the floor BSP plane and a
-// plain Mod_PointInLeaf answers "solid".
 int cluster = RT_ResolvePointCluster (lerpdata.origin);
 
 if

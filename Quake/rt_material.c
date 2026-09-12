@@ -12,7 +12,6 @@
 #pragma warning(disable : 4505)
 #endif
 
-// STB_IMAGE config (phase 4.5: JPG/PNG decode for HD texture packs):
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
 #define STBI_NO_BMP
@@ -46,13 +45,8 @@ static cmd_function_t *rt_mat_cmd = NULL;
 static cvar_t rt_materials = { "rt_materials", "1", CVAR_ARCHIVE };
 cvar_t rt_mat_debug = { "rt_mat_debug", "0", 0 };
 
-// ---------------------------------------------------------------------------
-// tiny TGA decoder (type 2 uncompressed / type 10 RLE, 24/32-bit) from memory
-// ---------------------------------------------------------------------------
-
 static byte *rt_load_file(const char *name, int *outLen)
 {
-    // .pkz archives first, then the filesystem (dirs + .pak)
     byte *b = RT_PKZ_LoadFile(name, outLen);
     if (b)
     {
@@ -99,11 +93,11 @@ static byte *rt_decode_tga(const byte *buf, int len, int *outW, int *outH)
 
     if (colormap_type != 0)
     {
-        return NULL; // paletted TGAs are not handled
+        return NULL;
     }
     if (image_type != 2 && image_type != 10)
     {
-        return NULL; // only true-color and RLE true-color
+        return NULL;
     }
     if (pixel_size != 24 && pixel_size != 32)
     {
@@ -132,7 +126,7 @@ static byte *rt_decode_tga(const byte *buf, int len, int *outW, int *outH)
 
         for (int column = 0; column < width; column++)
         {
-            if (image_type == 10) // RLE
+            if (image_type == 10)
             {
                 if (pos >= len)
                 {
@@ -141,7 +135,7 @@ static byte *rt_decode_tga(const byte *buf, int len, int *outW, int *outH)
                 }
                 const byte packet = buf[pos++];
                 const int count = (packet & 0x7f) + 1;
-                if (packet & 0x80) // run-length packet
+                if (packet & 0x80)
                 {
                     if (pos + bpp > len || column + count > width)
                     {
@@ -159,7 +153,7 @@ static byte *rt_decode_tga(const byte *buf, int len, int *outW, int *outH)
                     }
                     column += count - 1;
                 }
-                else // raw packet
+                else
                 {
                     for (int k = 0; k < count; k++)
                     {
@@ -177,7 +171,7 @@ static byte *rt_decode_tga(const byte *buf, int len, int *outW, int *outH)
                     column += count - 1;
                 }
             }
-            else // type 2
+            else
             {
                 if (pos + bpp > len)
                 {
@@ -215,8 +209,6 @@ byte *RT_MAT_LoadTexture(const rt_material_t *mat, int which, int *outWidth, int
         return NULL;
     }
 
-    // .mat entries (Q2RTX style) store the full file name WITH extension
-    // (e.g. textures/e1u1/foo_n.tga), while auto-detected names have none.
     const char *dot = strrchr(base, '.');
     const qboolean hasExt = (dot != NULL && dot[1] != '\0');
 
@@ -254,7 +246,6 @@ byte *RT_MAT_LoadTexture(const rt_material_t *mat, int which, int *outWidth, int
         return decoded;
     }
 
-    // try .tga (own decoder), then .jpg/.png (stb_image)
     static const char *exts[] = { "tga", "jpg", "png" };
     for (int e = 0; e < 3; e++)
     {
@@ -268,7 +259,7 @@ byte *RT_MAT_LoadTexture(const rt_material_t *mat, int which, int *outWidth, int
             continue;
         }
 
-        if (e == 0) // tga
+        if (e == 0)
         {
             byte *decoded = rt_decode_tga(file, len, outWidth, outHeight);
             rt_load_file_free(file);
@@ -277,7 +268,7 @@ byte *RT_MAT_LoadTexture(const rt_material_t *mat, int which, int *outWidth, int
                 return decoded;
             }
         }
-        else // jpg / png
+        else
         {
             int w = 0, h = 0, comp = 0;
             byte *decoded = stbi_load_from_memory(file, len, &w, &h, &comp, 4);
@@ -304,14 +295,14 @@ static void rt_mat_reset(rt_material_t *mat)
 {
     memset(mat, 0, sizeof(*mat));
     mat->bump_scale = 1.0f;
-    mat->metalness_factor = 0.0f; // JPG normals carry no alpha -> keep non-metallic unless a .mat says otherwise
+    mat->metalness_factor = 0.0f;
     mat->emissive_factor = 1.0f;
     mat->specular_factor = 1.0f;
     mat->base_factor = 1.0f;
     mat->light_brightness = 1.0f;
     mat->kind = RT_MAT_KIND_REGULAR;
-    mat->light_styles = true;    // surfaces honor lightstyle animation unless light_styles: false
-    mat->color_emissive_threshold = 0.02f; // ~2% RGB-distance tolerance around color_emissive
+    mat->light_styles = true;
+    mat->color_emissive_threshold = 0.02f;
 }
 
 static int rt_mat_parse_kind(const char *kindname)
@@ -329,8 +320,6 @@ static int rt_mat_parse_kind(const char *kindname)
     return RT_MAT_KIND_REGULAR;
 }
 
-// YAML booleans are "true"/"false"; the legacy .mat format used "0"/"1".
-// Accept all of them so the same key handler works for both.
 static qboolean rt_mat_parse_bool(const char *value)
 {
     if (!q_strcasecmp(value, "true") || !q_strcasecmp(value, "yes") || !q_strcasecmp(value, "on"))
@@ -340,8 +329,6 @@ static qboolean rt_mat_parse_bool(const char *value)
     return atoi(value) != 0;
 }
 
-// Parses a 6-digit RGB hex color ("rrggbb") into [0,1] components. Returns
-// false if the string is malformed (length != 6 or non-hex digits).
 static qboolean rt_mat_parse_hex_color(const char *value, vec3_t out)
 {
     int i, c;
@@ -379,12 +366,10 @@ static void rt_mat_set_attribute(rt_material_t *mat, const char *key, const char
     else if (!q_strcasecmp(key, "metalness_factor"))
     {
         mat->metalness_factor = (float)atof(value);
-        mat->has_metalness_factor = true; // authored value is authoritative (absolute metallic)
+        mat->has_metalness_factor = true;
     }
     else if (!q_strcasecmp(key, "metalness_from_normal_alpha"))
     {
-        // Opt-in Q2RTX-style packing: metal = normal.alpha/255 * metalness_factor.
-        // Off by default so "metalness_factor:" keeps its absolute meaning.
         mat->metalness_from_normal_alpha = rt_mat_parse_bool(value);
     }
     else if (!q_strcasecmp(key, "emissive_factor"))
@@ -433,18 +418,6 @@ static void rt_mat_set_attribute(rt_material_t *mat, const char *key, const char
         Con_DWarning("RT mat: unknown attribute '%s' in material '%s'\n", key, mat->name);
 }
 
-// returns number of materials parsed into dest
-//
-// Parses a flat YAML document with libyaml (vendored, third_party/libyaml):
-//
-//   materials:
-//     - name: textures/#lava1
-//       texture_emissive: textures/#lava1_luma.png
-//       is_light: true
-//
-// The root "materials:" key maps to a sequence of material mappings; each
-// mapping's "name:" is the material name and every other "key: value" pair is
-// routed through rt_mat_set_attribute.
 static void rt_mat_yaml_scalar(const yaml_node_t *node, char *out, size_t outsize)
 {
     if (!node || !node->data.scalar.value || outsize == 0)
@@ -559,13 +532,8 @@ static int rt_mat_load_yaml_file(const char *file_name, rt_material_t *dest, int
     return count;
 }
 
-// ---------------------------------------------------------------------------
-// table management
-// ---------------------------------------------------------------------------
-
 static void rt_mat_find_dir_mats(int (*cb)(const char *name, void *ctx), void *ctx)
 {
-    // on-disk materials/*.yaml
     char pattern[MAX_OSPATH];
     q_snprintf(pattern, sizeof(pattern), "%s/materials/*.yaml", com_gamedir);
 
@@ -629,9 +597,7 @@ void RT_MAT_Init(void)
     RT_PKZ_Init();
 
     rt_mat_load_ctx_t ctx = { rt_global_materials, &rt_global_count, RT_MAT_MAX_GLOBAL };
-    // .pkz entries
     RT_PKZ_ListFiles("materials/", ".yaml", rt_mat_load_cb, &ctx);
-    // on-disk files
     rt_mat_find_dir_mats(rt_mat_load_cb, &ctx);
 
     rt_mat_cmd = Cmd_AddCommand2("rt_mat", RT_MAT_Cmd, src_command);
@@ -664,7 +630,6 @@ void RT_MAT_ChangeMap(const char *mapname)
 
     rt_map_count = 0;
 
-    // map-specific material file: <mapname>.yaml in materials/
     char name[MAX_QPATH];
     q_snprintf(name, sizeof(name), "materials/%s.yaml", mapname);
 
@@ -672,16 +637,10 @@ void RT_MAT_ChangeMap(const char *mapname)
     rt_mat_load_cb(name, &ctx);
 }
 
-// World textures loaded from the BSP (no external HD file) get a name like
-// "maps/e1m1.bsp:*lava1" or "maps/e1m1.bsp:e1u1/foo". Convert them to the
-// "textures/..." convention used by .mat files (warp '*' becomes '#').
 static void rt_mat_normalize_name(const char *name, char *out, size_t outsize)
 {
     q_strlcpy(out, name, outsize);
 
-    // find ".bsp" anywhere in the path; everything after the first ':' that
-    // follows it is the BSP texture name (may contain sub-dirs, e.g.
-    // "maps/e1m1.bsp:e1u1/foo")
     char *bsp = strstr(out, ".bsp");
     if (bsp)
     {
@@ -692,7 +651,7 @@ static void rt_mat_normalize_name(const char *name, char *out, size_t outsize)
             q_strlcpy(texname, colon + 1, sizeof(texname));
             if (texname[0] == '*')
             {
-                texname[0] = '#'; // warp textures use '#'
+                texname[0] = '#';
             }
             q_snprintf(out, outsize, "textures/%s", texname);
         }
@@ -705,8 +664,6 @@ static rt_material_t *rt_mat_find_in(const char *name, rt_material_t *first, int
 {
     char n[MAX_QPATH];
     rt_mat_normalize_name(name, n, sizeof(n));
-    // strip a trailing file extension, but only if it is really at the end:
-    // model skin names like "progs/armor.mdl:frame0" must stay intact
     char *dot = strrchr(n, '.');
     if (dot && !strchr(dot, ':'))
     {
@@ -748,7 +705,6 @@ rt_material_t *RT_MAT_Find(const char *name)
         return NULL;
     }
 
-    // map materials override global materials (Q2RTX MAT_Find)
     rt_material_t *m = rt_mat_find_in(name, rt_map_materials, rt_map_count);
     if (m)
     {

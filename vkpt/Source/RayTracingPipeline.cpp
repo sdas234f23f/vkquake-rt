@@ -82,7 +82,6 @@ RayTracingPipeline::RayTracingPipeline( VkDevice                           _devi
         _portalList->GetDescSetLayout(),
         // device local buffers for volumetrics
         _volumetric->GetDescSetLayout(),
-        // ray statistics counters (host-visible storage buffer)
         _rayStats->GetDescSetLayout(),
     };
 

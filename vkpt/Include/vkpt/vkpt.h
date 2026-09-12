@@ -28,7 +28,7 @@
         #define RGAPI __declspec(dllexport)
     #else
         #define RGAPI __declspec(dllimport)
-    #endif // vkpt_EXPORTS
+    #endif
     #define RGCONV __cdecl
 #else
     // RG_STATIC: the renderer is linked into the host, so the RG_* functions
@@ -180,7 +180,6 @@ typedef struct RgInstanceCreateInfo
     // "VulkanValidation"   - validate each Vulkan API call and print using pfnPrint
     // "Developer"          - load PNG texture files instead of KTX2; reload a texture if its PNG file was changed
     // "FPSMonitor"         - show FPS at the window name
-    // Default: "vkpt.txt"
     const char                  *pConfigPath;
     
     // Optional function to print messages from the library.
@@ -356,8 +355,6 @@ typedef struct RgVertex
     float       texCoordLayer2[2];
     // RGBA packed into 32-bit uint. R component is at the little end, i.e. (a<<24 | b<<16 | g<<8 | r)
     uint32_t    packedColor;
-    // BSP cluster index of the world geometry this vertex belongs to
-    // (Q2RTX per-cluster light lists). 0 for non-world / dynamic geometry.
     uint32_t    cluster;
 } RgVertex;
 
@@ -645,9 +642,6 @@ typedef struct RgSphericalLightUploadInfo
     RgFloat3D       position;
     // Sphere radius.
     float           radius;
-    // Optional emission normal (light-textured surfaces). When non-zero the
-    // light only illuminates surfaces in front of this normal (Q2RTX
-    // spotlight factor); zero = light emits in all directions (point light).
     RgFloat3D       normal;
 } RgSphericalLightUploadInfo;
 
@@ -659,49 +653,22 @@ typedef struct RgPolygonalLightUploadInfo
     RgFloat3D       positions[3];
 } RgPolygonalLightUploadInfo;
 
-// Phase 2: a textured area light. The emitting surface is a CONVEX POLYGON in
-// texture space (the face's own texcoords, up to MAX_TEXTURED_AREA_LIGHT_VERTS
-// verts) mapped to world through the affine map world = A*s + B*t + C recovered
-// from the face vertices, so the light polygon lies EXACTLY on the brush face
-// geometry. The shader samples the polygon uniformly and modulates the color by
-// the luma mask of the material's emission (RME .b) texture at the sampled UV,
-// so light comes from the actual luma footprint (lamp body, medkit diodes, ...)
-// instead of the whole quad. `color` is the radiance of the polygon when the
-// whole footprint is lit (per unit area, same convention as
-// RgPolygonalLightUploadInfo). The shader multiplies it by the luma mask
-// sample and folds the polygon's area into dw (solid angle), so the emitted
-// flux scales with the lit footprint. `meanEmiss` is used for light-selection
-// weighting. `material` is resolved by
-// the renderer to its emission (RME) texture index; its luma mask is sampled in
-// the shader.
 #define MAX_TEXTURED_AREA_LIGHT_VERTS 8
 typedef struct RgTexturedAreaLightUploadInfo
 {
     // Used to match the same light source from the previous frame.
     uint64_t        uniqueID;
     RgFloat3D       color;
-    // Affine map world = A*s + B*t + C (s,t = raw texture coords).
     RgFloat3D       A;
     RgFloat3D       B;
     RgFloat3D       C;
-    // Outward surface normal (normalized).
     RgFloat3D       normal;
-    // Exact world-space area of the polygon (the face's area).
     float           area;
-    // Convex polygon vertices in texture (S,T) space, in face vertex order.
-    // numVerts must be in [3, MAX_TEXTURED_AREA_LIGHT_VERTS].
     int             numVerts;
     RgFloat2D       uvVerts[MAX_TEXTURED_AREA_LIGHT_VERTS];
-    // Material whose emission (RME) texture carries the luma mask.
     RgMaterial      material;
-    // Average emission (RME .b, 0..1) of the mask inside the UV polygon.
     float           meanEmiss;
-    // Diagnostic: 1 if the affine fit from the surface's own texcoords
-    // succeeded (the UV polygon reproduces the exact texture projection),
-    // 0 if the fallback unit square at the centroid was used instead.
     int             fit;
-    // Diagnostic: 1 for static world geometry, 0 for dynamic brush models
-    // (doors, items) / warp surfaces.
     int             isStatic;
 } RgTexturedAreaLightUploadInfo;
 
@@ -742,20 +709,11 @@ RGAPI RgResult RGCONV rgUploadTexturedAreaLight(
     const RgTexturedAreaLightUploadInfo *pUploadInfo);
 
 
-// Q2RTX per-BSP-cluster light lists, uploaded by the game every frame.
-// pLightUniqueIds holds the same unique IDs used by the light uploads above
-// (the renderer resolves them to its internal light-array indices). The lists
-// are concatenated: cluster i's lights are pLightUniqueIds[pOffsets[i] ..
-// pOffsets[i+1]). pOffsets has numClusters+1 entries.
 typedef struct RgClusterLightListsUploadInfo
 {
-    // Number of BSP leaves ("clusters") of the world model.
     uint32_t        numClusters;
-    // Prefix-sum offsets (numClusters+1 entries) into pLightUniqueIds.
     const uint32_t *pOffsets;
-    // Concatenated light unique IDs for all clusters.
     const uint64_t *pLightUniqueIds;
-    // Total number of entries in pLightUniqueIds (= pOffsets[numClusters]).
     uint32_t        totalLightCount;
 } RgClusterLightListsUploadInfo;
 
@@ -972,14 +930,7 @@ typedef struct RgDrawFrameTexturesParams
     float           emissionMapBoost;
     // Upper bound for emissive materials in primary albedo channel (i.e. on screen).
     float           emissionMaxScreenColor;
-    // Snap the screen-emission luma read to texel centers while the texture is
-    // magnified, so the binary luma masks keep hard edges instead of a
-    // filtered pale rim. 1 = sharp, 0 = regular filtered read.
     float           emissionSharpMask;
-    // Lift applied to a textured-area-light sample point along its normal when
-    // the receiver is (near) coplanar with the emitter, so the lamp surface and
-    // the flush wall around it receive light (self-illumination). In world
-    // units. 0 = disable (current hard coplanar cull).
     float           talSelfLitOffset;
     // Set to true, if roughness should be more perceptually linear.
     // Default: true
@@ -1005,11 +956,7 @@ typedef enum RgDebugDrawFlagBits
     RG_DEBUG_DRAW_Q2RTX_CORE_BIT = 1024,
     // Internal: shows the raw god rays buffer (volumetric sunlight).
     RG_DEBUG_DRAW_GOD_RAYS_BIT = 2048,
-    // Internal: enables the in-game ray stats / FPS overlay (host reads the
-    // GPU ray counters and draws the overlay via the "rt_stats" cvar).
     RG_DEBUG_DRAW_STATS_BIT = 4096,
-    // Debug: shows the raw luma emission mask (monochrome RME ".b" channel)
-    // on surfaces, over a dimmed albedo, to check luma-to-surface alignment.
     RG_DEBUG_DRAW_LUMA_BIT = 8192,
 } RgDebugDrawFlagBits;
 typedef RgFlags RgDebugDrawFlags;
@@ -1342,9 +1289,6 @@ RGAPI RgBool32 RGCONV rgIsRenderUpscaleTechniqueAvailable(
     RgInstance                          rgInstance,
     RgRenderUpscaleTechnique            technique);
 
-// Returns the latest ray count per frame and the smoothed FPS (fixed point,
-// x10) used by the in-game debug stats overlay. Both outputs are optional;
-// pass NULL for any value that is not needed.
 RGAPI RgResult RGCONV rgGetFrameStats(
     RgInstance                          rgInstance,
     uint32_t                           *pRays,
@@ -1356,4 +1300,4 @@ RGAPI const char* RGCONV rgGetResultDescription(RgResult result);
 }
 #endif
 
-#endif // vkpt_H_
+#endif

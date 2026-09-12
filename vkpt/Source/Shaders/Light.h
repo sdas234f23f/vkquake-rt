@@ -33,7 +33,6 @@ struct SphereLight
     vec3 center;
     float radius;
     vec3 color;
-    // Emission normal (one-sided light-textured surfaces). (0,0,0) = full sphere.
     vec3 normal;
 };
 
@@ -47,40 +46,20 @@ struct TriangleLight
 
 #define MAX_TEXTURED_AREA_LIGHT_VERTS 8
 
-// A receiver within this distance of the light polygon's plane is treated as
-// coplanar with the emitter -> its contribution is culled. The light polygon
-// lies exactly on the emitter's brush face, so receivers on the same plane ARE
-// the emitter surface itself (or a coplanar neighbour face). Their true
-// contribution is zero (grazing-angle geometry factor), but float error /
-// affine-fit slop leaves a tiny nonzero dot(normal, lightToSurf) that explodes
-// when the random sample lands close to the receiver -> the pixel-noise right
-// in the middle of the light source.
 #define TAL_SELF_ILLUMINATION_PLANE_EPS 0.05
 
-// Capped rejection sampling for the luma mask: a uniform polygon sample is
-// accepted with probability = mask, so accepted points are distributed
-// proportional to the emissivity (importance sampling). The cap bounds the
-// warp cost on very sparse masks; on exhaustion the exact uniform-mask
-// estimator is used as an unbiased fallback (0.94^96 ~ 0.3% for a 6% mask).
 #define TAL_MASK_REJECTION_TRIES 96
 
 struct TexturedAreaLight
 {
-    // Affine map world = A*s + B*t + C (s,t = raw texture coords). The UV
-    // polygon below maps through it to a world polygon that lies exactly on
-    // the brush face geometry.
     vec3 A;
     vec3 B;
     vec3 C;
     vec3 normal;
-    // Exact world-space polygon area.
     float area;
-    // Emission (luma) texture index, packed as float bits. floatBitsToUint.
     float textureIndex;
-    // Average emissivity of the luma mask over the UV polygon.
     float meanEmiss;
     int numVerts;
-    // Convex polygon vertices in texture (S,T) space, in face vertex order.
     vec2 uvVerts[MAX_TEXTURED_AREA_LIGHT_VERTS];
     vec3 color;
 };
@@ -267,7 +246,6 @@ vec3 texturedAreaLightWorldPos(const TexturedAreaLight l, const vec2 uv)
     return l.C + l.A * uv.x + l.B * uv.y;
 }
 
-// World-space center of the polygon (average of the UV verts mapped to world).
 vec3 getTexturedAreaLightCenter(const TexturedAreaLight l)
 {
     vec2 uvCenter = vec2(0.0);
@@ -279,11 +257,6 @@ vec3 getTexturedAreaLightCenter(const TexturedAreaLight l)
     return texturedAreaLightWorldPos(l, uvCenter);
 }
 
-// Sample a point uniformly inside a convex polygon given by its UV verts. The
-// polygon is fanned from vert 0; u1 selects a fan triangle by its area CDF and
-// u2 warps a uniform square inside it (same warp as sampleTriangle). Uniform in
-// UV space -> uniform in world through the affine map (constant Jacobian), so
-// the area pdf is exactly 1 / worldArea.
 vec2 sampleConvexPolygon(const vec2 verts[MAX_TEXTURED_AREA_LIGHT_VERTS], int numVerts, float u1, float u2)
 {
     if (numVerts < 3)
@@ -302,7 +275,6 @@ vec2 sampleConvexPolygon(const vec2 verts[MAX_TEXTURED_AREA_LIGHT_VERTS], int nu
     }
     totalArea = max(totalArea, 1e-8);
 
-    // select the fan triangle by area CDF
     float r = u1 * totalArea;
     int t = numVerts - 3;
     float acc = 0.0;
@@ -316,11 +288,9 @@ vec2 sampleConvexPolygon(const vec2 verts[MAX_TEXTURED_AREA_LIGHT_VERTS], int nu
         }
     }
 
-    // re-map r into [0,1] inside the selected triangle
     const float accBefore = acc - triArea[t];
     const float uTri = clamp((r - accBefore) / max(triArea[t], 1e-8), 0.0, 1.0);
 
-    // square-to-triangle warp (same as sampleTriangle)
     const float beta  = 1.0 - sqrt(uTri);
     const float gamma = (1.0 - beta) * u2;
     const float alpha = 1.0 - beta - gamma;
@@ -332,7 +302,6 @@ float getTexturedAreaLightWeight(const TexturedAreaLight l, const vec3 cellCente
 {
     const vec3 center = getTexturedAreaLightCenter(l);
 
-    // Bounding radius of the polygon for solid-angle weighting.
     float aprxRadius = 0.0;
     for (int i = 0; i < l.numVerts; i++)
     {
@@ -423,11 +392,6 @@ LightSample sampleTexturedAreaLight(const TexturedAreaLight l, const vec3 surfPo
 
     const uint textureIndex = floatBitsToUint(l.textureIndex);
 
-    // Self-illumination: lift every sampled point along the light normal by
-    // talSelfLitOffset. A receiver that is (near) coplanar with the emitter --
-    // the lamp's own surface or the flush wall it is mounted on -- then sees a
-    // small but stable solid angle instead of being removed by the hard
-    // coplanar cull, so the lamp lights itself and its surroundings.
     const float selfLitOffset = globalUniform.talSelfLitOffset;
 
     if( selfLitOffset <= 0.0 &&
@@ -442,17 +406,6 @@ LightSample sampleTexturedAreaLight(const TexturedAreaLight l, const vec3 surfPo
 
     if (textureIndex != 0u)
     {
-        // Luma importance sampling: choose the point proportional to the mask
-        // by rejection sampling, so nearly every sample lands on a lit texel
-        // instead of wasting most rays on the black parts of a sparse mask.
-        // The acceptance probability is the mask itself, so the density of
-        // accepted points is mask / M with M = meanEmiss * area (the polygon
-        // covers the whole texture); the mask then cancels out of the estimate
-        // and each accepted sample contributes the full radiance scaled by M.
-        // On cap exhaustion the exact uniform-mask estimator below is used as
-        // an unbiased (if higher-variance) fallback. The retry stream is
-        // derived from the point RNG, so gradient-reprojected pixels retrace
-        // the same accepted point as the previous frame.
         const uint maskSeed = wellonsLowBias32(
             floatBitsToUint(pointRnd.x) ^ floatBitsToUint(pointRnd.y));
 
@@ -464,13 +417,6 @@ LightSample sampleTexturedAreaLight(const TexturedAreaLight l, const vec3 surfPo
                 rnd16(maskSeed, salt),
                 rnd16(maskSeed, salt + 1u));
             uv = sampleConvexPolygon(l.uvVerts, l.numVerts, tryRnd.x, tryRnd.y);
-            // Explicit mip 0: implicit texture() derivatives in a raygen shader
-            // are quad-group differences that go wild when adjacent rays hit
-            // different surfaces, so the mask gets sampled at a random/blurred
-            // mip level -> the whole texture seems to emit and the LOD jumps
-            // frame to frame (flicker). The primary pass reads this same RME
-            // with ray-cone grads; here a fixed texel-aligned read keeps the
-            // mask identical to the luma debug overlay.
             mask = getTextureSampleLod(textureIndex, uv, 0.0).b;
             if (rnd16(maskSeed, salt + 2u) < mask)
             {
@@ -486,18 +432,11 @@ LightSample sampleTexturedAreaLight(const TexturedAreaLight l, const vec3 surfPo
 
     if (accepted)
     {
-        // Accepted: the accepted-point density mask/(meanEmiss*area) cancels
-        // the mask, so the contribution is full radiance scaled by the mean
-        // emissivity. Same expected value as the uniform-mask estimator for a
-        // full-coverage polygon (E[mask] = meanEmiss), but with (near) zero
-        // variance on the mask itself.
         r.color = l.color;
         r.dw = safeSolidAngle(l.meanEmiss * l.area * getGeometryFactorClamped(l.normal, lightToSurf.dir, lightToSurf.len));
     }
     else
     {
-        // Fallback (cap reached): exact uniform-mask estimator, mask applied
-        // directly. Unbiased, just higher variance.
         r.color = l.color * mask;
         r.dw = safeSolidAngle(l.area * getGeometryFactorClamped(l.normal, lightToSurf.dir, lightToSurf.len));
     }

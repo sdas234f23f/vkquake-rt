@@ -351,9 +351,6 @@ ShHitInfo getHitInfoBounce(
     #endif
 
     #if defined(HITINFO_INL_PRIM) || defined(HITINFO_INL_RFL)
-        // Snap the emission-channel (luma mask) read to texel centers while the
-        // texture is magnified, so binary luma masks keep hard edges instead of
-        // the filtered pale rim between lit and unlit texels.
         if( globalUniform.emissionSharpMask != 0.0 )
         {
             const uint  rmeTexture = tr.materials[ 0 ][ MATERIAL_ROUGHNESS_METALLIC_EMISSION_INDEX ];
@@ -435,7 +432,6 @@ ShHitInfo getHitInfoBounce(
     h.geometryInstanceFlags = tr.geometryInstanceFlags;
     h.portalIndex = tr.portalIndex;
 
-    // BSP cluster for the Q2RTX per-cluster light lists.
     h.cluster = tr.cluster;
 
     return h;

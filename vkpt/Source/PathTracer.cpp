@@ -68,7 +68,6 @@ PathTracer::TraceParams PathTracer::Bind( VkCommandBuffer                  cmd,
         portalList->GetDescSet(frameIndex),
         // device local buffers for volumetrics
         volumetric->GetDescSet(frameIndex),
-        // ray statistics counters
         rayStats->GetDescSet(frameIndex),
     };
 
@@ -170,8 +169,6 @@ void PathTracer::TraceDirectllumination(const TraceParams &params)
         FI::FB_IMAGE_INDEX_DEPTH_GRAD,
         FI::FB_IMAGE_INDEX_SURFACE_POSITION,
         FI::FB_IMAGE_INDEX_VIEW_DIRECTION,
-        // the gradient reproject (before lighting) patched the RNG seed at
-        // gradient sample pixels - the direct pass must read it
         FI::FB_IMAGE_INDEX_Q2_RNG_SEED,
     };
     params.framebuffers->BarrierMultiple(params.cmd, params.frameIndex, fs);
@@ -196,11 +193,7 @@ void PathTracer::TraceQ2Indirectllumination(const TraceParams &params)
         FI::FB_IMAGE_INDEX_DEPTH_GRAD,
         FI::FB_IMAGE_INDEX_SURFACE_POSITION,
         FI::FB_IMAGE_INDEX_VIEW_DIRECTION,
-        // the direct pass wrote the unfiltered specular - this pass does a
-        // read-modify-write on it (adds the indirect specular)
         FI::FB_IMAGE_INDEX_UNFILTERED_SPECULAR,
-        // the gradient reproject (before lighting) patched the RNG seed at
-        // gradient sample pixels - the indirect pass must read it
         FI::FB_IMAGE_INDEX_Q2_RNG_SEED,
     };
     params.framebuffers->BarrierMultiple(params.cmd, params.frameIndex, fs);

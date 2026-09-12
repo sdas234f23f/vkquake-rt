@@ -1,5 +1,3 @@
-# Builds the project with CMake + Ninja using the MSVC compiler from Visual Studio Build Tools.
-# Usage: .\build_win.ps1 [Debug|Release] [build-dir]
 
 param(
     [string]$Config = "Release",
@@ -22,7 +20,6 @@ if (-not $vsPath) {
     throw "Visual Studio Build Tools with the C++ workload are not installed."
 }
 
-# Import the MSVC environment (INCLUDE, LIB, PATH, etc.) into this session.
 $devCmd = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
 $envLines = cmd /c "`"$devCmd`" -arch=x64 -host_arch=x64 >nul 2>&1 && set"
 foreach ($line in $envLines) {
@@ -39,13 +36,6 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 cmake --build $BuildDir
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-# Deploy the material system into the build's game dir:
-#  - materials.yaml  -> id1/materials/materials.yaml (material definitions)
-#  - textures/*.png   -> id1/textures/   (world PBR overrides)
-#  - progs/**/*.png   -> id1/progs/      (model skin PBR overrides)
-#  - mdl_skins/*.png  -> id1/mdl_skins/  (model emissive luma overrides)
-# The game loads materials from materials/*.yaml and textures from these loose
-# files (rt_load_file -> COM_LoadFile).
 $srcRoot = Join-Path $PSScriptRoot "vkpt\Source"
 $gameDir = Join-Path $BuildDir "id1"
 if (-not (Test-Path $gameDir)) { New-Item -ItemType Directory -Path $gameDir -Force | Out-Null }
@@ -66,8 +56,6 @@ foreach ($sub in @("textures", "progs", "mdl_skins")) {
     }
 }
 
-# Deploy runtime RT data files (blue noise + water normal) required by the
-# vkpt renderer; the renderer loads them from the game dir (id1/) at startup.
 foreach ($f in @("BlueNoise_LDR_RGBA_128.ktx2", "WaterNormal_n.ktx2")) {
     $src = Join-Path $srcRoot $f
     if (Test-Path $src) {

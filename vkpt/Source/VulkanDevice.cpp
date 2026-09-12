@@ -310,8 +310,6 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
         }
     }
 
-    // 4.7: the legacy (pre-Q2RTX) render path was removed; the Q2RTX-style core
-    // is the only renderer, so the shader-side switch is always enabled.
     gu->coreQ2RTX = 1u;
 
     if( drawInfo.pTexturesParams != nullptr )
@@ -778,10 +776,6 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
 
 
     {
-        // Q2RTX-style per-BSP-cluster light lists + adaptive shadow statistics.
-        // The lists themselves are uploaded by the game each frame (via
-        // rgUploadClusterLightLists) and copied to the device in
-        // Scene::SubmitForFrame -> LightManager::CopyFromStaging.
         {
             auto lightManager = scene->GetLightManager();
             lightManager->ResetLightStats(cmd, frameIndex, uniform->GetData()->frameId);
@@ -867,7 +861,7 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
 
                     memcpy(gr.shadowMapVP, shadowMapVP, 16 * sizeof(float));
                     gr.shadowMapDepthScale = shadowMapDepthScale;
-                    gr.godRaysIntensity = 8.0f; // +300% over the Q2RTX default (god_rays_intensity) so shafts are visible with rt_sun 1
+                    gr.godRaysIntensity = 8.0f;
                     gr.godRaysEccentricity = 0.75f;
                     gr.godRaysEnabled = 1u;
 
@@ -877,8 +871,6 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
             }
         }
 
-        // Q2RTX-style reflection/refraction pass (phase 4.4.3). The legacy
-        // vkpt refl/refr path was removed (4.7: only the Q2RTX renderer).
         if (uniform->GetData()->reflectRefractMaxDepth > 0)
         {
             pathTracer->TraceQ2ReflectionRefractionRays(params);
@@ -896,16 +888,11 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
             godRays->Filter(cmd, frameIndex);
         }
 
-        // Q2RTX-style gradient reproject runs BEFORE the lighting passes: it
-        // patches the RNG seed + G-buffer at gradient sample pixels so the
-        // lighting re-traces them with the previous frame's random numbers
-        // (noise cancels in the gradient comparison, clean dark areas).
         q2Denoiser->GradientReproject(cmd, frameIndex, uniform);
 
         pathTracer->TraceDirectllumination(params);
         pathTracer->TraceQ2Indirectllumination(params);
 
-        // Q2RTX-style ASVGF denoiser (the legacy SVGF path was removed).
         q2Denoiser->Denoise(cmd, frameIndex, uniform);
 
         tonemapping->CalculateExposure(cmd, frameIndex, uniform);
@@ -930,9 +917,6 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
             drawInfo.pLensFlareParams );
     }
 
-    // Q2RTX-style fog volumes are traced per ray in the primary/refl passes
-    // and accumulated in Q2FogAccum, blended by the ASVGF compositing (denoised
-    // and temporally consistent). The legacy post-pass was removed (4.7).
     imageComposition->Finalize(
         cmd, frameIndex, uniform.get(), tonemapping.get(), volumetric.get() );
 
@@ -948,8 +932,6 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
 
     FramebufferImageIndex accum = FB_IMAGE_INDEX_FINAL;
     {
-        // upscale the finalized (Q2RTX) image. FSR/DLSS remain available as
-        // upscalers; the Q2RTX TAAU is the default fallback.
         if (renderResolution.IsNvDlssEnabled())
         {
             accum = nvDlss->Apply(cmd, frameIndex,
@@ -970,7 +952,6 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
         }
         else
         {
-            // Q2RTX TAAU (default upscaler of the Q2RTX core)
             q2Denoiser->ApplyTAAU(cmd, frameIndex, uniform);
             accum = FramebufferImageIndex::FB_IMAGE_INDEX_UPSCALED_PING;
         }
@@ -1115,16 +1096,12 @@ void VulkanDevice::DrawFrame(const RgDrawFrameInfo *drawInfo)
     previousFrameTime = currentFrameTime;
     currentFrameTime = drawInfo->currentTime;
 
-    // stats overlay: read back the ray count accumulated by the last frame that
-    // used this frame index (BeginFrame waited on its fence), then reset the
-    // counters for the upcoming frame. MAX_FRAMES_IN_FLIGHT frames of latency.
     if (rayStats)
     {
         statsRays = rayStats->GetRays(frameIndex);
         rayStats->Reset(frameIndex);
     }
 
-    // smoothed FPS (fixed point x10, one decimal) for the stats overlay
     {
         const double dt = std::max(currentFrameTime - previousFrameTime, 0.0001);
         const float fps = static_cast<float>(1.0 / dt);
@@ -1267,10 +1244,6 @@ void VulkanDevice::UploadGeometry(const RgGeometryUploadInfo *uploadInfo)
 
     if (scene->DoesUniqueIDExist(uploadInfo->uniqueID))
     {
-        // A dynamic entity can legitimately be uploaded more than once per frame
-        // (e.g. during a level change / respawn its efrags can land in several
-        // visible leaves). Skipping the duplicate mirrors the light-manager dedup
-        // and keeps dynamicUniqueIDToSimpleIndex a bijection for this frame.
         if (uploadInfo->geomType == RG_GEOMETRY_TYPE_DYNAMIC && scene->DoesDynamicUniqueIDExist(uploadInfo->uniqueID))
         {
             return;
@@ -1443,14 +1416,6 @@ void vkpt::VulkanDevice::UploadTexturedAreaLight(const RgTexturedAreaLightUpload
         throw RgException(RG_WRONG_ARGUMENT, "Argument is null");
     }
 
-    // Resolve the RME (emission/luma) texture index from the light's material.
-    // The material's textures live in textureManager; LightManager doesn't have
-    // access to it, so the index is resolved here and passed down.
-    // EMPTY_TEXTURE_INDEX (material == RG_NO_MATERIAL, or a material with no
-    // emission texture) means "no mask": the caller then sets meanEmiss = 1.0
-    // and the whole polygon emits uniformly at lightInfo.color. The shader
-    // already handles textureIndex == 0 as mask = 1.0 (see Light.h), so unlike
-    // the rasterized-geometry path there is nothing to reject here.
     const MaterialTextures textures = textureManager->GetMaterialTextures(pLightInfo->material);
     const uint32_t textureIndex = textures.indices[MATERIAL_ROUGHNESS_METALLIC_EMISSION_INDEX];
 

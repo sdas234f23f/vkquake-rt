@@ -58,10 +58,6 @@ extern cvar_t rt_model_metal;
 
 #define MAX_MIPS 16
 
-// Steepness of the exponential falloff of a colour-synthesized ("color_emissive")
-// emissive mask, in units of "distance from the authored colour / threshold".
-// The mask is 1.0 at the authored colour and decays exponentially towards 0 at
-// the threshold (where it reaches exactly 0). Lower = softer/wider glow.
 #define RT_COLOR_EMISSIVE_FALLOFF 2.0f
 
 static int          numgltextures;
@@ -317,7 +313,6 @@ static void TexMgr_RT_SpecialFullbright (unsigned width, unsigned height, uint32
 	assert (rtspecial_target != NULL && rtspecial_info_albedoAlpha != NULL);
 	assert (rtspecial_info.size.width > 0 && rtspecial_info.size.height > 0);
 
-	// strange vkpt limitation
 	if (rtspecial_info.size.width != width || rtspecial_info.size.height != height)
 	{
 		Con_DWarning ("Ignoring fullbright of \"%s\", as it has different size with albedo", rtspecial_info_pRelativePath);
@@ -329,21 +324,12 @@ static void TexMgr_RT_SpecialFullbright (unsigned width, unsigned height, uint32
 
 	FullbrightToRME (width, height, (byte *)fullbright);
 
-	// If the base already has a Q2RTX-style .mat material (phase 4.5, applied
-	// when the base texture was loaded), rebuild it with the classic fullbright
-	// mask merged into the emissive channel. This keeps the .mat normals/
-	// gloss while letting fullbright pixels (buttons, light panels, runes)
-	// emit light -- without this, the .mat synthesis would overwrite the
-	// emissive material with emiss = 0 for these textures.
 	if (rtspecial_target->rtmaterial != RG_NULL_HANDLE)
 	{
 		if (TexMgr_ApplyMaterialFromMat (rtspecial_target, (unsigned *)rtspecial_info_albedoAlpha, (byte *)fullbright))
 			return;
 	}
 
-	// average emitted color (albedo * fullbright emission) for emissive area
-	// lights (buttons, light panels, runes that use the classic fullbright mask
-	// and have no Q2RTX .mat definition)
 	{
 		const byte *alb = (const byte *)rtspecial_info_albedoAlpha;
 		const byte *fb  = (const byte *)fullbright;
@@ -439,18 +425,6 @@ static void TexMgr_Imagelist_f (void)
 	Con_Printf ("%i textures %i pixels %1.1f megabytes\n", numgltextures, (int)texels, mb);
 }
 
-/*
-===============
-TexMgr_RTMatDump_f -- report applied RT material state of loaded textures
-
-Usage: rt_mat_dump [substring]
-Prints, for every loaded texture whose name contains <substring> (or every
-texture that carries RT material/emissive state when no argument is given),
-the authored materials.yaml values alongside the state actually baked into
-the gltexture at synthesis time. This works on already-loaded textures,
-unlike rt_mat_debug (which only prints during texture creation).
-===============
-*/
 static void TexMgr_RTMatDump_f (void)
 {
 	const char *filter = Cmd_Argc () > 1 ? Cmd_Argv (1) : NULL;
@@ -1091,55 +1065,22 @@ static void TexMgr_LoadImage32 (gltexture_t *glt, unsigned *data)
 		}
 	}
 
-	// Q2RTX-style .mat material (phase 4.5): if this texture has a material
-	// definition, replace the RT material with the synthesized PBR one
-	// (albedo from texture_base, RME from base.alpha/roughness, normal.alpha
-	// metallic and emissive, normal from texture_normals).
 	TexMgr_ApplyMaterialFromMat (glt, data, NULL);
 
 	SDL_UnlockMutex (texmgr_mutex);
 }
 
-/*
-================
-TexMgr_ApplyMaterialFromMat
-
-Builds the vkpt RGBA8 material textures from a Q2RTX-style .mat definition
-(phase 4.5) and replaces glt->rtmaterial with the result. Returns true if a
-material was applied.
-================
-*/
 static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoFallback, byte *fullbrightOverride)
 {
-	// The material key is the texture file path without extension, e.g.
-	// "textures/e1u1/foo" -- this matches the .yaml entry names (Q2RTX
-	// convention). Note: glt->rtname is the vkpt override path ("maps/...")
-	// and must NOT be used here.
 	rt_material_t *mat = RT_MAT_Find (glt->name);
 	if (!mat)
 		return false;
 
-	// A materials.yaml / .mat entry exists for this texture: the animated
-	// frame selection (R_DrawTextureChains_Multitexture) uses this flag to
-	// prefer the current animated frame as the light source when it carries
-	// its own material (e.g. +0basebtn off-state vs +abasebtn pressed glow).
 	glt->rthasmaterial = true;
 
-	// Apply the explicit "is_light" flag up front: materials.yaml entries that
-	// only carry "is_light: true" (no PBR textures -- e.g. model skins like
-	// "progs/flame2.mdl:frame0") hit the early-return below, so the flag must
-	// be set before it, otherwise r_alias.c never generates their emissive
-	// spherical lights.
 	glt->rtislight = mat->is_light;
-	// Surface lightstyle animation opt-out: a material with "light_styles:
-	// false" (e.g. a flickering lamp you want always-on full intensity) is
-	// immune to the surface lightstyle dimming applied in RT_AddEmissiveLight.
 	glt->rtlightstyles = mat->light_styles;
 
-	// Migrated texture_custom_info.txt flags (authored in materials.yaml).
-	// These must also be applied before the early-return below: many of the
-	// affected textures (projectiles, laser bolts, window glass, flat-shaded
-	// viewmodels) carry no PBR textures and would otherwise miss their flags.
 	if (mat->has_light_color)
 	{
 		VectorCopy (mat->light_color, glt->rtlightcolor);
@@ -1156,7 +1097,6 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	const int th = glt->height;
 	const int npix = tw * th;
 
-	// load and resize the material textures to the final size
 	int bw = 0, bh = 0;
 	byte *baseTex = RT_MAT_LoadTexture (mat, RT_MAT_TEX_BASE, &bw, &bh);
 	int nw = 0, nh = 0;
@@ -1173,7 +1113,6 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	if (emisTex) { emisBuf = (byte *)Mem_Alloc (npix * 4); stbir_resize_uint8 (emisTex, ew, eh, 0, emisBuf, tw, th, 0, 4); Mem_Free (emisTex); }
 	if (glossTex) { glossBuf = (byte *)Mem_Alloc (npix * 4); stbir_resize_uint8 (glossTex, gw, gh, 0, glossBuf, tw, th, 0, 4); Mem_Free (glossTex); }
 
-	// if the material specifies no base texture, fall back to the original one
 	if (!baseBuf && !albedoFallback)
 	{
 		if (normBuf) Mem_Free (normBuf);
@@ -1182,8 +1121,6 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		return false;
 	}
 
-	// does the base texture carry a real alpha channel (Q2RTX-style roughness
-	// packed in alpha)? JPGs have alpha = 255 everywhere, so they don't count.
 	qboolean baseHasAlpha = false;
 	if (baseBuf)
 	{
@@ -1197,11 +1134,6 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		}
 	}
 
-	// same for the normal map: Q2RTX-style packs metalness in its alpha. Many
-	// HD normal maps (progs/*, some textures) carry real (non-opaque) alpha
-	// that has NOTHING to do with metalness, so this only reports whether the
-	// alpha channel is usable at all -- it is consumed only when the material
-	// opts in via "metalness_from_normal_alpha: true".
 	qboolean normHasAlpha = false;
 	if (normBuf)
 	{
@@ -1220,39 +1152,11 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	byte *normal = (byte *)Mem_Alloc (npix * 4);
 
 	const float baseFactor = (mat->base_factor > 0.0f) ? mat->base_factor : 1.0f;
-	const float roughOverride = mat->roughness_override; // 0 = use map-based roughness
+	const float roughOverride = mat->roughness_override;
 
-	// Fallback roughness for materials with no explicit PBR data (bare
-	// materials.yaml entries for model skins, etc.). The brush world's
-	// TexMgr_RT_SpecialStart thread-locals are only valid on the thread that
-	// happens to run the world texture task, so model textures synthesized
-	// elsewhere (e.g. main-thread single-skin loads) would otherwise get a
-	// stale rough=0 -- i.e. perfectly mirrored surfaces. Derive the default
-	// from the owner model type instead, matching the cvar used when the
-	// geometry is uploaded (r_world.c / r_alias.c / r_sprite.c).
 	const qboolean isBrush = glt->owner && glt->owner->type == mod_brush;
 	const float defaultRough = isBrush ? CVAR_TO_FLOAT (rt_brush_rough) : CVAR_TO_FLOAT (rt_model_rough);
 
-	// light_brightness folding. Two distinct cases:
-	//
-	//  * MASKED brush TALs (brush surface with a real luma texture -- or a
-	//    color_emissive-synthesized mask, which lands in the very same RME
-	//    .b channel -- that is a light source): the RME .b channel doubles as
-	//    the visible emissive AND the NEE luma mask sampled by r_world.c.
-	//    Brightness is folded into that stored emission (emissScale) so the
-	//    lamp surface dims together with the light it casts; the color is
-	//    left authored and the shader dims through meanEmiss = brightness *
-	//    mean.
-	//  * Everything else (alias/sprite sources, uniform light_color-only
-	//    lamps): brightness scales the light COLOR only (rtlightcolor /
-	//    rtemissivecolor) and the emissive surface stays authored. Scaling
-	//    .b there would blow out e.g. explosion sprites that carry brightness
-	//    22 for their fake light.
-
-	// Emissive mask precedence: an authored "texture_emissive" always wins
-	// over "color_emissive". The decision is made on the KEY, not on whether
-	// the luma file loaded, so a missing/broken luma file cannot silently
-	// degrade into a colour-synthesized mask -- that is reported instead.
 	const qboolean has_luma_key = (mat->filename_emissive[0] != '\0');
 	const qboolean use_color_emissive = mat->has_color_emissive && !has_luma_key;
 	if (has_luma_key && !emisBuf)
@@ -1262,8 +1166,6 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 	const float emissScale = (isBrush && has_emis_mask && mat->is_light) ? mat->light_brightness : 1.0f;
 	const qboolean maskedTAL = (emissScale != 1.0f);
 
-	// average emitted color (albedo * emissive), used to generate emissive
-	// area lights (Q2RTX-style triangle lights) in r_world.c
 	glt->rtemissive = false;
 	glt->rtemissivecolor[0] = 0.0f;
 	glt->rtemissivecolor[1] = 0.0f;
@@ -1277,7 +1179,6 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 
 	for (int i = 0; i < npix; i++)
 	{
-		// albedo (sRGB), alpha = opaque (or mask later)
 		const byte *src = baseBuf ? baseBuf + i * 4 : (byte *)albedoFallback + i * 4;
 		int r = (int)(src[0] * baseFactor);
 		int g = (int)(src[1] * baseFactor);
@@ -1287,9 +1188,6 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		albedo[i * 4 + 2] = CLAMP (0, b, 255);
 		albedo[i * 4 + 3] = 255;
 
-		// roughness priority: roughness_override: (explicit) beats the gloss
-		// map (1 - gloss) beats base alpha (Q2RTX packing) beats the model-type
-		// default (rt_brush_rough / rt_model_rough).
 		float rough;
 		if (roughOverride > 0.0f)
 			rough = roughOverride;
@@ -1300,13 +1198,6 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		else
 			rough = defaultRough;
 
-		// metallic. An authored "metalness_factor:" value is the ABSOLUTE
-		// metallic value and wins over the normal map. The old Q2RTX-style
-		// packing (metal = normal.alpha/255 * factor) is opt-in per material
-		// via "metalness_from_normal_alpha: true" -- needed because many HD
-		// normal maps (e.g. progs/v_axe.mdl) carry real alpha data that is NOT
-		// metalness, which made a mirror out of every skin that had one. With
-		// no factor authored the packing uses factor = 1.0 (raw alpha).
 		float metal = 0.0f;
 		if (mat->has_metalness_factor || mat->metalness_from_normal_alpha)
 		{
@@ -1317,9 +1208,6 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 				metal = factor;
 		}
 
-		// emissive: from the emissive texture, synthesized by colour match
-		// (color_emissive), or merged from the classic fullbright mask
-		// (fullbrightOverride)
 		float emiss = 0.0f;
 		if (emisBuf)
 		{
@@ -1328,30 +1216,12 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		}
 		if (fullbrightOverride)
 		{
-			// classic fullbright mask in RME layout (after FullbrightToRME):
-			// channel 2 carries the emission value
 			const float fb = fullbrightOverride[i * 4 + 2] / 255.0f;
 			if (fb > emiss)
 				emiss = fb;
 		}
 		else if (!emisBuf && use_color_emissive)
 		{
-			// color_emissive: synthesize the emissive mask from the base
-			// texture instead of a hand-painted *_luma file -- pixels whose
-			// colour is close to the authored colour become emissive (e.g. a
-			// red button glows, the grey metal around it does not), anything
-			// beyond color_emissive_threshold stays dark. Never reached when
-			// the material authors a texture_emissive: the luma file owns the
-			// mask.
-			// The distance is the RGB-space distance divided by sqrt(3), so
-			// the threshold reads as a 0..1 fraction of the colour cube; it is
-			// compared squared to avoid the sqrt.
-			// The mask then FADES with that distance rather than cutting off
-			// at a hard edge: the authored colour is fully white and the value
-			// decays exponentially to black as the pixel approaches the
-			// threshold (RT_COLOR_EMISSIVE_FALLOFF), so the glow blends into
-			// the surrounding art instead of looking like a texture cut out
-			// with scissors and pasted on top.
 			const float dr = src[0] / 255.0f - mat->color_emissive[0];
 			const float dg = src[1] / 255.0f - mat->color_emissive[1];
 			const float db = src[2] / 255.0f - mat->color_emissive[2];
@@ -1359,23 +1229,14 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 			const float d2 = dr * dr + dg * dg + db * db;
 			if (d2 <= 3.0f * thr * thr)
 			{
-				// dnorm: 0.0 at the authored colour, 1.0 at the threshold
 				const float dnorm = (thr > 0.0f) ? sqrtf (d2 / 3.0f) / thr : 0.0f;
 				const float k = RT_COLOR_EMISSIVE_FALLOFF;
 				const float tail = expf (-k);
-				// the exponential is renormalized so the mask lands on exactly
-				// 0.0 at the threshold (the raw exponential is still well above
-				// zero there) and on exactly 1.0 at the authored colour -- no
-				// visible seam at the cutoff
 				emiss = (expf (-k * dnorm) - tail) / (1.0f - tail);
 				emiss *= mat->emissive_factor;
 			}
 		}
 
-		// accumulate the average emitted color (albedo * emissive) for the
-		// emissive area-light generation. This always uses the authored
-		// (pre-brightness) emission: for masked TALs the brightness lives in
-		// the stored mask/mean (below), for everything else in the color.
 		if (emiss > 0.0f)
 		{
 			emissR += albedo[i * 4 + 0] * emiss;
@@ -1383,24 +1244,8 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 			emissB += albedo[i * 4 + 2] * emiss;
 		}
 
-		// Average AUTHORED mask, before light_brightness folding and the byte
-		// clamp. It is the weight that rtemissivecolor was divided by: the
-		// average emitted color is a MEAN over every pixel of the texture, so
-		// a small bright mask (a 5%-coverage lamp) dilutes it towards black,
-		// while the NEE shader multiplies that diluted average by the mask's
-		// own mean (meanEmiss) -- emitting the square of the intended flux.
-		// Dividing the color by the authored mean puts the mask's coverage
-		// back into meanEmiss where it belongs, so a synthesized (color_
-		// emissive) light ends up as bright as an equivalent texture_emissive
-		// one with the same luma and light_brightness.
 		emissMeanBase += emiss;
 
-		// Masked TALs bake light_brightness into the stored RME emission so
-		// the visible surface glow AND the NEE luma mask scale together;
-		// clamped to 1 to match the byte storage (the mean below is computed
-		// from this same stored value, keeping the shader's mask
-		// normalization unbiased). All other materials store the authored
-		// emission unchanged (emissScale == 1).
 		float emissOut = emiss * emissScale;
 		if (maskedTAL && emissOut > 1.0f)
 			emissOut = 1.0f;
@@ -1411,7 +1256,6 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		rme[i * 4 + 2] = CLAMP (0, (int)(emissOut * 255), 255);
 		rme[i * 4 + 3] = 255;
 
-		// normal map (bump_scale applied around 128)
 		if (normBuf)
 		{
 			float nx = (normBuf[i * 4 + 0] - 128.0f) * mat->bump_scale + 128.0f;
@@ -1443,30 +1287,11 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		glt->rtemissivemean = (float)(emissMean / npix);
 		glt->rtemissivemeanbase = (float)(emissMeanBase / npix);
 
-		// color_emissive synthesized a real per-pixel mask into the RME
-		// emissive channel, exactly like a texture_emissive (luma) file would.
-		// Expose it as such so r_world.c builds a MASKED area light that
-		// follows the mask instead of a uniform light over the whole face.
-		// Only when no texture_emissive is authored -- the luma file always
-		// owns the mask (see the precedence block above).
 		if (use_color_emissive)
 			glt->rtemissivetex = true;
 
-		// Apply the material's light_brightness multiplier so emissive lights
-		// (is_light: true without light_color, e.g. flame skins) scale exactly
-		// like curated light_color lights do (see the has_light_color path
-		// above). rtemissivecolor is only consumed by light generation
-		// (r_world.c / r_alias.c), so this does not brighten the surface
-		// emissive itself.
 		if (maskedTAL && mat->light_brightness != 1.0f)
 		{
-			// Masked TAL: brightness was already folded into the stored RME
-			// emission above (mask AND mean are both scaled), so the color
-			// must stay authored -- the shader's NEE = color * meanEmiss now
-			// dims through the mean. Undo the brightness the has_light_color
-			// path applied to rtlightcolor earlier (ModifyColorValue scales
-			// HSV value linearly, so 1/brightness restores the authored
-			// color); skipping this would double-dim the light (color * mean).
 			if (glt->rthaslightcolor)
 				ModifyColorValue (glt->rtlightcolor, 1.0f / mat->light_brightness);
 		}
@@ -1474,12 +1299,8 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 			ModifyColorValue (glt->rtemissivecolor, mat->light_brightness);
 	}
 
-	// explicit "is_light" flag: this texture may generate static emissive
-	// area lights (gated on rtislight in r_world.c)
 	glt->rtislight = mat->is_light;
 
-	// 4.6 debug: report which material was applied, which inputs loaded, and
-	// the min/avg/max of the synthesized RME channels (rough/metal/emis).
 	extern cvar_t rt_mat_debug;
 	if (CVAR_TO_BOOL (rt_mat_debug))
 	{
@@ -1690,10 +1511,6 @@ gltexture_t *TexMgr_LoadImage (
 		glt->rtname[0] = '\0';
 	}
 
-	// TexMgr_NewTexture reuses pooled gltexture_t objects, so any RT flags from
-	// a previous load must be cleared here before TexMgr_ApplyMaterialFromMat
-	// (called from TexMgr_LoadImage8/32 below) re-populates them. Textures
-	// without a material otherwise retain stale values.
 	glt->rtlightcolor[0] = glt->rtlightcolor[1] = glt->rtlightcolor[2] = 0.0f;
 	glt->rthaslightcolor = false;
 	glt->rtupoffset = 0.0f;
@@ -1706,8 +1523,8 @@ gltexture_t *TexMgr_LoadImage (
 	glt->rtemissivemeanbase = 0.0f;
 	glt->rtemissivetex = false;
 	glt->rtislight = false;
-	glt->rtlightstyles = true;   // default: honor lightstyle animation unless the material opts out
-	glt->rthasmaterial = false;  // TexMgr_ApplyMaterialFromMat sets this when a material applies
+	glt->rtlightstyles = true;
+	glt->rthasmaterial = false;
 
 	// upload it
 	switch (glt->source_format)

@@ -36,7 +36,6 @@ struct ShTriangle
     float   geomEmission;
     float   geomMetallicity;
     uint    portalIndex;
-    // BSP cluster of the triangle (Q2RTX per-cluster light lists). ~0u for sky.
     uint    cluster;
 };
 
@@ -64,7 +63,6 @@ struct ShHitInfo
     uint    instCustomIndex;
     uint    geometryInstanceFlags;
     uint    portalIndex;
-    // BSP cluster of the hit triangle (Q2RTX per-cluster light lists).
     uint    cluster;
 };
 

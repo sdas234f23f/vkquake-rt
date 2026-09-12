@@ -482,21 +482,17 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 		Mod_LoadSpriteModel (mod, buf);
 		break;
 
-	case BSPVERSION:          // classic Quake "29"
-	case BSP2VERSION_2PSB:    // RMQ "2PSB"
-	case BSP2VERSION_BSP2:    // "BSP2"
-	case 0x20343651:          // Quake64 "Q64 " read little-endian
+	case BSPVERSION:
+	case BSP2VERSION_2PSB:
+	case BSP2VERSION_BSP2:
+	case 0x20343651:
 		Mod_LoadBrushModel (mod, loadname, buf);
 		break;
 
 	default:
-		// Unknown format -- e.g. MD3 ("IDP3") or MD5 models shipped by HD
-		// texture packs. Don't abort the game or the
-		// level: warn, skip the model, and let callers treat it as missing
-		// (the renderer skips entities with no model).
 		Con_DWarning ("Mod_LoadModel: %s has unknown model format (0x%08X); skipping\n",
 		              mod->name, (unsigned)mod_type);
-		mod->needload = true; // retry on next request, fail gracefully
+		mod->needload = true;
 		Mem_Free (buf);
 		return NULL;
 	}
@@ -2456,8 +2452,6 @@ static void Mod_LoadBrushModel (qmodel_t *mod, const char *loadname, void *buffe
 		break;
 	}
 
-	// Q2RTX-style .mat map-specific materials (phase 4.5); must be loaded
-	// before the world textures are uploaded
 	if (sv.modelname[0] && !q_strcasecmp (loadname, sv.name))
 		RT_MAT_ChangeMap (loadname);
 
@@ -2720,10 +2714,6 @@ typedef struct load_skin_task_args_s
 	byte    **ppskintypes;
 } load_skin_task_args_t;
 
-// A skin that has a Q2RTX .mat material with an emissive (luma) texture must
-// use that luma texture as its sole emissive source -- the classic _glow
-// fullbright mask is skipped, so model lighting stays consistent with world
-// and sprite luma lighting.
 static qboolean Mod_SkinHasLumaMaterial (const char *skinName)
 {
 	rt_material_t *mat = RT_MAT_Find (skinName);
@@ -2969,7 +2959,7 @@ void Mod_SetExtraFlags (qmodel_t *mod)
 	if (!mod)
 		return;
 
-	mod->flags &= (0xFF | MF_HOLEY | MF_RT_LUMA); // only preserve first byte, plus MF_HOLEY and MF_RT_LUMA
+	mod->flags &= (0xFF | MF_HOLEY | MF_RT_LUMA);
 
 	if (mod->type == mod_alias)
 	{

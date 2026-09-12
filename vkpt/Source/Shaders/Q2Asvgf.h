@@ -24,14 +24,11 @@
 #ifndef Q2_ASVGF_H_
 #define Q2_ASVGF_H_
 
-// Q2RTX-style ASVGF denoiser, adapted to the vkpt framebuffer/uniform framework.
-//
 // The ASVGF works on three lighting channels:
 //   - LF:  indirect diffuse, stored as luma spherical harmonics (4 coeffs) in
 //          YCoCg color space. 1/3 resolution.
 //   - HF:  direct diffuse irradiance, packed RGBE.
 //   - SPEC: demodulated specular irradiance, packed RGBE.
-// These are produced from the vkpt ReSTIR outputs by CmQ2Adapter.comp.
 
 #define Q2_GRAD_DWN 3
 #define Q2_STRATUM_OFFSET_SHIFT 3
@@ -44,11 +41,6 @@
 #define Q2_STORAGE_SCALE_SPEC 32.0
 #define Q2_STORAGE_SCALE_HDR 128.0
 
-// ASVGF tuning parameters (Q2RTX cvar defaults). Antilag restored to the
-// Q2RTX defaults as a ghosting experiment: lower antilag kept history too long
-// and caused smearing of moving surfaces. The spatial filters match the Q2RTX
-// defaults (flt_atrous_depth 0.5, flt_atrous_lum_hf 16,
-// flt_atrous_normal_spec 1) to maximize dark-area noise removal.
 #define Q2_FLT_ANTILAG_HF 1.0
 #define Q2_FLT_ANTILAG_LF 0.2
 #define Q2_FLT_ANTILAG_SPEC 2.0
@@ -91,7 +83,6 @@ const float Q2_WAVELET_KERNEL[2][2] = {
 #define Q2_STORE_SH(img_shY, img_CoCg, p, sh) { imageStore(img_shY, p, (sh).shY); imageStore(img_CoCg, p, vec4((sh).CoCg, 0.0, 0.0)); }
 
 // Q2RTX-style SH: luma in 4 SH coefficients + chroma (YCoCg).
-// Named Q2SH to avoid a clash with the vkpt SH struct from SphericalHarmonics.h.
 struct Q2SH
 {
     vec4 shY;
@@ -123,8 +114,6 @@ Q2SH q2MixSH(Q2SH a, Q2SH b, float s)
 // Convert an RGB irradiance SH (per-channel L00,L1-1,L10,L11) into the
 // Q2RTX YCoCg luma-SH + chroma representation used by the LF channel.
 // shY = luma coefficients, CoCg = chroma from the DC (L00) terms.
-//
-// NOTE on coefficient order: vkpt stores SH as (L00, L1-1, L10, L11) in
 // x,y,z,w per color channel, while the Q2RTX luma-SH is stored as
 // vec4(L11, L1-1, L10, L00). The order must be swapped here.
 Q2SH q2IrradianceToSH(const vec4 shR, const vec4 shG, const vec4 shB)

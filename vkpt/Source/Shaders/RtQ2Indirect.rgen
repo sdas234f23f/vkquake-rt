@@ -1,14 +1,5 @@
 #version 460
 
-// Q2RTX-style single-pass indirect illumination (NEE).
-//
-// Port of Q2RTX indirect_lighting.rgen to the vkquake-rt pipeline:
-//  - one GGX specular bounce per pixel (no ReSTIR, no temporal/spatial reuse)
-//  - direct illumination at the bounce hit is next-event-estimation from the
-//    per-cell light list (CDF + adaptive shadow statistics) plus the sun
-//  - the gathered radiance shades the primary surface (diffuse -> LF(SH),
-//    specular -> added to the SPEC channel)
-
 layout (constant_id = 0) const uint maxAlbedoLayerCount = 0;
 #define MATERIAL_MAX_ALBEDO_LAYERS maxAlbedoLayerCount
 #define FORCE_EVALBRDF_GGX_LOOSE
@@ -27,27 +18,15 @@ layout (constant_id = 0) const uint maxAlbedoLayerCount = 0;
 #include "Q2Asvgf.h"
 #include "Q2LightLists.h"
 
-// RNG salts for this pass (distinct from the direct pass 200..212 and from
-// the specular-bounce salt 13, so the bounce light choice is independent).
-#define Q2_RNG_INDIR_CELL_SELECT 220   // 220, 221, 222
-#define Q2_RNG_INDIR_LIGHT_POINT 223   // 223, 224
+#define Q2_RNG_INDIR_CELL_SELECT 220
+#define Q2_RNG_INDIR_LIGHT_POINT 223
 #define Q2_RNG_INDIR_SUN_DISK    225
-// Second diffuse bounce uses its own salt range so its light choice is
-// independent from the first bounce's NEE.
-#define Q2_RNG_INDIR2_CELL_SELECT 230  // 230, 231, 232
-#define Q2_RNG_INDIR2_LIGHT_POINT 233  // 233, 234
+#define Q2_RNG_INDIR2_CELL_SELECT 230
+#define Q2_RNG_INDIR2_LIGHT_POINT 233
 #define Q2_RNG_INDIR2_SUN_DISK    235
 
-// Q2RTX kills indirect fireflies from sphere lights by limiting their solid
-// angle at bounces (path_tracer_rgen.h get_direct_illumination:
-// max_solid_angle = 0.02 for bounce >= 1). Without it, the tiny torch /
-// muzzle-flash spheres (0.8 units radius, often very close to walls) produce
-// huge indirect estimates that the 1/3-res LF channel renders as blocky
-// square glows that look like they light half a wall.
 #define Q2_INDIR_MAX_SPHERE_SOLID_ANGLE 0.02
 
-// v -- direction to viewer
-// n -- surface normal
 vec3 getSpecularBounce(const uint seed, uint bounceIndex,
                        const vec3 n, const float roughness, const vec3 surfSpecularColor,
                        const vec3 v,
@@ -57,9 +36,6 @@ vec3 getSpecularBounce(const uint seed, uint bounceIndex,
     return sampleSmithGGX( n, v, roughness, u[ 0 ], u[ 1 ], oneOverSourcePdf );
 }
 
-// Mirrors the original RtRaygenIndirectInit getDiffuseBounce: a Lambertian
-// bounce direction. The salt (RANDOM_SALT_DIFF_BOUNCE = 8 + bounceIndex) is
-// distinct from the specular-bounce salt (12 + bounceIndex).
 vec3 getDiffuseBounce(const uint seed, uint bounceIndex,
                       const vec3 n, out float oneOverSourcePdf)
 {
@@ -68,8 +44,6 @@ vec3 getDiffuseBounce(const uint seed, uint bounceIndex,
 }
 
 #define FIRST_BOUNCE_MIP_BIAS 0
-// The original traces the second (diffuse) bounce with a large MIP bias so the
-// far-away indirect lighting is sampled from a very blurred (stable) MIP.
 #define SECOND_BOUNCE_MIP_BIAS 32.0
 
 Surface traceBounce(const vec3 originPosition, float originRoughness, uint originInstCustomIndex,
@@ -90,18 +64,6 @@ Surface traceBounce(const vec3 originPosition, float originRoughness, uint origi
         bounceDir );
 }
 
-// Mirrors the original RtRaygenIndirectInit processSecondDiffuseBounce: a
-// second diffuse bounce off the first bounce hit, gathering
-// directIllumination * albedo at the second hit and weighting by
-// the diffuse-bounce pdf. This is what makes emissive surfaces (lava) spread
-// their color through the scene: a ray that misses the lava on the first
-// bounce gets a second chance to hit it.
-//
-// Note: the bounce-hit emission term (boostEmissionChroma(hitSurf.emission *
-// hitSurf.albedo)) is intentionally dropped: luma-emissive surfaces now have
-// dedicated NEE (textured area) lights, so returning the raw emission again on
-// a bounce-hit double-counts that light. The surface's self-brightness is
-// still added on the screen via screenEmission (RaygenPrimary).
 vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 bounceDir,
                                 float oneOverPdf)
 {
@@ -111,13 +73,9 @@ vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 
 
     if ( hitSurf.isSky )
     {
-        // Prefiltered sky (high LOD): the diffuse bounce sees the sun disc
-        // smeared over a large solid angle -> no fireflies at high brightness.
         return getSkyFilteredMultiplied( bounceDir, SKY_DIFFUSE_BOUNCE_LOD ) * oneOverPdf;
     }
 
-    // Direct illumination at the second hit (bounce = 2). Same cluster-light
-    // NEE as the first bounce but with the INDIR2 RNG salts.
     const bool isGradient = q2GetIsGradient( ivec2( gl_LaunchIDEXT.xy ) );
     const uint cluster    = hitSurf.cluster;
 
@@ -149,8 +107,6 @@ vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 
             LightSample light =
                 sampleLight( lightSources[ lightIndex ], hitSurf.position, pointRnd );
 
-            // Q2RTX firefly clamp: cap the solid angle of sphere/spot lights
-            // at the bounce hit (see Q2_INDIR_MAX_SPHERE_SOLID_ANGLE).
             if ( lightSources[ lightIndex ].lightType == LIGHT_TYPE_SPHERE ||
                  lightSources[ lightIndex ].lightType == LIGHT_TYPE_SPOT )
             {
@@ -162,11 +118,6 @@ vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 
                 const float vis = traceVisibility( hitSurf, light.position, lightIndex );
                 rayStatsAdd( RAY_STATS_CATEGORY_SHADOW, 1 );
 
-                // Adaptive shadow statistics for the next frames' CDF. Only
-                // triangle / textured-area (polygonal) lights accumulate, like
-                // Q2RTX; their per-cluster slots are the stable ones (static
-                // luma-emissive surfaces), so the counters stay attributed to
-                // the right light.
                 if ( lightSources[ lightIndex ].lightType == LIGHT_TYPE_TRIANGLE ||
                      lightSources[ lightIndex ].lightType == LIGHT_TYPE_TEXTURED_AREA )
                 {
@@ -180,7 +131,6 @@ vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 
         }
     }
 
-    // Sun at the second hit.
     if ( globalUniform.directionalLightExists != 0 )
     {
         const DirectionalLight sun =
@@ -195,7 +145,7 @@ vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 
             rayStatsAdd( RAY_STATS_CATEGORY_SHADOW, 1 );
 
             vec3 d, s;
-            shade( hitSurf, sunLight, 1.0, d, s ); // pdf = 1 (sun is always sampled)
+            shade( hitSurf, sunLight, 1.0, d, s );
             directDiffuse += d * sunVis;
         }
     }
@@ -204,9 +154,6 @@ vec3 processSecondDiffuseBounce(const uint seed, const Surface surf, const vec3 
     return reflected * oneOverPdf;
 }
 
-// Shade the primary surface with the radiance gathered at the bounce hit.
-// Mirrors the old Final pass' shade(): the "sample" is a point light at
-// (hitPos) with radiance (hitRadiance), weighted by the bounce pdf.
 void q2ShadeIndirect(const Surface surf, const vec3 hitPos, const vec3 hitRadiance,
                      float oneOverPdf, out vec3 diffuse, out vec3 specular)
 {
@@ -235,9 +182,6 @@ void main()
 {
     const ivec2 pix = ivec2( gl_LaunchIDEXT.xy );
 
-    // Gradient sample pixels carry the previous frame's RNG seed (patched by
-    // the Q2RTX-style gradient reproject) so this pass re-traces them with the
-    // same random numbers as the previous frame.
     const uint seed = texelFetch( framebufQ2RngSeed_Sampler, pix, 0 ).r;
 
     Surface surf = fetchGbufferSurface( pix );
@@ -249,7 +193,6 @@ void main()
         return;
     }
 
-    // 1) One GGX specular bounce (Q2RTX indirect).
     float oneOverSourcePdf;
     const vec3 bounceDir = getSpecularBounce(
         seed, 1, surf.normal, surf.roughness, surf.specularColor, surf.toViewerDir,
@@ -259,22 +202,15 @@ void main()
         surf.position + surf.normalGeom * 0.01,
         surf.roughness, surf.instCustomIndex, bounceDir, FIRST_BOUNCE_MIP_BIAS );
 
-    // 2) Radiance gathered at the bounce hit.
     vec3 hitPos;
     vec3 hitRadiance;
     if ( hitSurf.isSky )
     {
         hitPos      = surf.position + bounceDir * MAX_RAY_LENGTH;
-        // Prefiltered sky with a roughness-based LOD (standard PBR IBL):
-        // rough surfaces sample a blurred env, so a bright sun disc cannot
-        // turn a single GGX sample into a firefly.
         hitRadiance = getSkyFilteredMultiplied( bounceDir, surf.roughness * ( SKY_MIP_COUNT - 1.0 ) );
     }
     else
     {
-        // Direct illumination at the hit (Q2RTX direct-at-hit, bounce=1):
-        // NEE from the per-cluster light list with adaptive shadow statistics.
-        // The bounce hit's BSP cluster comes from its triangle (Q2RTX).
         const bool isGradient = q2GetIsGradient( pix );
         const uint cluster    = hitSurf.cluster;
 
@@ -306,8 +242,6 @@ void main()
                 LightSample light =
                     sampleLight( lightSources[ lightIndex ], hitSurf.position, pointRnd );
 
-                // Q2RTX firefly clamp: cap the solid angle of sphere/spot lights
-                // at the bounce hit (see Q2_INDIR_MAX_SPHERE_SOLID_ANGLE).
                 if ( lightSources[ lightIndex ].lightType == LIGHT_TYPE_SPHERE ||
                      lightSources[ lightIndex ].lightType == LIGHT_TYPE_SPOT )
                 {
@@ -319,11 +253,6 @@ void main()
                     const float vis = traceVisibility( hitSurf, light.position, lightIndex );
                     rayStatsAdd( RAY_STATS_CATEGORY_SHADOW, 1 );
 
-                    // Adaptive shadow statistics for the next frames' CDF. Only
-                    // triangle / textured-area (polygonal) lights accumulate, like
-                    // Q2RTX; their per-cluster slots are the stable ones (static
-                    // luma-emissive surfaces), so the counters stay attributed to
-                    // the right light.
                     if ( lightSources[ lightIndex ].lightType == LIGHT_TYPE_TRIANGLE ||
                          lightSources[ lightIndex ].lightType == LIGHT_TYPE_TEXTURED_AREA )
                     {
@@ -337,7 +266,6 @@ void main()
             }
         }
 
-        // Sun at the hit (Q2RTX get_sunlight at the bounce).
         if ( globalUniform.directionalLightExists != 0 )
         {
             const DirectionalLight sun =
@@ -352,14 +280,11 @@ void main()
                 rayStatsAdd( RAY_STATS_CATEGORY_SHADOW, 1 );
 
                 vec3 d, s;
-                shade( hitSurf, sunLight, 1.0, d, s ); // pdf = 1 (sun is always sampled)
+                shade( hitSurf, sunLight, 1.0, d, s );
                 directDiffuse += d * sunVis;
             }
         }
 
-        // Second diffuse bounce (mirrors original processIndirect with
-        // indirSecondBounce enabled): gives emissive surfaces a second chance
-        // to be hit by a ray, spreading their color (lava) through the scene.
         if ( globalUniform.indirSecondBounce != 0u )
         {
             float oneOverPdfSecond;
@@ -369,29 +294,23 @@ void main()
                 seed, hitSurf, bounceDirSecond, oneOverPdfSecond );
         }
 
-        // The original clamps the accumulated diffuse irradiance to avoid
-        // fireflies from bright emissive / light-grid samples.
         directDiffuse = clamp( directDiffuse, vec3( 0.0 ), vec3( 50.0 ) );
 
         hitPos = hitSurf.position;
         hitRadiance = boostChroma( directDiffuse * hitSurf.albedo );
     }
 
-    // 3) Shade the primary surface with the gathered radiance.
     vec3 diffuse, specular;
     q2ShadeIndirect( surf, hitPos, hitRadiance, oneOverSourcePdf, diffuse, specular );
 
-    // 4) Write the indirect results (same format as the old Final pass).
     {
         const vec3 direct = texelFetchUnfilteredSpecular( pix );
-        // save indirect hit distance, if brighter than the direct light
         if ( getLuminance( direct ) < getLuminance( specular ) )
         {
             imageStore(
                 framebufViewDirection, pix, vec4( -surf.toViewerDir, length( hitPos - surf.position ) ) );
         }
 
-        // demodulate for denoising
         imageStoreUnfilteredSpecular( pix,
                                       direct + demodulateSpecular( specular, surf.specularColor ) );
     }

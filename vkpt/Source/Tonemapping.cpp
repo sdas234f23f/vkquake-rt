@@ -87,16 +87,6 @@ void vkpt::Tonemapping::CalculateExposure(VkCommandBuffer cmd, uint32_t frameInd
     {
         ShTonemapping *tm = static_cast<ShTonemapping *>(mappedTmBuffer);
 
-        // Overall look is ~1.9 stops darker than the stock rtgl defaults, with
-        // auto-exposure muted in dark scenes. tmExposureBias scales both the
-        // tone-curve path and the Reinhard auto-exposure path (it is added to
-        // the output log-luminance and to the AE scaled luminance), so the
-        // -2.8 value dims the whole image uniformly. tmMinLuminance is raised
-        // well above the stock 0.0002 so the adaptation target floor sits
-        // higher: scenes darker than the floor are no longer compensated back
-        // up by the AE blend. The dark->bright adaptation speed is halved so
-        // the image brightens more slowly when leaving a dark area. A slightly
-        // higher tmReinhard strengthens the contrast of the auto-exposure path.
         tm->tmExposureBias     = -2.8f;
         tm->tmExposureSpeedDown = 1.0f;
         tm->tmExposureSpeedUp   = 1.0f;

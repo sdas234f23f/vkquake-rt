@@ -24,12 +24,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 
 #ifdef _MSC_VER
-// Disable warning C4505: Unused functions
 #pragma warning(push)
 #pragma warning(disable : 4505)
 #endif
 
-// STB_IMAGE config (phase 4.5: JPG/PNG decode for HD texture packs):
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
 #define STBI_NO_BMP
@@ -39,7 +37,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define STBI_NO_PIC
 #define STBI_NO_PNM
 #define STBI_NO_LINEAR
-// plug our Mem_Alloc in stb_image:
 #define STBI_MALLOC(sz)	     Mem_Alloc (sz)
 #define STBI_REALLOC(p, newsz) Mem_Realloc (p, newsz)
 #define STBI_FREE(p)	     Mem_Free (p)
@@ -112,15 +109,6 @@ static inline int Buf_GetC (stdio_buffer_t *buf)
 	return buf->buffer[buf->pos++];
 }
 
-/*
-============
-Image_LoadImage
-
-returns a pointer to hunk allocated RGBA data
-
-search order: tga pcx jpg png
-============
-*/
 byte *Image_LoadImage (const char *name, int *width, int *height)
 {
 	FILE *f;

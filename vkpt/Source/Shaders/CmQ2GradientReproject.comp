@@ -22,15 +22,6 @@
 // the vkpt framework. In every 3x3 stratum a single surface is matched to the
 // previous frame (via the motion vector and depth/normal similarity) and the
 // previous frame's HF/SPEC luminances are stored as the "gradient sample".
-//
-// EXACTLY like Q2RTX: this shader runs BEFORE the lighting passes and patches
-// the current frame G-buffer at the gradient sample pixel with the PREVIOUS
-// frame's RNG seed and surface parameters (normal, base color, metallic,
-// position, view direction). The lighting passes then re-trace that pixel with
-// the previous frame's random number sequence, so in a static scene the
-// re-traced lighting equals the previous frame's lighting -> the HF/SPEC
-// gradient (computed later in CmQ2GradientImg) is ~0 -> the temporal antilag
-// stays off and the history accumulates (clean dark areas).
 
 #version 460
 
@@ -95,7 +86,6 @@ void main()
             }
 
             // Surface matching: depth and geometric normal similarity.
-            // (Q2RTX also compares the cluster index - vkpt has no clusters.)
             float depth_curr = texelFetch(framebufQ2ViewDepth_Sampler, p, 0).r;
             float depth_prev = texelFetch(framebufQ2ViewDepth_Prev_Sampler, pp, 0).r;
             vec3 geo_normal_curr = texelFetchNormalGeometry(p);
@@ -139,26 +129,11 @@ void main()
     imageStore(framebufQ2GradSmplPos, pos_grad, uvec4(gradient_idx));
     imageStore(framebufQ2GradHFSpecPing, pos_grad, vec4(found_prev_lum, 0.0, 0.0));
 
-    // ------------------------------------------------------------------ //
-    // Patch the G-buffer at the gradient sample (Q2RTX asvgf_gradient_    //
-    // reproject.comp). The lighting passes (initial reservoirs, direct,   //
-    // indirect) run after this shader and read the patched values, so at  //
-    // the gradient sample they re-trace with the PREVIOUS frame's random  //
-    // number sequence and the previous frame's surface parameters. In a   //
-    // static scene the re-traced lighting equals the previous frame's     //
-    // lighting -> the HF/SPEC gradient is ~0 -> antilag off -> clean.     //
-    // ------------------------------------------------------------------ //
-
     const ivec2 ipos = pos_grad * Q2_GRAD_DWN + found_offset;
 
-    // RNG seed: identical random numbers to the previous frame at this
-    // surface (same light selection, same light sample, same bounce
-    // direction, same shadow rays -> the noise cancels in the comparison).
     imageStore(framebufQ2RngSeed, ipos,
                texelFetch(framebufQ2RngSeed_Prev_Sampler, found_pos_prev, 0));
 
-    // Surface parameters from the previous frame (normal, metallic/roughness,
-    // exact surface position + instance index, view direction).
     imageStore(framebufNormal, ipos,
                texelFetch(framebufNormal_Prev_Sampler, found_pos_prev, 0));
     imageStore(framebufMetallicRoughness, ipos,
@@ -166,12 +141,6 @@ void main()
     imageStore(framebufSurfacePosition, ipos,
                texelFetch(framebufSurfacePosition_Prev_Sampler, found_pos_prev, 0));
 
-    // View direction: like Q2RTX patch_position, recompute it from the current
-    // camera for primary surfaces. The re-traced gradient sample must reflect
-    // the current view, otherwise specular changes on camera rotation are not
-    // detected and the antilag stays off (specular ghosting). For reflections
-    // and refractions the stored direction is the bounce direction (not camera
-    // relative), so keep the previous frame's value.
     vec4 view_direction = texelFetch(framebufViewDirection_Prev_Sampler, found_pos_prev, 0);
     if (wasOnlyPrimary(texelFetch(framebufThroughput_Sampler, ipos, 0).a))
     {
@@ -180,13 +149,11 @@ void main()
     }
     imageStore(framebufViewDirection, ipos, view_direction);
 
-    // Keep the Q2 G-buffer consistent with the patched values.
     imageStore(framebufQ2BaseColor, ipos,
                texelFetch(framebufQ2BaseColor_Prev_Sampler, found_pos_prev, 0));
     imageStore(framebufQ2Metallic, ipos,
                texelFetch(framebufQ2Metallic_Prev_Sampler, found_pos_prev, 0));
 
-    // Albedo is stored in the regular (non-checkerboarded) layout.
     imageStore(framebufAlbedo, getRegularPixFromCheckerboardPix(ipos),
                texelFetch(framebufAlbedo_Prev_Sampler,
                           getRegularPixFromCheckerboardPix(found_pos_prev), 0));

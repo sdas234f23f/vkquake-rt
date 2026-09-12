@@ -55,43 +55,20 @@ extern cvar_t rt_classic_render;
 
 RgVertex *rtallbrushvertices;
 
-// Surface -> BSP leaf ("cluster") map for the world model, used by the
-// Q2RTX per-cluster light lists. The vertex's cluster is written into
-// RgVertex.cluster; the direct/indirect passes look up the cluster's light
-// list by it (like Q2RTX reads triangle.cluster).
 static int *rt_surfcluster;
 
-/*
-=================
-RT_GetSurfaceCluster
-
-Returns the BSP leaf index (used as the Q2RTX "cluster") for a brush surface.
-World surfaces use the exact leaf from rt_surfcluster; other brush models
-(doors, plats, ...) get the leaf containing their surface centroid.
-=================
-*/
 static int RT_GetSurfaceCluster (const qmodel_t *m, const msurface_t *s)
 {
 	if (m == cl.worldmodel && rt_surfcluster)
 	{
 		const int si = (int)(s - m->surfaces);
 
-		// Submodel (brush-entity) surfaces live in the world surface array but
-		// are drawn as dynamic entities. Their exact-leaf cluster (from the
-		// marksurface pass below) usually resolves to the SOLID leaf inside the
-		// brush, whose light list is empty -> unlit doors/lifts. Fall through to
-		// the visible-leaf lookup for them.
 		const int submodel_first =
 			(cl.worldmodel->numsubmodels > 1) ? cl.worldmodel->submodels[1].firstface : cl.worldmodel->numsurfaces;
 		if (si >= 0 && si < m->numsurfaces && si < submodel_first)
 			return rt_surfcluster[si];
 	}
 
-	// Submodel (brush-entity) surfaces are stored in world space, but their
-	// centroid lies ON the face plane and Mod_PointInLeaf() on it returns the
-	// leaf INSIDE the solid brush (empty light list -> unlit doors/buttons).
-	// Q2RTX offsets the point along the triangle normal so it lands in the
-	// visible leaf; do the same here, with a larger retry offset.
 	vec3_t normal;
 	if (s->flags & SURF_PLANEBACK)
 	{
@@ -131,15 +108,6 @@ static int RT_GetSurfaceCluster (const qmodel_t *m, const msurface_t *s)
 	return 0;
 }
 
-/*
-=================
-RT_BuildSurfaceClusterMap
-
-Builds rt_surfcluster: for every world surface, the index of the BSP leaf
-it belongs to. Exact assignment comes from each leaf's marksurfaces; the
-surface-centroid lookup is only a fallback.
-=================
-*/
 static void RT_BuildSurfaceClusterMap (void)
 {
 	qmodel_t *wm = cl.worldmodel;
@@ -159,9 +127,6 @@ static void RT_BuildSurfaceClusterMap (void)
 	for (int i = 0; i < wm->numsurfaces; i++)
 		rt_surfcluster[i] = RT_GetSurfaceCluster (wm, &wm->surfaces[i]);
 
-	// Exact assignment: every leaf marks its own surfaces. Submodel surfaces
-	// (>= submodels[1].firstface) keep the visible-leaf value computed above,
-	// because the exact assignment for them is the SOLID leaf (empty light list).
 	const int submodel_first =
 		(wm->numsubmodels > 1) ? wm->submodels[1].firstface : wm->numsurfaces;
 	for (int l = 0; l < wm->numleafs; l++)
@@ -466,8 +431,6 @@ called during rendering
 */
 void R_RenderDynamicLightmaps (msurface_t *fa)
 {
-	// In the RT renderer the classic lightmaps are not uploaded/used (the RT
-	// handles all lighting) - skip the dlight baking entirely.
 	if (!CVAR_TO_BOOL (rt_classic_render))
 	{
 		return;
@@ -917,7 +880,6 @@ void GL_BuildBModelVertexBuffer (void)
 
 				dst[v].packedColor = RT_PACKED_COLOR_WHITE;
 
-				// Q2RTX per-cluster light lists: BSP leaf index of the surface.
 				dst[v].cluster = (uint32_t)RT_GetSurfaceCluster (m, s);
 			}
 

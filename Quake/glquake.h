@@ -364,17 +364,16 @@ void GLMesh_DeleteVertexBuffers (void);
 int R_LightPoint (vec3_t p, lightcache_t *cache, vec3_t *lightcolor);
 void RT_ParseElights (void);
 void RT_UploadAllElights (void);
-qboolean RT_AllowFakeLights (void); // strict light-source modes (materials_only / rt_truelight 2)
+qboolean RT_AllowFakeLights (void);
 
-// Q2RTX per-BSP-cluster light lists (built from the PVS on the CPU).
 void RT_ClusterLightListsReset (void);
 void RT_ClusterLightAdd (uint64_t uniqueID, const vec3_t origin);
 void RT_ClusterLightListsUpload (void);
-int RT_ResolvePointCluster (const vec3_t p); // leaf for a point's light list, 0 when solid
-void RT_BrushClusterCacheReset (void);       // brush-entity cluster cache, reset on map load
-void RT_ClusterLightReport_f (void); // rt_light_report: why each light is (not) sampled
-void RT_LightReport_f (void);        // rt_light_report: emissive pass + cluster lists
-void RT_PrintEmissiveStats (void);   // rt_light_report: emissive pass only
+int RT_ResolvePointCluster (const vec3_t p);
+void RT_BrushClusterCacheReset (void);
+void RT_ClusterLightReport_f (void);
+void RT_LightReport_f (void);
+void RT_PrintEmissiveStats (void);
 
 void GL_SubdivideSurface (msurface_t *fa);
 void R_BuildLightMap (msurface_t *surf, byte *dest, int stride);
@@ -478,22 +477,8 @@ static inline uint32_t RT_PackColorToUint32_FromFloat01(float r, float g, float 
 		(color)[2] *= base * (CLAMP (0, CVAR_TO_INT32 (rt_light_color_b), 255) / 255.0f); \
 	} while (0)
 
-// Master emissive-luma knob. rt_emis_light_intensity is a unit multiplier
-// whose default of 1.0 reproduces the calibrated reference look. Internally the
-// emissive light/fixup math is expressed on a raw intensity scale where that
-// reference look was measured at raw intensity 0.01, so every consumer converts
-// the user value with RT_EMIS_INTENSITY_TO_RAW() before scaling. This keeps the
-// light sources AND the emissive-surface display boost in lockstep and makes
-// rt_emis_light_intensity a plain relative multiplier (0 extinguishes luma
-// emission entirely).
 #define RT_EMIS_LIGHT_INTENSITY_REFERENCE 0.01f
 #define RT_EMIS_INTENSITY_TO_RAW(x)        ((x) * RT_EMIS_LIGHT_INTENSITY_REFERENCE)
-// The emissive-surface display boost (emissionMapBoost) is rt_emis_mapboost
-// times the live rt_emis_light_intensity, so luma surfaces brighten exactly in
-// step with the light sources. (The old RT_EMIS_MAPBOOST_REF_RAW 10.0 divisor
-// made the default boost 1000x too dim after the unit-scale change; it is gone.)
-// RGB tint applied to every light source (sun, dynamic, world, ambient).
-// rt_brightness is handled separately where scalar scaling is enough.
 #define RT_APPLY_LIGHT_TINT(color)                                              \
 	do                                                                          \
 	{                                                                           \
@@ -502,7 +487,6 @@ static inline uint32_t RT_PackColorToUint32_FromFloat01(float r, float g, float 
 		(color)[1] *= CLAMP (0, CVAR_TO_INT32 (rt_light_color_g), 255) / 255.0f; \
 		(color)[2] *= CLAMP (0, CVAR_TO_INT32 (rt_light_color_b), 255) / 255.0f; \
 	} while (0)
-// RGB tint applied to the sky display color (independent from the sun light).
 #define RT_APPLY_SKY_COLOR(color)                                              \
 	do                                                                         \
 	{                                                                          \

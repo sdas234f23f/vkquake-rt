@@ -185,10 +185,6 @@ layout(set = DESC_SET_LIGHT_SOURCES, binding = BINDING_LIGHT_SOURCES_INDEX_CUR_T
     uint lightSources_Index_CurToPrev[];
 };
 
-// Q2RTX-style per-BSP-cluster light lists + adaptive shadow statistics.
-// The lists (offsets + concatenated light indices) are built on the CPU from
-// the PVS and uploaded each frame. q2LightStats is a ring buffer: the current
-// frame's slot is [frameId % Q2_LIGHT_LIST_STATS_BUFFERS].
 layout(set = DESC_SET_LIGHT_SOURCES, binding = BINDING_LIGHT_SOURCES_Q2_LIGHT_LIST_OFFSETS) readonly buffer Q2LightListOffsets_BT
 {
     uint q2LightListOffsets[];

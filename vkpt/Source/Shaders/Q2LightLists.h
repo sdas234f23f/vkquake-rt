@@ -23,21 +23,11 @@
 // q2LightListLights, built on the CPU from the PVS and uploaded each frame)
 // are used verbatim like Q2RTX, and the Q2RTX polygon light sampling is
 // replaced by vkpt's ShLightEncoded (sphere/spot/triangle).
-//
-// The light-selection CDF is the heart of the Q2RTX stability: the mass of
-// each light = solid angle x luminance x ADAPTIVE SHADOW STATISTICS factor
-// (hits/(hits+misses) accumulated over previous frames), so occluded lights
-// get sampled less over time -> the per-frame light choice is stable -> the
-// ASVGF temporal accumulation converges (clean dark areas).
 
 #ifndef Q2_LIGHT_LISTS_H_
 #define Q2_LIGHT_LISTS_H_
 
 #define Q2_MAX_BRUTEFORCE_SAMPLING 8
-
-// ------------------------------------------------------------------------- //
-// Per-cluster light list access (Q2RTX light_buffer)                         //
-// ------------------------------------------------------------------------- //
 
 uint q2GetClusterLightCount(const uint cluster)
 {
@@ -48,10 +38,6 @@ uint q2GetClusterLight(const uint cluster, const uint slot)
 {
     return q2LightListLights[q2LightListOffsets[cluster] + slot];
 }
-
-// ------------------------------------------------------------------------- //
-// Gradient detection (Q2RTX get_is_gradient)                                 //
-// ------------------------------------------------------------------------- //
 
 bool q2GetIsGradient(const ivec2 pix)
 {
@@ -68,18 +54,11 @@ bool q2GetIsGradient(const ivec2 pix)
     return all(equal(gradStrataPos, pix % Q2_GRAD_DWN));
 }
 
-// Q2RTX RoughnessSquareToSpecPower (brdf.glsl).
 float q2RoughnessSquareToSpecPower(const float alpha)
 {
     return max(0.01, 2.0 / (alpha * alpha + 1e-4) - 2.0);
 }
 
-// ------------------------------------------------------------------------- //
-// Adaptive shadow statistics (Q2RTX light_stats_bufers)                     //
-// ------------------------------------------------------------------------- //
-
-// Dominant axis of the shading normal -> side 0..5. Same convention as
-// Q2RTX get_primary_direction.
 uint q2GetPrimaryDirectionSide(const vec3 n)
 {
     const vec3 a = abs(n);
@@ -88,8 +67,6 @@ uint q2GetPrimaryDirectionSide(const vec3 n)
     return                             n.z >= 0.0 ? 4u : 5u;
 }
 
-// Address of the (cluster, slot, side) hit/miss counters inside the current
-// frame's ring slot (the slot base is added by the caller).
 uint q2GetLightStatsAddr(const uint cluster, const uint slot, const uint side)
 {
     uint addr = cluster;
@@ -99,10 +76,6 @@ uint q2GetLightStatsAddr(const uint cluster, const uint slot, const uint side)
     return addr;
 }
 
-// Accumulate the shadow-ray result of the direct pass into the CURRENT frame's
-// stats slot (hits/misses per cluster, slot, side). The CDF of the NEXT frames
-// reads these to make the light choice visibility-aware (occluded lights get a
-// smaller mass -> sampled less -> stable per-frame selection).
 void q2AccumulateLightStats(const uint cluster, const uint slot, const vec3 n, const float vis)
 {
     const uint frameSlot = globalUniform.frameId % uint(Q2_LIGHT_LIST_STATS_BUFFERS);
@@ -114,19 +87,11 @@ void q2AccumulateLightStats(const uint cluster, const uint slot, const vec3 n, c
     atomicAdd(q2LightStats[addr + (vis > 0.5 ? 0u : 1u)], 1u);
 }
 
-// ------------------------------------------------------------------------- //
-// Mass of a light for the selection CDF (solid angle x BRDF, Q2RTX uses     //
-// spherical_tri_area for polygons).                                         //
-// ------------------------------------------------------------------------- //
-
-// Phong lobe for the CDF mass (Q2RTX phong()).
 float q2Phong(vec3 n, vec3 L, vec3 V, float phongExp)
 {
     return pow(max(dot(reflect(-L, n), V), 0.0), phongExp);
 }
 
-// Projected spherical area of a triangle (Arvo 1995), ported verbatim from
-// Q2RTX spherical_tri_area.
 float q2SphericalTriArea(mat3 positions, vec3 p, vec3 n, vec3 V, float phongExp, float phongScale, float phongWeight)
 {
     positions[0] = positions[0] - p;
@@ -151,8 +116,6 @@ float q2SphericalTriArea(mat3 positions, vec3 p, vec3 n, vec3 V, float phongExp,
     return max(area - 1e-5, 0.0) * brdf;
 }
 
-// Mass for the selection CDF. Triangles use the projected spherical area
-// (Q2RTX); spheres and spots use their solid angle from the surface point.
 float q2LightSelectionMass(const ShLightEncoded encoded, const vec3 p, const vec3 n, const vec3 V,
                            const float phongExp, const float phongScale, const float phongWeight)
 {
@@ -169,14 +132,8 @@ float q2LightSelectionMass(const ShLightEncoded encoded, const vec3 p, const vec
     {
         const TexturedAreaLight l = decodeAsTexturedAreaLight(encoded);
         const vec3 center = getTexturedAreaLightCenter(l);
-        // One-sided projected solid angle of the polygon, matching
-        // sampleTexturedAreaLight's r.dw (getGeometryFactorClamped). Surfaces
-        // behind the light's plane get zero mass -> never selected -> no wasted
-        // CDF mass and no shadow-ray misses that would pollute the adaptive
-        // (cluster, slot, side) statistics of surfaces in front of the light.
         const DirectionAndLength centerToSurf = calcDirectionAndLength(center, p);
         float sa = safeSolidAngle(l.area * getGeometryFactorClamped(l.normal, centerToSurf.dir, centerToSurf.len));
-        // Dim luma surfaces should be selected proportionally less often.
         return sa * max(l.meanEmiss, 0.0);
     }
     else
@@ -195,20 +152,6 @@ float q2LightSelectionMass(const ShLightEncoded encoded, const vec3 p, const vec
     }
 }
 
-// ------------------------------------------------------------------------- //
-// Light selection from the per-cluster list (Q2RTX sample_polygonal_lights) //
-// ------------------------------------------------------------------------- //
-//
-// Inverse-CDF over the cluster's light list, partitioned into blocks of
-// Q2_MAX_BRUTEFORCE_SAMPLING. The mass of each light is its projected solid
-// angle times luminance (Q2RTX sample_polygonal_lights) times the adaptive
-// shadow-statistics factor. The 1/pdf NEE weight keeps this unbiased, so
-// luminance does NOT cancel the light's brightness. For gradient pixels the
-// CDF uses the statistics from two frames ago (frame-2 slot) so it matches the
-// previous frame's CDF (the re-trace reproduces the same light).
-//
-// Returns the selected light index, its slot in the cluster list (for the
-// stats addressing) and its selection pdf (for the NEE weight).
 void q2SampleClusterLights(
     const uint cluster, const vec3 p, const vec3 n, const vec3 V,
     const float phongExp, const float phongScale, const float phongWeight,
@@ -234,9 +177,6 @@ void q2SampleClusterLights(
     const int stride = int(partitions);
     const int listStart = listBase + fpart;
 
-    // Stats ring slot: regular pixels use the previous frame's accumulated
-    // stats, gradient pixels use frame-2 (so the re-traced CDF matches the
-    // previous frame's CDF, exactly like Q2RTX).
     const uint frameSlot = globalUniform.frameId % uint(Q2_LIGHT_LIST_STATS_BUFFERS);
     const uint statsSlot = isGradient
         ? (frameSlot + uint(Q2_LIGHT_LIST_STATS_BUFFERS) - 2u) % uint(Q2_LIGHT_LIST_STATS_BUFFERS)
@@ -260,7 +200,6 @@ void q2SampleClusterLights(
         const int slot = nIdx - listBase;
         const uint li = q2GetClusterLight(cluster, uint(slot));
 
-        // Guard against invalid/overflow slots.
         if (li < uint(LIGHT_ARRAY_REGULAR_LIGHTS_OFFSET) ||
             li >= uint(LIGHT_ARRAY_REGULAR_LIGHTS_OFFSET) + globalUniform.lightCount)
         {
@@ -273,7 +212,6 @@ void q2SampleClusterLights(
         float m = q2LightSelectionMass(l, p, n, V, phongExp, phongScale, phongWeight);
         m *= abs(getLuminance(l.color));
 
-        // Adaptive shadow statistics: occluded lights get a smaller CDF mass.
         if (m > 0.0)
         {
             const uint statsAddr = statsFrameBase + q2GetLightStatsAddr(cluster, uint(slot), side);
@@ -296,11 +234,6 @@ void q2SampleClusterLights(
         return;
     }
 
-    // The inverse-CDF variate must be the residual within the chosen
-    // partition (Q2RTX does `rng.x -= fpart` in place). Using the full rng.x
-    // here would confine the CDF to the [fpart/partitions, (fpart+1)/partitions)
-    // slice of the partition's mass, which correlates the block index with the
-    // entry index and makes most of the list unreachable.
     float r = r0 * massSum;
     const float totalMassScaled = massSum * partitions;
     float pdf = 0.0;
@@ -333,4 +266,4 @@ void q2SampleClusterLights(
     outPdf = pdf / totalMassScaled;
 }
 
-#endif // Q2_LIGHT_LISTS_H_
+#endif

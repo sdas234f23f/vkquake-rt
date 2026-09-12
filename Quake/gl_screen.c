@@ -569,11 +569,6 @@ void SCR_DrawFPS (cb_context_t *cbx)
 	}
 }
 
-/*
-==============
-SCR_DrawRTStats
-==============
-*/
 void SCR_DrawRTStats (cb_context_t *cbx)
 {
 	if (!rt_stats.value)
@@ -591,13 +586,11 @@ void SCR_DrawRTStats (cb_context_t *cbx)
 
 	GL_SetCanvas (cbx, CANVAS_DEFAULT);
 
-	// shadow pass (offset by one unscaled pixel, scaled up)
 	sprintf (st, "RAYS: %u", rays);
 	Draw_StringScaled (cbx, 8 + 4, 8 + 4, st, scale, &color_shadow);
 	sprintf (st, "FPS: %u.%u", fps_x10 / 10, fps_x10 % 10);
 	Draw_StringScaled (cbx, 8 + 4, 8 + step + 4, st, scale, &color_shadow);
 
-	// main pass
 	sprintf (st, "RAYS: %u", rays);
 	Draw_StringScaled (cbx, 8, 8, st, scale, &color_orange);
 	sprintf (st, "FPS: %u.%u", fps_x10 / 10, fps_x10 % 10);

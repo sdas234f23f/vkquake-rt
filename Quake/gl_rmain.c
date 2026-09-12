@@ -357,19 +357,11 @@ static void R_SetupContext (cb_context_t *cbx)
 
 static void RT_UploadAllDlights ()
 {
-	// Materials-only mode (rt_materials_only): only light sources defined in
-	// materials.yaml are active - world emissive/light_color surfaces and
-	// model/sprite light_color spheres. The classic dlights (muzzle flash /
-	// explosions), the flashlight and the sun are all skipped; with the sun
-	// missing, directionalLightExists = 0 in the shaders, which also disables
-	// the sun NEE.
 	if (CVAR_TO_BOOL (rt_materials_only))
 	{
 		return;
 	}
 
-	// rt_truelight 2 drops the classic fake point lights too
-	// (RT_AllowFakeLights == false), but keeps the flashlight and sky/sun below.
 	if (RT_AllowFakeLights ())
 	{
 	for (int i = 0; i < MAX_DLIGHTS; i++)
@@ -381,13 +373,6 @@ static void RT_UploadAllDlights ()
 			continue;
 		}
 
-		// RT: a model whose skin has an emissive (luma) material is lit purely
-		// by its luma texture emission (scaled by rt_emis_mapboost and
-		// rt_emis_light_intensity); it generates no spherical light of its own
-		// (see r_alias.c). Skip the classic EF_BRIGHTLIGHT/EF_DIMLIGHT dlight
-		// for those entities so luma is the sole light source and
-		// rt_emis_light_intensity 0 fully extinguishes them (torches etc.).
-		// The classic render path (R_PushDlights) is unaffected.
 		if (!CVAR_TO_BOOL (rt_classic_render) && l->key > 0 && l->key < cl.num_entities)
 		{
 			entity_t *src = &cl.entities[l->key];
@@ -397,13 +382,6 @@ static void RT_UploadAllDlights ()
 			}
 		}
 
-		// The muzzle-flash / explosion dlights use a small sphere (point-light
-		// model). The intensity must NOT be scaled by the dlight radius (the old
-		// falloff_mult = radius*0.025 multiplied a radius-300 shotgun flash by
-		// ~7.5 on top of the 1600-area fix, blowing it out: it lit half a wall,
-		// rendered as a square blob and left temporal imprints after firing).
-		// Q2RTX scales dyn-light color only by intensity (light_lists.h),
-		// independent of the radius - the radius only limits the falloff.
 		vec3_t color = {l->color[0], l->color[1], l->color[2]};
 		VectorScale (color, CVAR_TO_FLOAT (rt_dlight_intensity), color);
 		RT_FIXUP_LIGHT_INTENSITY (color, true);
@@ -418,10 +396,9 @@ static void RT_UploadAllDlights ()
 		RgResult r = rgUploadSphericalLight (vulkan_globals.instance, &info);
 		RG_CHECK (r);
 
-		// register for the per-cluster light lists
 		RT_ClusterLightAdd (info.uniqueID, l->origin);
 	}
-	} // RT_AllowFakeLights()
+	}
 
 	if (CVAR_TO_FLOAT (rt_flashlight) > 0.1f)
 	{
@@ -458,7 +435,6 @@ static void RT_UploadAllDlights ()
 
 		vec3_t color;
 		RT_INIT_SKY_LIGHT_COLOR (color);
-		// sun brightness is controlled solely by rt_sun (not rt_globallight_mult)
 		extern cvar_t rt_brightness;
 		VectorScale (color, CVAR_TO_FLOAT (rt_sun) * CVAR_TO_FLOAT (rt_brightness), color);
 		RT_APPLY_LIGHT_TINT (color);
@@ -482,12 +458,6 @@ R_SetupViewBeforeMark
 */
 void R_SetupViewBeforeMark (void *unused)
 {
-	// Need to do those early because we now update dynamic light maps during R_MarkSurfaces.
-	// In the RT renderer the classic dlight lightmap patches are NOT used (the RT
-	// handles the dynamic lighting via the uploaded sphere lights) - pushing them
-	// here would bake the old square "sprite" light patches into the lightmaps and
-	// they'd show on top of the RT lighting (torch / muzzle flash / explosions
-	// looking like quadrilateral blobs tied to the surface grid).
 	if (CVAR_TO_BOOL (rt_classic_render) && !r_gpulightmapupdate.value)
 		R_PushDlights ();
 	R_AnimateLight ();
@@ -563,7 +533,6 @@ void R_SetupViewBeforeMark (void *unused)
 	}
 	// johnfitz
 
-	// rebuild the Q2RTX per-cluster light lists from scratch this frame
 	RT_ClusterLightListsReset ();
 
 	RT_UploadAllDlights ();
@@ -607,7 +576,6 @@ void R_DrawEntitiesOnList (cb_context_t *cbx, qboolean alphapass, int chain, int
 		if (currententity->eflags & EFLAGS_EXTERIORMODEL)
 			continue;
 
-		// model failed to load (e.g. unsupported MD3 from an HD pack) -- skip
 		if (!currententity->model)
 			continue;
 
@@ -963,8 +931,6 @@ static void R_DrawViewModelTask (void *unused)
 	RT_UploadAllWorldModelLights ();                                             // RT
 	RT_UploadAllTeleports ();                                                    // RT
 
-	// all RT lights are uploaded and registered - build + upload the
-	// per-cluster light lists for this frame
 	RT_ClusterLightListsUpload ();                                               // RT
 }
 
@@ -1043,10 +1009,6 @@ void R_RenderView (qboolean use_tasks, task_handle_t begin_rendering_task, task_
 		Task_AddDependency (begin_rendering_task, update_lightmaps_task);
 		Task_AddDependency (update_lightmaps_task, draw_done_task);
 
-		// RT: world/entity/sprite/water draw tasks register lights into shared
-		// arrays (rt_wldlights_* and the per-cluster light lists). The upload in
-		// R_DrawViewModelTask reads those arrays, so it must run strictly after
-		// every light-registering task completes.
 		Task_AddDependency (draw_world_task, draw_view_model_task);
 		Task_AddDependency (draw_sky_and_water_task, draw_view_model_task);
 		Task_AddDependency (draw_entities_task, draw_view_model_task);

@@ -109,7 +109,6 @@ void storeQ2GBuffer(
     imageStore(framebufQ2GodRaysThroughputDist, pix, vec4(1.0, 1.0, 1.0, distToLight));
     imageStore(framebufQ2RngSeed,            pix, uvec4(getRandomSeed(pix, globalUniform.frameId)));
     imageStore(framebufQ2FogAccum,           pix, fogAccum);
-    // BSP cluster of the hit surface (Q2RTX IMG_PT_CLUSTER_A). ~0u for sky.
     imageStore(framebufQ2Cluster,            pix, uvec4(cluster));
 }
 
@@ -749,7 +748,6 @@ void main()
         uint newRayMedia = getNewRayMedia(i, currentRayMedia, h.geometryInstanceFlags);
         bool isPortal = isPortalFromFlags(h.geometryInstanceFlags) && h.portalIndex != PORTAL_INDEX_NONE;
 
-        // Material kinds, Q2RTX-style. vkpt flags for now; will switch to the
         // Q2RTX .mat kinds together with the material system port (phase 4.5).
         // (primary_is_chrome: explicit REFLECT flag; smooth surfaces reflect
         // too, like the legacy pass, to avoid losing glossy reflections.)
@@ -944,9 +942,6 @@ void main()
         {
             // Reflection/refraction ray hit the sky: store an empty surface,
             // blend the environment into the accumulated transparency and use
-            // negative depth (Q2RTX convention). Prefilter the env by the
-            // surface roughness so rough reflections can't catch the sun disc
-            // as a firefly; sharp surfaces (chrome/glass) keep LOD ~0.
             const vec3 env = getSkyFiltered(rayDir, h.roughness * (SKY_MIP_COUNT - 1.0));
             q2Transparent = q2AlphaBlendPremultiplied(vec4(env * throughput, 1.0), q2Transparent);
 
@@ -995,7 +990,6 @@ void main()
         return;
     }
 
-    // Store the vkpt G-buffer (same as the legacy reflection pass)
     imageStore(framebufIsSky,               pix, ivec4(0));
     imageStore(framebufAlbedo,              getRegularPixFromCheckerboardPix(pix), vec4(h.albedo, 0.0));
     imageStore(framebufScreenEmisRT,        getRegularPixFromCheckerboardPix(pix), vec4(screenEmission + ( globalUniform.cameraMediaType != MEDIA_TYPE_ACID ? acidFog * 0.05 : vec3( 0.0 ) ), 0.0));

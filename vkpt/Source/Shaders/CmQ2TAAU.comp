@@ -110,13 +110,9 @@ void main()
 
     const vec3 color_center_raw = texelFetch(framebufFinal_Sampler, int_render_pos, 0).rgb;
 
-    // Remove or reduce single-pixel sparkles by clamping the center color
-    // to its surroundings (Q2RTX asvgf_taau anti-sparkle,
-    // flt_taa_anti_sparkle = 0.25).
     const float flt_taa_anti_sparkle = 0.25;
     const float anti_sparkle_scale = pow(min(1.0, flt_taa_anti_sparkle), -0.25);
 
-    // Color moments in a 3x3 window (the 8 neighbors first, then the center).
     vec3 mom1 = vec3(0.0);
     vec3 mom2 = vec3(0.0);
     {

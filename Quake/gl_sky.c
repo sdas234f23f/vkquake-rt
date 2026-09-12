@@ -631,17 +631,11 @@ void Sky_ClipPoly (int nump, vec3_t vecs, int stage)
 
 #endif // RT_SKY_CULLING
 
-// 4.6: sky display tint = rt_sky_color_* * rt_sky_brightness * rt_brightness.
-// Applied to every sky rendering path (sky polys, skybox, cloud layers) so
-// the primary sky (sampled straight from the render cubemap) can be tinted
-// or blackened without affecting the sun light (rt_sky_light_*).
 static void RT_GetSkyTintColor (float color[3])
 {
 	extern cvar_t rt_sky_color_r, rt_sky_color_g, rt_sky_color_b, rt_sky_brightness, rt_brightness;
 	extern cvar_t rt_materials_only;
 
-	// materials-only mode: primary sky is fully black (rasterized sky polys,
-	// skybox, cloud layers) - only materials.yaml light sources stay active.
 	if (CVAR_TO_BOOL (rt_materials_only))
 	{
 		color[0] = color[1] = color[2] = 0.0f;
@@ -1167,11 +1161,6 @@ void Sky_DrawSky (cb_context_t *cbx)
 	else
 		memcpy (color, skyflatcolor, 3 * sizeof (float));
 
-	// 4.6: sky display color + brightness modulate the sky surfaces drawn into
-	// the ray-traced sky cubemap (the primary sky color comes straight from
-	// that cubemap), so the sky can be tinted or blackened with
-	// rt_sky_color_* / rt_sky_brightness / rt_brightness without touching the
-	// sun light (rt_sky_light_*).
 	float skyTint[3];
 	RT_GetSkyTintColor (skyTint);
 	color[0] *= skyTint[0];
