@@ -28,7 +28,7 @@ materials:
   - name: textures/#lava1
     texture_gloss: textures/#lava1_gloss.png
     texture_emissive: textures/#lava1_luma.png
-    light_brightness: 0.5
+    light_brightness: 0.7
     is_light: true
   - name: textures/#teleport
     texture_gloss: textures/#teleport_gloss.png
@@ -102,6 +102,26 @@ materials:
     texture_emissive: textures/+2_med25_luma.png
     metalness_factor: 0.5
     light_brightness: 0.5
+    is_light: true
+  - name: textures/+0shoot
+    texture_emissive: textures/+0shoot_luma.png
+    light_color: ff0000
+    light_brightness: 0.1
+    is_light: true
+  - name: textures/+1shoot
+    texture_emissive: textures/+0shoot_luma.png
+    light_color: ff0000
+    light_brightness: 0.15
+    is_light: true
+  - name: textures/+2shoot
+    texture_emissive: textures/+0shoot_luma.png
+    light_color: ff0000
+    light_brightness: 0.20
+    is_light: true
+  - name: textures/+3shoot
+    texture_emissive: textures/+0shoot_luma.png
+    light_color: ff0000
+    light_brightness: 0.25
     is_light: true
   - name: textures/+3_med25
     texture_normals: textures/+3_med25_n.png
@@ -196,9 +216,30 @@ materials:
     texture_gloss: textures/rock1sid_gloss.png
     metalness_factor: 1.0
     is_light: false
+  - name: textures/rune2_2
+    texture_emissive: textures/rune2_2_luma.png
+    light_color: ff0000
+    light_brightness: 0.1
+    is_light: true
   - name: textures/rune2_3
     texture_emissive: textures/rune2_3_luma.png
-    light_brightness: 0.3
+    light_color: ff0000
+    light_brightness: 0.1
+    is_light: true
+  - name: textures/rune2_4
+    texture_emissive: textures/rune2_4_luma.png
+    light_color: ff0000
+    light_brightness: 0.1
+    is_light: true
+  - name: textures/rune2_5
+    texture_emissive: textures/rune2_5_luma.png
+    light_color: ff0000
+    light_brightness: 0.1
+    is_light: true
+  - name: textures/metal6_3
+    texture_emissive: textures/metal6_3_luma.png
+    light_color: ff0000
+    light_brightness: 0.1
     is_light: true
   - name: textures/sfloor4_4
     texture_gloss: textures/sfloor4_4_gloss.png
@@ -226,6 +267,46 @@ materials:
     color_emissive: ff0000
     color_emissive_threshold: 0.1
     light_brightness: 0.1
+    is_light: true
+  - name: textures/+0butn
+    texture_emissive: textures/quake_butn_luma.png
+    light_color: ff0000
+    light_brightness: 0.03
+    is_light: true
+  - name: textures/+1butn
+    texture_emissive: textures/quake_butn_luma.png
+    light_color: ff0000
+    light_brightness: 0.06
+    is_light: true
+  - name: textures/+2butn
+    texture_emissive: textures/quake_butn_luma.png
+    light_color: ff0000
+    light_brightness: 0.09
+    is_light: true
+  - name: textures/+3butn
+    texture_emissive: textures/quake_butn_luma.png
+    light_color: ff0000
+    light_brightness: 0.12
+    is_light: true
+  - name: textures/+0butnn
+    texture_emissive: textures/quake_butn_luma.png
+    light_color: ff7f53
+    light_brightness: 0.03
+    is_light: true
+  - name: textures/+1butnn
+    texture_emissive: textures/quake_butn_luma.png
+    light_color: ff7f53
+    light_brightness: 0.06
+    is_light: true
+  - name: textures/+2butnn
+    texture_emissive: textures/quake_butn_luma.png
+    light_color: ff7f53
+    light_brightness: 0.09
+    is_light: true
+  - name: textures/+3butnn
+    texture_emissive: textures/quake_butn_luma.png
+    light_color: ff7f53
+    light_brightness: 0.12
     is_light: true
   - name: textures/tlight01
     texture_emissive: textures/tlight01_luma.png
@@ -321,11 +402,35 @@ materials:
     light_color: 7a7667
     is_light: false
   - name: textures/light1_4
-    light_color: 696f8c
-    is_light: false
+    texture_emissive: textures/light1_4_luma.png
+    light_color: b3b3ff
+    light_brightness: 0.4
+    is_light: true
+  - name: textures/light3_5
+    texture_emissive: textures/light3_5_luma.png
+    light_color: ffffff
+    light_brightness: 0.8
+    is_light: true
+  - name: textures/light3_6
+    texture_emissive: textures/light3_6_luma.png
+    light_color: ffffff
+    light_brightness: 0.5
+    is_light: true
+  - name: textures/light3_7
+    texture_emissive: textures/light3_7_luma.png
+    light_color: ffffff
+    light_brightness: 0.4
+    is_light: true
   - name: textures/light3_8
-    light_color: 86818a
-    is_light: false
+    texture_emissive: textures/light3_8_luma.png
+    light_color: ffffff
+    light_brightness: 0.6
+    is_light: true
+  - name: textures/key03_1
+    texture_emissive: textures/key03_1_luma.png
+    light_color: 7cbeff
+    light_brightness: 0.2
+    is_light: true
   - name: textures/sliplite
     color_emissive: ff0000
     color_emissive_threshold: 0.3
@@ -430,6 +535,12 @@ materials:
     texture_normals: textures/window1_4_n.png
     mirror: true
     is_light: false
+  - name: textures/window03
+    texture_emissive: textures/window03_luma.png
+    color_emissive: 7f0000
+    color_emissive_threshold: 0.2
+    light_brightness: 0.2
+    is_light: true
   - name: textures/wizwin1_2
     texture_base: textures/wizwin1_2.png
     texture_normals: textures/wizwin1_2_n.png
@@ -596,13 +707,13 @@ materials:
     texture_gloss: progs/s_spike/0_gloss.png
     force_rasterize: false
     light_color: ffffff
-    light_brightness: 0.1
+    light_brightness: 0.01
     is_light: true
   - name: progs/spike.mdl:frame0
     texture_gloss: progs/spike/0_gloss.png
     force_rasterize: false
     light_color: ffffff
-    light_brightness: 0.1
+    light_brightness: 0.01
     is_light: true
   - name: progs/v_axe.mdl:frame0
     texture_normals: progs/v_axe/0_n.png
@@ -676,6 +787,7 @@ materials:
     texture_emissive: progs/w_spike/0_luma.png
     force_rasterize: true
     light_color: ffffff
+    light_brightness: 0.01
     is_light: true
   - name: progs/backpack.mdl:frame0
     is_light: false
@@ -705,14 +817,14 @@ materials:
   - name: progs/flame.mdl:frame0
     texture_emissive: mdl_skins/flame_skin0_luma.png
     light_color: FFC274
-    light_upoffset: 0.0
+    light_upoffset: 2.0
     light_brightness: 0.6
     is_light: true
   - name: progs/flame2.mdl:frame0
     texture_emissive: mdl_skins/flame2_skin0_luma.png
     light_color: FFC274
     light_brightness: 0.8
-    light_upoffset: 0.0
+    light_upoffset: 16.0
     is_light: true
   - name: progs/bolt1.mdl:frame0
     texture_emissive: mdl_skins/bolt_skin0.png
