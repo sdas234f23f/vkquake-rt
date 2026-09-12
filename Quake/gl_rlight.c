@@ -876,6 +876,7 @@ void RT_UploadAllElights ()
 
 #define RT_CLUSTER_SLOT_RECYCLE_FRAMES 60
 #define RT_CLUSTER_INVALID_LIGHT       (~0ull)
+#define RT_CLUSTER_TOPUP_LIGHTS        8
 
 typedef struct rt_cluster_light_s
 {
@@ -1135,46 +1136,104 @@ void RT_ClusterLightListsUpload (void)
 		diag->resolved = true;
 
 		const uint64_t uid = rt_cluster_lights[li].uniqueID;
+		const byte    *vis = leaf->compressed_vis ? Mod_LeafPVS (leaf, wm) : NULL;
 
-		if (!leaf->compressed_vis)
+		if (vis)
 		{
-			const float reach = METRIC_TO_QUAKEUNIT (CVAR_TO_FLOAT (rt_light_reach));
-			const float reachSq = reach * reach;
-			for (int c = 1; c < numClusters; c++)
+			for (int j = 0; j < (numClusters + 7) / 8; j++)
 			{
-				const mleaf_t *cleaf = &wm->leafs[c];
-				if (cleaf->contents == CONTENTS_SOLID)
+				if (!vis[j])
 					continue;
+				for (int k = 0; k < 8; k++)
+				{
+					if (!(vis[j] & (1u << k)))
+						continue;
+					const int c = (j << 3) + k + 1;
+					if (c >= numClusters)
+						continue;
 
-				if (RT_ClusterDist2ToBounds (rt_cluster_lights[li].origin, cleaf->minmaxs) > reachSq)
-					continue;
-
-				if (RT_ClusterAssignSlot (c, uid, rt_cluster_slot_uids, rt_cluster_slot_stamp, rt_cluster_slot_dist2, rt_cluster_slot_fill, rt_cluster_frame_stamp, rt_cluster_lights[li].origin, cleaf->minmaxs))
-					diag->granted++;
-				else
-					diag->denied++;
+					if (RT_ClusterAssignSlot (c, uid, rt_cluster_slot_uids, rt_cluster_slot_stamp, rt_cluster_slot_dist2, rt_cluster_slot_fill, rt_cluster_frame_stamp, rt_cluster_lights[li].origin, wm->leafs[c].minmaxs))
+						diag->granted++;
+					else
+						diag->denied++;
+				}
 			}
+		}
+	}
+
+	const float reach = METRIC_TO_QUAKEUNIT (CVAR_TO_FLOAT (rt_light_reach));
+	const float reachSq = reach * reach;
+
+	for (int c = 1; c < numClusters; c++)
+	{
+		const mleaf_t *cleaf = &wm->leafs[c];
+		if (cleaf->contents == CONTENTS_SOLID)
 			continue;
+
+		uint64_t *cuids = rt_cluster_slot_uids + c * RT_CLUSTER_MAX_PER_LIST;
+		uint32_t *cstamp = rt_cluster_slot_stamp + c * RT_CLUSTER_MAX_PER_LIST;
+		const int cfill = rt_cluster_slot_fill[c];
+
+		uint16_t best[RT_CLUSTER_TOPUP_LIGHTS];
+		float    bestD2[RT_CLUSTER_TOPUP_LIGHTS];
+		int      bestN = 0;
+
+		for (int li = 0; li < rt_cluster_light_count; li++)
+		{
+			if (!rt_light_diag[li].resolved)
+				continue;
+
+			const uint64_t uid = rt_cluster_lights[li].uniqueID;
+			qboolean have = false;
+			for (int s = 0; s < cfill; s++)
+			{
+				if (cstamp[s] == rt_cluster_frame_stamp && cuids[s] == uid)
+				{
+					have = true;
+					break;
+				}
+			}
+			if (have)
+				continue;
+
+			const float d2 = RT_ClusterDist2ToBounds (rt_cluster_lights[li].origin, cleaf->minmaxs);
+			if (d2 > reachSq)
+				continue;
+
+			if (bestN < RT_CLUSTER_TOPUP_LIGHTS)
+			{
+				int p = bestN++;
+				while (p > 0 && bestD2[p - 1] > d2)
+				{
+					bestD2[p] = bestD2[p - 1];
+					best[p] = best[p - 1];
+					p--;
+				}
+				bestD2[p] = d2;
+				best[p] = (uint16_t)li;
+			}
+			else if (d2 < bestD2[RT_CLUSTER_TOPUP_LIGHTS - 1])
+			{
+				int p = RT_CLUSTER_TOPUP_LIGHTS - 1;
+				while (p > 0 && bestD2[p - 1] > d2)
+				{
+					bestD2[p] = bestD2[p - 1];
+					best[p] = best[p - 1];
+					p--;
+				}
+				bestD2[p] = d2;
+				best[p] = (uint16_t)li;
+			}
 		}
 
-		const byte *vis = Mod_LeafPVS (leaf, wm);
-		for (int j = 0; j < (numClusters + 7) / 8; j++)
+		const int want = bestN;
+		for (int b = 0; b < want; b++)
 		{
-			if (!vis[j])
-				continue;
-			for (int k = 0; k < 8; k++)
-			{
-				if (!(vis[j] & (1u << k)))
-					continue;
-				const int c = (j << 3) + k + 1;
-				if (c >= numClusters)
-					continue;
-
-				if (RT_ClusterAssignSlot (c, uid, rt_cluster_slot_uids, rt_cluster_slot_stamp, rt_cluster_slot_dist2, rt_cluster_slot_fill, rt_cluster_frame_stamp, rt_cluster_lights[li].origin, wm->leafs[c].minmaxs))
-					diag->granted++;
-				else
-					diag->denied++;
-			}
+			const int li = best[b];
+			if (RT_ClusterAssignSlot (c, rt_cluster_lights[li].uniqueID, rt_cluster_slot_uids, rt_cluster_slot_stamp, rt_cluster_slot_dist2, rt_cluster_slot_fill, rt_cluster_frame_stamp, rt_cluster_lights[li].origin, cleaf->minmaxs))
+				rt_light_diag[li].granted++;
+			else
+				rt_light_diag[li].denied++;
 		}
 	}
 
