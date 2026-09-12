@@ -385,7 +385,7 @@ ShHitInfo getHitInfoBounce(
     }
     
     h.roughness = globalUniform.squareInputRoughness == 0 ? h.roughness : square( h.roughness );
-    h.roughness = max( h.roughness, max( globalUniform.minRoughness, MIN_GGX_ROUGHNESS ) );
+    h.roughness = max( h.roughness, MIN_GGX_ROUGHNESS );
 
 #if defined( HITINFO_INL_PRIM ) || defined( HITINFO_INL_RFL )
     screenEmission = rmeEmissionToScreenEmission( h.emission );

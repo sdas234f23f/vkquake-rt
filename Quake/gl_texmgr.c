@@ -1156,6 +1156,7 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 
 	const qboolean isBrush = glt->owner && glt->owner->type == mod_brush;
 	const float defaultRough = isBrush ? CVAR_TO_FLOAT (rt_brush_rough) : CVAR_TO_FLOAT (rt_model_rough);
+	const qboolean engineAlpha = (glt->flags & TEXPREF_ALPHA) != 0;
 
 	const qboolean has_luma_key = (mat->filename_emissive[0] != '\0');
 	const qboolean use_color_emissive = mat->has_color_emissive && !has_luma_key;
@@ -1186,14 +1187,19 @@ static qboolean TexMgr_ApplyMaterialFromMat (gltexture_t *glt, unsigned *albedoF
 		albedo[i * 4 + 0] = CLAMP (0, r, 255);
 		albedo[i * 4 + 1] = CLAMP (0, g, 255);
 		albedo[i * 4 + 2] = CLAMP (0, b, 255);
-		albedo[i * 4 + 3] = 255;
+		if (engineAlpha)
+			albedo[i * 4 + 3] = src[3];
+		else
+			albedo[i * 4 + 3] = 255;
 
 		float rough;
 		if (roughOverride > 0.0f)
 			rough = roughOverride;
 		else if (glossBuf)
 			rough = 1.0f - glossBuf[i * 4] / 255.0f;
-		else if (baseHasAlpha)
+		else if (glt->rtmirror)
+			rough = 0.0f;
+		else if (baseHasAlpha && !engineAlpha)
 			rough = baseBuf[i * 4 + 3] / 255.0f;
 		else
 			rough = defaultRough;

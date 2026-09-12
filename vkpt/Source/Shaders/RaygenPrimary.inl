@@ -470,12 +470,8 @@ void main()
 
         bool isPortal = isPortalFromFlags(h.geometryInstanceFlags) && h.portalIndex != PORTAL_INDEX_NONE;
         bool toRefract = isRefractFromFlags(h.geometryInstanceFlags);
-    #if SHIPPING_HACK
-        bool toReflect = isReflectFromFlags( h.geometryInstanceFlags );
-    #else
-        bool toReflect = h.roughness < globalUniform.minRoughness ||
-                         isReflectFromFlags( h.geometryInstanceFlags );
-    #endif
+        bool toReflect = isReflectFromFlags( h.geometryInstanceFlags ) &&
+                         h.roughness < globalUniform.minRoughness;
 
 
         if (!toReflect && !toRefract && !isPortal)
@@ -748,16 +744,13 @@ void main()
         uint newRayMedia = getNewRayMedia(i, currentRayMedia, h.geometryInstanceFlags);
         bool isPortal = isPortalFromFlags(h.geometryInstanceFlags) && h.portalIndex != PORTAL_INDEX_NONE;
 
-        // Q2RTX .mat kinds together with the material system port (phase 4.5).
-        // (primary_is_chrome: explicit REFLECT flag; smooth surfaces reflect
-        // too, like the legacy pass, to avoid losing glossy reflections.)
         const bool primaryIsWater  = (h.geometryInstanceFlags & GEOM_INST_FLAG_MEDIA_TYPE_WATER) != 0;
         const bool primaryIsSlime  = (h.geometryInstanceFlags & GEOM_INST_FLAG_MEDIA_TYPE_ACID) != 0;
         const bool primaryIsGlass  = (h.geometryInstanceFlags & GEOM_INST_FLAG_MEDIA_TYPE_GLASS) != 0;
-        const bool primaryIsChrome = (h.geometryInstanceFlags & GEOM_INST_FLAG_REFLECT) != 0;
-        const bool primaryIsSmooth = h.roughness < globalUniform.minRoughness;
+        const bool primaryIsChrome = (h.geometryInstanceFlags & GEOM_INST_FLAG_REFLECT) != 0 &&
+                                     h.roughness < globalUniform.minRoughness;
 
-        if (!primaryIsWater && !primaryIsSlime && !primaryIsGlass && !primaryIsChrome && !primaryIsSmooth && !isPortal)
+        if (!primaryIsWater && !primaryIsSlime && !primaryIsGlass && !primaryIsChrome && !isPortal)
         {
             break;
         }
@@ -922,10 +915,7 @@ void main()
         else
         {
             // chrome / smooth surface: reflection
-            if (primaryIsChrome)
-            {
-                throughput *= h.albedo;
-            }
+            throughput *= h.albedo;
             rayDir = reflect(rayDir, normal);
             correctMotionVector = 1;
         }
