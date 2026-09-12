@@ -937,6 +937,7 @@ static qboolean rt_cluster_perlist_warned;
 // and the rt_light_report diagnostics. See the upload for the stability rules.
 static uint64_t *rt_cluster_slot_uids = NULL;
 static uint32_t *rt_cluster_slot_stamp = NULL;
+static float    *rt_cluster_slot_dist2 = NULL;
 static uint8_t  *rt_cluster_slot_fill = NULL;
 static int       rt_cluster_slot_alloc = 0;
 static int       rt_cluster_last_clusters = 0;
@@ -1072,19 +1073,33 @@ int RT_ResolvePointCluster (const vec3_t p)
 	return (int)(leaf - cl.worldmodel->leafs);
 }
 
-/*
-Assign a stable slot to uid in cluster c and stamp it as present this frame.
-The slot is reused if the light already owns one, recycled if a stale one is
-free, or freshly appended when the cluster still has room. If the cluster is
-full the light simply is not sampled there this frame (warned once globally).
-Returns true when the light is in the cluster's list this frame.
-*/
+static float RT_ClusterDist2ToBounds (const vec3_t o, const float *minmaxs)
+{
+	float d2 = 0.0f;
+
+	for (int a = 0; a < 3; a++)
+	{
+		float d = 0.0f;
+
+		if (o[a] < minmaxs[a])
+			d = minmaxs[a] - o[a];
+		else if (o[a] > minmaxs[3 + a])
+			d = o[a] - minmaxs[3 + a];
+		d2 += d * d;
+	}
+
+	return d2;
+}
+
 static qboolean RT_ClusterAssignSlot (int c, uint64_t uid, uint64_t *slotUids,
-	uint32_t *slotStamp, uint8_t *slotFill, uint32_t frameStamp)
+	uint32_t *slotStamp, float *slotDist2, uint8_t *slotFill, uint32_t frameStamp,
+	const vec3_t origin, const float *minmaxs)
 {
 	uint64_t *cuids = slotUids + c * RT_CLUSTER_MAX_PER_LIST;
 	uint32_t *cstamp = slotStamp + c * RT_CLUSTER_MAX_PER_LIST;
+	float    *cdist2 = slotDist2 + c * RT_CLUSTER_MAX_PER_LIST;
 	const int cfill = slotFill[c];
+	const float d2 = RT_ClusterDist2ToBounds (origin, minmaxs);
 
 	// Already assigned slot for this unique ID?
 	for (int s = 0; s < cfill; s++)
@@ -1092,6 +1107,7 @@ static qboolean RT_ClusterAssignSlot (int c, uint64_t uid, uint64_t *slotUids,
 		if (cuids[s] == uid)
 		{
 			cstamp[s] = frameStamp;
+			cdist2[s] = d2;
 			return true;
 		}
 	}
@@ -1103,6 +1119,7 @@ static qboolean RT_ClusterAssignSlot (int c, uint64_t uid, uint64_t *slotUids,
 		{
 			cuids[s] = uid;
 			cstamp[s] = frameStamp;
+			cdist2[s] = d2;
 			return true;
 		}
 	}
@@ -1113,6 +1130,29 @@ static qboolean RT_ClusterAssignSlot (int c, uint64_t uid, uint64_t *slotUids,
 		const int s = slotFill[c]++;
 		cuids[s] = uid;
 		cstamp[s] = frameStamp;
+		cdist2[s] = d2;
+		return true;
+	}
+
+	int   farthest = -1;
+	float farthestD2 = 0.0f;
+
+	for (int s = 0; s < cfill; s++)
+	{
+		if (cstamp[s] != frameStamp)
+			continue;
+		if (farthest < 0 || cdist2[s] > farthestD2)
+		{
+			farthestD2 = cdist2[s];
+			farthest = s;
+		}
+	}
+
+	if (farthest >= 0 && d2 < farthestD2)
+	{
+		cuids[farthest] = uid;
+		cstamp[farthest] = frameStamp;
+		cdist2[farthest] = d2;
 		return true;
 	}
 
@@ -1155,6 +1195,7 @@ void RT_ClusterLightListsUpload (void)
 		{
 			rt_cluster_slot_uids = (uint64_t *)Mem_Realloc (rt_cluster_slot_uids, sizeof (uint64_t) * slotCount);
 			rt_cluster_slot_stamp = (uint32_t *)Mem_Realloc (rt_cluster_slot_stamp, sizeof (uint32_t) * slotCount);
+			rt_cluster_slot_dist2 = (float *)Mem_Realloc (rt_cluster_slot_dist2, sizeof (float) * slotCount);
 			rt_cluster_slot_fill = (uint8_t *)Mem_Realloc (rt_cluster_slot_fill, sizeof (uint8_t) * numClusters);
 			rt_cluster_slot_alloc = slotCount;
 		}
@@ -1163,6 +1204,7 @@ void RT_ClusterLightListsUpload (void)
 		// (slotStamp is read for recycling, never for stale slots).
 		memset (rt_cluster_slot_fill, 0, sizeof (uint8_t) * numClusters);
 		memset (rt_cluster_slot_stamp, 0, sizeof (uint32_t) * slotCount);
+		memset (rt_cluster_slot_dist2, 0, sizeof (float) * slotCount);
 		rt_cluster_last_clusters = numClusters;
 	}
 
@@ -1211,22 +1253,10 @@ void RT_ClusterLightListsUpload (void)
 				if (cleaf->contents == CONTENTS_SOLID)
 					continue;
 
-				// squared distance from the light origin to the leaf AABB
-				const float *o = rt_cluster_lights[li].origin;
-				float         d2 = 0.0f;
-				for (int a = 0; a < 3; a++)
-				{
-					float d = 0.0f;
-					if (o[a] < cleaf->minmaxs[a])
-						d = cleaf->minmaxs[a] - o[a];
-					else if (o[a] > cleaf->minmaxs[3 + a])
-						d = o[a] - cleaf->minmaxs[3 + a];
-					d2 += d * d;
-				}
-				if (d2 > reachSq)
+				if (RT_ClusterDist2ToBounds (rt_cluster_lights[li].origin, cleaf->minmaxs) > reachSq)
 					continue;
 
-				if (RT_ClusterAssignSlot (c, uid, rt_cluster_slot_uids, rt_cluster_slot_stamp, rt_cluster_slot_fill, rt_cluster_frame_stamp))
+				if (RT_ClusterAssignSlot (c, uid, rt_cluster_slot_uids, rt_cluster_slot_stamp, rt_cluster_slot_dist2, rt_cluster_slot_fill, rt_cluster_frame_stamp, rt_cluster_lights[li].origin, cleaf->minmaxs))
 					diag->granted++;
 				else
 					diag->denied++;
@@ -1249,7 +1279,7 @@ void RT_ClusterLightListsUpload (void)
 				if (c >= numClusters)
 					continue;
 
-				if (RT_ClusterAssignSlot (c, uid, rt_cluster_slot_uids, rt_cluster_slot_stamp, rt_cluster_slot_fill, rt_cluster_frame_stamp))
+				if (RT_ClusterAssignSlot (c, uid, rt_cluster_slot_uids, rt_cluster_slot_stamp, rt_cluster_slot_dist2, rt_cluster_slot_fill, rt_cluster_frame_stamp, rt_cluster_lights[li].origin, wm->leafs[c].minmaxs))
 					diag->granted++;
 				else
 					diag->denied++;
